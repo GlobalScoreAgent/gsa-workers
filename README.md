@@ -8,6 +8,51 @@ Unified Python batch workers for [Global Score Agent](https://www.globalscoreage
 |---|---|---|
 | `wallet_nonce_balance_daily` | 4×/day UTC (0, 6, 12, 18h) | Balance + nonce across 8 EVM chains → `erc_8004.wallets` |
 | `owner_wallet_origin` | 4×/day UTC (0, 6, 12, 18h) | One-shot wallet origin/history across 8 chains → `import_wallet_history_data` |
+| `owner_wallet_nonce_balance_monthly` | 4×/day UTC (0, 6, 12, 18h) | Balance + nonce monthly refresh (30-day window) → `import_current_nonce_and_balance_monthly_json` |
+
+## owner_wallet_nonce_balance_monthly
+
+Monthly balance and nonce snapshot across 8 EVM chains for wallets flagged for monthly import.
+
+**Eligible wallets:**
+
+- `is_valid_import_current_nonce_and_balance_monthly = true`
+- `import_nonce_and_balance_monthly_at` IS NULL or older than 30 days
+- `import_nonce_and_balance_monthly_last_status` IS NULL, `Completed`, or stale `Pending`
+
+**Writes:**
+
+- `import_current_nonce_and_balance_monthly_json` (jsonb with per-chain balance/nonce)
+- `import_nonce_and_balance_monthly_last_status` (`Pending` → `Completed` | `Error`)
+- `import_nonce_and_balance_monthly_at` (set on completion)
+
+**Auto-shutdown:** exits immediately if no eligible wallets at start, or when the queue is drained during a run. Schedule stays enabled for continuous daily processing.
+
+Wallets with `Error` are **not** retried until manually reset or status eligibility changes.
+
+### Local development
+
+```powershell
+cd workers/owner_wallet_nonce_balance_monthly
+copy .env.example .env
+# Edit .env with SUPABASE_DB_URL and ALCHEMY_KEY
+
+uv sync
+uv run python job.py
+```
+
+### GitHub Actions secrets
+
+| Secret / Var | Required | Default |
+|---|---|---|
+| `SUPABASE_DB_URL` | Yes | Postgres connection string (pooler) |
+| `ALCHEMY_KEY` | Recommended | Alchemy fallback |
+| `CONCURRENCY` | No | `15` (max 20) |
+| `CLAIM_BATCH_SIZE` | No | `100` |
+| `CLAIM_STALE_SECONDS` | No | `7200` (2h stale Pending reclaim) |
+| `MAX_RUNTIME_SECONDS` | No | `19800` (5.5h) |
+
+Manual run: **Actions** → **Owner wallet nonce balance monthly** → **Run workflow**.
 
 ## owner_wallet_origin
 
@@ -125,7 +170,12 @@ gsa-workers/
 │       │   └── compare_smoke.py
 │       ├── pyproject.toml
 │       └── src/
+│   └── owner_wallet_nonce_balance_monthly/
+│       ├── job.py
+│       ├── pyproject.toml
+│       └── src/
 └── .github/workflows/
     ├── wallet-nonce-balance-daily.yml
-    └── owner-wallet-origin.yml
+    ├── owner-wallet-origin.yml
+    └── owner-wallet-nonce-balance-monthly.yml
 ```
