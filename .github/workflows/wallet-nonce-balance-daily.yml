@@ -8,12 +8,14 @@ on:
     - cron: "0 18 * * *"
   workflow_dispatch:
 
-concurrency:
-  group: wallet-nonce-balance-daily
-  cancel-in-progress: false
-
 jobs:
   run:
+    strategy:
+      matrix:
+        worker_id: [worker-a, worker-b]
+    concurrency:
+      group: wallet-nonce-balance-daily-${{ matrix.worker_id }}
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 360
 
@@ -40,4 +42,8 @@ jobs:
         env:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
           ALCHEMY_KEY: ${{ secrets.ALCHEMY_KEY }}
+          WORKER_ID: ${{ matrix.worker_id }}
+          CONCURRENCY: 15
+          CLAIM_BATCH_SIZE: 100
+          CLAIM_STALE_SECONDS: 7200
         run: uv run python job.py

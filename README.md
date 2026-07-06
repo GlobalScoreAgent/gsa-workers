@@ -10,16 +10,22 @@ Unified Python batch workers for [Global Score Agent](https://www.globalscoreage
 
 ## wallet_nonce_balance_daily
 
-Reads pending wallets from `erc_8004.wallets`:
+Two parallel GitHub Actions runners (`worker-a`, `worker-b`) claim disjoint wallet batches via atomic `Pending` locks in Postgres.
+
+Reads claimable wallets from `erc_8004.wallets`:
 
 - `is_valid_import_current_nonce_and_balance_daily = true`
 - `import_nonce_and_balance_daily_at` is NULL or before today (UTC)
+- not already claimed by another worker (`Pending` with recent `claimed_at`)
 
 Writes:
 
 - `import_current_nonce_and_balance_daily_json`
-- `import_nonce_and_balance_daily_last_status` (`Completed` | `Error`)
-- `import_nonce_and_balance_daily_at`
+- `import_nonce_and_balance_daily_last_status` (`Pending` → `Completed` | `Error`)
+- `import_nonce_and_balance_daily_at` (set only on completion)
+- `import_nonce_and_balance_daily_claimed_at` / `claimed_by` (cleared on completion)
+
+Stale `Pending` claims older than `CLAIM_STALE_SECONDS` (default 2h) are automatically reclaimed.
 
 RPC strategy per chain:
 
@@ -46,11 +52,13 @@ uv run python job.py
 |---|---|---|
 | `SUPABASE_DB_URL` | Yes | Postgres connection string (pooler) |
 | `ALCHEMY_KEY` | Recommended | Alchemy fallback |
-| `CONCURRENCY` (var) | No | `15` (max 20) |
-| `BATCH_SIZE` (var) | No | `500` |
-| `MAX_RUNTIME_SECONDS` (var) | No | `19800` (5.5h) |
+| `WORKER_ID` | No | `worker-a` (set per matrix job in CI) |
+| `CONCURRENCY` | No | `15` (max 20) |
+| `CLAIM_BATCH_SIZE` | No | `100` |
+| `CLAIM_STALE_SECONDS` | No | `7200` (2h stale Pending reclaim) |
+| `MAX_RUNTIME_SECONDS` | No | `19800` (5.5h) |
 
-Manual run: **Actions** → **Wallet nonce balance daily** → **Run workflow**.
+Manual run: **Actions** → **Wallet nonce balance daily** → **Run workflow** (starts both `worker-a` and `worker-b`).
 
 ### Phase 2 (deprecation)
 

@@ -47,6 +47,13 @@ def env_int(name: str, default: int, minimum: int = 1, maximum: int | None = Non
     return value
 
 
+def env_str(name: str, default: str) -> str:
+    raw = os.environ.get(name)
+    if raw is None or raw.strip() == "":
+        return default
+    return raw.strip()
+
+
 def build_wallet_payload(
     address: str,
     wallet_status: str,
@@ -101,8 +108,10 @@ async def run_job() -> int:
         logger.error("SUPABASE_DB_URL is required")
         return 1
 
+    worker_id = env_str("WORKER_ID", "worker-a")
     concurrency = env_int("CONCURRENCY", default=15, minimum=1, maximum=20)
-    batch_size = env_int("BATCH_SIZE", default=500, minimum=1)
+    claim_batch_size = env_int("CLAIM_BATCH_SIZE", default=100, minimum=1)
+    claim_stale_seconds = env_int("CLAIM_STALE_SECONDS", default=7200, minimum=60)
     max_runtime_seconds = env_int("MAX_RUNTIME_SECONDS", default=19800, minimum=60)
     alchemy_key = os.environ.get("ALCHEMY_KEY") or None
 
@@ -110,15 +119,17 @@ async def run_job() -> int:
     db.connect()
     alchemy_subdomains = db.load_alchemy_subdomains()
     logger.info(
-        "Started job concurrency=%s batch_size=%s max_runtime=%ss alchemy=%s",
+        "Started worker_id=%s concurrency=%s claim_batch_size=%s "
+        "claim_stale_seconds=%s max_runtime=%ss alchemy=%s",
+        worker_id,
         concurrency,
-        batch_size,
+        claim_batch_size,
+        claim_stale_seconds,
         max_runtime_seconds,
         "enabled" if alchemy_key else "disabled",
     )
 
     start = time.monotonic()
-    after_id = 0
     processed = 0
     completed = 0
     errors = 0
@@ -138,13 +149,25 @@ async def run_job() -> int:
                 )
                 break
 
-            wallets = db.fetch_pending_wallets(after_id=after_id, limit=batch_size)
+            async with db_lock:
+                wallets = db.claim_wallets(
+                    worker_id=worker_id,
+                    limit=claim_batch_size,
+                    stale_seconds=claim_stale_seconds,
+                )
             if not wallets:
                 if processed == 0:
                     logger.info("No pending wallets found. Exiting.")
                 else:
                     logger.info("No more pending wallets in this run.")
                 break
+
+            logger.info(
+                "Claimed batch size=%s first_id=%s last_id=%s",
+                len(wallets),
+                wallets[0]["id"],
+                wallets[-1]["id"],
+            )
 
             async def handle_wallet(row: dict) -> tuple[int, str]:
                 wallet_id = int(row["id"])
@@ -194,7 +217,6 @@ async def run_job() -> int:
                     completed += 1
                 else:
                     errors += 1
-            after_id = max(int(row["id"]) for row in wallets)
 
     except Exception:
         logger.error("Critical job failure:\n%s", traceback.format_exc())
@@ -203,7 +225,8 @@ async def run_job() -> int:
         db.close()
 
     logger.info(
-        "Finished processed=%s completed=%s errors=%s elapsed=%.0fs",
+        "Finished worker_id=%s processed=%s completed=%s errors=%s elapsed=%.0fs",
+        worker_id,
         processed,
         completed,
         errors,
