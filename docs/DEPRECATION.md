@@ -14,3 +14,10 @@ After `wallet_nonce_balance_daily` is validated in production:
 - `wallet-transactional-current-batch` — remains in use for `wallet_transactional_details` (different table/flow)
 
 Only remove components after confirming no external consumers depend on them.
+
+## Owner wallet origin (future)
+
+After `owner_wallet_origin` is validated in production, consider deprecating:
+
+- Standalone `query_wallet_origin.py` CLI tool (replaced by this worker)
+- Any manual origin-import scripts or one-off jobs writing `import_wallet_history_data`

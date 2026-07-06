@@ -7,6 +7,48 @@ Unified Python batch workers for [Global Score Agent](https://www.globalscoreage
 | Worker | Schedule | Description |
 |---|---|---|
 | `wallet_nonce_balance_daily` | 4×/day UTC (0, 6, 12, 18h) | Balance + nonce across 8 EVM chains → `erc_8004.wallets` |
+| `owner_wallet_origin` | 4×/day UTC (auto-disables when queue empty) | One-shot wallet origin/history across 8 chains → `import_wallet_history_data` |
+
+## owner_wallet_origin
+
+One-shot import of wallet activation block/date per chain (binary search on historical RPC).
+
+**Eligible wallets:**
+
+- `is_valid_import_current_nonce_and_balance_monthly = true`
+- `import_wallet_history_status IS NULL` (or stale `Pending` for reclaim)
+
+**Writes:**
+
+- `import_wallet_history_data` (jsonb with per-chain results)
+- `import_wallet_history_status` (`Pending` → `Completed` | `Error`)
+
+**Auto-shutdown:** exits immediately if no eligible wallets; workflow disables its own schedule when the global queue is empty. Re-enable via **Actions** → **Owner wallet origin** → **Run workflow** (`workflow_dispatch` runs `gh workflow enable` first).
+
+### Local development
+
+```powershell
+cd workers/owner_wallet_origin
+copy .env.example .env
+# Edit .env with SUPABASE_DB_URL and ALCHEMY_KEY
+
+uv sync
+uv run python job.py
+uv run python scripts/check_pending.py
+```
+
+### GitHub Actions secrets
+
+| Secret / Var | Required | Default |
+|---|---|---|
+| `SUPABASE_DB_URL` | Yes | Postgres connection string (pooler) |
+| `ALCHEMY_KEY` | Recommended | Alchemy archival fallback |
+| `CONCURRENCY` | No | `4` (max 5) |
+| `CLAIM_BATCH_SIZE` | No | `25` |
+| `CLAIM_STALE_SECONDS` | No | `7200` (2h stale Pending reclaim) |
+| `MAX_RUNTIME_SECONDS` | No | `19800` (5.5h) |
+
+Manual run: **Actions** → **Owner wallet origin** → **Run workflow**.
 
 ## wallet_nonce_balance_daily
 
@@ -72,10 +114,18 @@ After this worker is stable in production:
 ```
 gsa-workers/
 ├── workers/
-│   └── wallet_nonce_balance_daily/
+│   ├── wallet_nonce_balance_daily/
+│   │   ├── job.py
+│   │   ├── pyproject.toml
+│   │   └── src/
+│   └── owner_wallet_origin/
 │       ├── job.py
+│       ├── scripts/
+│       │   ├── check_pending.py
+│       │   └── compare_smoke.py
 │       ├── pyproject.toml
 │       └── src/
 └── .github/workflows/
-    └── wallet-nonce-balance-daily.yml
+    ├── wallet-nonce-balance-daily.yml
+    └── owner-wallet-origin.yml
 ```
