@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+.venv/
+.uv/
+uv.lock
+.env
+.dev.vars
+
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

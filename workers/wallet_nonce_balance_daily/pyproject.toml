@@ -1,0 +1,12 @@
+[project]
+name = "wallet-nonce-balance-daily"
+version = "0.1.0"
+description = "Daily wallet balance and nonce snapshot across 8 EVM chains for GSA"
+requires-python = ">=3.12"
+dependencies = [
+    "httpx>=0.28",
+    "psycopg[binary]>=3.2",
+]
+
+[dependency-groups]
+dev = []
