@@ -12,10 +12,6 @@ concurrency:
   group: owner-wallet-origin
   cancel-in-progress: false
 
-permissions:
-  actions: write
-  contents: read
-
 jobs:
   run:
     runs-on: ubuntu-latest
@@ -24,12 +20,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Enable schedule on manual run
-        if: github.event_name == 'workflow_dispatch'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh workflow enable owner-wallet-origin.yml
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
@@ -55,19 +45,3 @@ jobs:
           CLAIM_BATCH_SIZE: 25
           CLAIM_STALE_SECONDS: 7200
         run: uv run python job.py
-
-      - name: Disable schedule when queue empty
-        if: success()
-        working-directory: workers/owner_wallet_origin
-        env:
-          GH_TOKEN: ${{ github.token }}
-          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
-          CLAIM_STALE_SECONDS: 7200
-        run: |
-          COUNT=$(uv run python scripts/check_pending.py | python -c "import sys,json; print(json.load(sys.stdin)['eligible'])")
-          if [ "$COUNT" = "0" ]; then
-            gh workflow disable owner-wallet-origin.yml
-            echo "Schedule disabled: no eligible wallets remain."
-          else
-            echo "Eligible wallets remaining: $COUNT — schedule stays enabled."
-          fi

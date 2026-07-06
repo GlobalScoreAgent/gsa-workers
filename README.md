@@ -7,7 +7,7 @@ Unified Python batch workers for [Global Score Agent](https://www.globalscoreage
 | Worker | Schedule | Description |
 |---|---|---|
 | `wallet_nonce_balance_daily` | 4×/day UTC (0, 6, 12, 18h) | Balance + nonce across 8 EVM chains → `erc_8004.wallets` |
-| `owner_wallet_origin` | 4×/day UTC (auto-disables when queue empty) | One-shot wallet origin/history across 8 chains → `import_wallet_history_data` |
+| `owner_wallet_origin` | 4×/day UTC (0, 6, 12, 18h) | One-shot wallet origin/history across 8 chains → `import_wallet_history_data` |
 
 ## owner_wallet_origin
 
@@ -23,7 +23,7 @@ One-shot import of wallet activation block/date per chain (binary search on hist
 - `import_wallet_history_data` (jsonb with per-chain results)
 - `import_wallet_history_status` (`Pending` → `Completed` | `Error`)
 
-**Auto-shutdown:** exits immediately if no eligible wallets; workflow disables its own schedule when the global queue is empty. Re-enable via **Actions** → **Owner wallet origin** → **Run workflow** (`workflow_dispatch` runs `gh workflow enable` first).
+**Auto-shutdown:** exits immediately if no eligible wallets at start, or when the queue is drained during a run. The daily schedule stays enabled so new eligible wallets are picked up on the next cron slot.
 
 ### Local development
 
