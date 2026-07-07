@@ -7,7 +7,7 @@ Unified Python batch workers for [Global Score Agent](https://www.globalscoreage
 | Worker | Schedule | Description |
 |---|---|---|
 | `wallet_nonce_balance_daily` | 4×/day UTC (0, 6, 12, 18h) | Balance + nonce across 8 EVM chains → `erc_8004.wallets` |
-| `owner_wallet_origin` | 4×/day UTC (0, 6, 12, 18h) | One-shot wallet origin/history across 8 chains → `import_wallet_history_data` |
+| `owner_wallet_origin` | 4×/day UTC (0, 6, 12, 18h) | Wallet origin/history across 8 chains, refresh every 30 days → `import_wallet_history_data` |
 | `owner_wallet_nonce_balance_monthly` | 4×/day UTC (0, 6, 12, 18h) | Balance + nonce monthly refresh (30-day window) → `import_current_nonce_and_balance_monthly_json` |
 
 ## owner_wallet_nonce_balance_monthly
@@ -56,19 +56,23 @@ Manual run: **Actions** → **Owner wallet nonce balance monthly** → **Run wor
 
 ## owner_wallet_origin
 
-One-shot import of wallet activation block/date per chain (binary search on historical RPC).
+Wallet activation block/date per chain (binary search on historical RPC), refreshed on a 30-day cycle.
 
 **Eligible wallets:**
 
 - `is_valid_import_current_nonce_and_balance_monthly = true`
-- `import_wallet_history_status IS NULL` (or stale `Pending` for reclaim)
+- `import_wallet_history_at` IS NULL or older than 30 days
+- `import_wallet_history_status` IS NULL, `Completed`, `Error`, `Processed`, or stale `Pending`
 
 **Writes:**
 
 - `import_wallet_history_data` (jsonb with per-chain results)
 - `import_wallet_history_status` (`Pending` → `Completed` | `Error`)
+- `import_wallet_history_at` (set on completion)
 
 **Auto-shutdown:** exits immediately if no eligible wallets at start, or when the queue is drained during a run. The daily schedule stays enabled so new eligible wallets are picked up on the next cron slot.
+
+Wallets with `Error` or legacy `Processed` are re-eligible after 30 days (same as `Completed`).
 
 ### Local development
 

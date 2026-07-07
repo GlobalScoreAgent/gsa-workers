@@ -10,7 +10,12 @@ from psycopg.rows import dict_row
 ELIGIBLE_WHERE = """
 w.is_valid_import_current_nonce_and_balance_monthly IS TRUE
   AND (
+    w.import_wallet_history_at IS NULL
+    OR w.import_wallet_history_at < NOW() - INTERVAL '30 days'
+  )
+  AND (
     w.import_wallet_history_status IS NULL
+    OR w.import_wallet_history_status IN ('Completed', 'Error', 'Processed')
     OR (
       w.import_wallet_history_status = 'Pending'
       AND w.updated_at < NOW() - make_interval(secs => %(stale_seconds)s)
@@ -53,6 +58,7 @@ UPDATE erc_8004.wallets
 SET
   import_wallet_history_data = %(payload)s::jsonb,
   import_wallet_history_status = %(status)s,
+  import_wallet_history_at = NOW(),
   updated_at = NOW()
 WHERE id = %(wallet_id)s
 """
