@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Protocol
 
 import httpx
@@ -21,7 +24,25 @@ from rpc import (
 )
 
 
-class BlockRpc(Protocol):
+# #region agent log
+def _debug_log(hypothesis_id: str, location: str, message: str, data: dict) -> None:
+    try:
+        log_path = Path(__file__).resolve().parents[3] / "debug-d2ca59.log"
+        payload = {
+            "sessionId": "d2ca59",
+            "hypothesisId": hypothesis_id,
+            "location": location,
+            "message": message,
+            "data": data,
+            "timestamp": int(time.time() * 1000),
+        }
+        with log_path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(payload) + "\n")
+    except Exception:
+        pass
+
+
+# #endregion
     async def block_number(self) -> int: ...
     async def get_code(self, address: str, block_num: int) -> str: ...
     async def get_balance(self, address: str, block_num: int) -> int: ...
@@ -181,7 +202,7 @@ async def _query_with_rpc(
     except Exception as exc:
         if is_prune_error(exc):
             raise
-        return _error_result(chain_key, str(exc), rpc_endpoint=rpc_endpoint, rpc_source=rpc_source)
+        raise
 
     if block_num is None:
         return {
@@ -232,8 +253,25 @@ async def query_single_chain_origin(
     for rpc_url in net["rpcs"]:
         try:
             rpc = PublicRpc(client, rpc_url)
-            return await _query_with_rpc(rpc, chain_key, address, rpc_url, "public_rpc")
-        except Exception:
+            result = await _query_with_rpc(rpc, chain_key, address, rpc_url, "public_rpc")
+            # #region agent log
+            _debug_log(
+                "B",
+                "origin.py:query_single_chain_origin",
+                "public_rpc_result",
+                {"chain": chain_key, "rpc": rpc_url, "status": result.get("status")},
+            )
+            # #endregion
+            return result
+        except Exception as exc:
+            # #region agent log
+            _debug_log(
+                "A",
+                "origin.py:query_single_chain_origin",
+                "public_rpc_failed_try_next",
+                {"chain": chain_key, "rpc": rpc_url, "error_type": exc.__class__.__name__},
+            )
+            # #endregion
             continue
 
     subdomain = alchemy_subdomains.get(net["chain_id"])

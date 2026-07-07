@@ -62,8 +62,10 @@ def results_to_map(chain_results: list[dict]) -> dict:
 
 
 def determine_status(chain_results: list[dict]) -> str:
-    successes = sum(1 for item in chain_results if item.get("status") == "success")
-    if successes == 0:
+    queried_ok = sum(
+        1 for item in chain_results if item.get("status") in ("success", "no_activity")
+    )
+    if queried_ok == 0:
         return STATUS_ERROR
     return STATUS_COMPLETED
 
