@@ -18,7 +18,7 @@ Monthly balance and nonce snapshot across 8 EVM chains for wallets flagged for m
 
 - `is_valid_import_current_nonce_and_balance_monthly = true`
 - `import_nonce_and_balance_monthly_at` IS NULL or older than 30 days
-- `import_nonce_and_balance_monthly_last_status` IS NULL, `Completed`, or stale `Pending`
+- `import_nonce_and_balance_monthly_last_status` IS NULL, `Completed`, `Error`, `Processed`, or stale `Pending`
 
 **Writes:**
 
@@ -28,7 +28,7 @@ Monthly balance and nonce snapshot across 8 EVM chains for wallets flagged for m
 
 **Auto-shutdown:** exits immediately if no eligible wallets at start, or when the queue is drained during a run. Schedule stays enabled for continuous daily processing.
 
-Wallets with `Error` are **not** retried until manually reset or status eligibility changes.
+Wallets with `Error` or legacy `Processed` are re-eligible after 30 days (same as `Completed`).
 
 ### Local development
 
@@ -103,7 +103,8 @@ Reads claimable wallets from `erc_8004.wallets`:
 
 - `is_valid_import_current_nonce_and_balance_daily = true`
 - `import_nonce_and_balance_daily_at` is NULL or before today (UTC)
-- not already claimed by another worker (`Pending` with recent `claimed_at`)
+- `import_nonce_and_balance_daily_last_status` IS NULL, `Completed`, `Error`, `Processed`, or stale `Pending`
+- legacy `Processed` and `Error` are re-eligible on the next UTC day (same as `Completed`)
 
 Writes:
 
@@ -120,7 +121,7 @@ RPC strategy per chain:
 2. Alchemy JSON-RPC batch fallback (`alchemy.py`, pattern from `wallet-transactional-current-batch`)
 3. `subdomain_alchemy` loaded from `erc_8004.chains`
 
-Wallets with `Error` are **not** retried the same UTC day.
+Wallets with `Error` or `Processed` are **not** retried the same UTC day; they become eligible again the next UTC day.
 
 ### Local development
 

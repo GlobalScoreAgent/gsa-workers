@@ -15,7 +15,7 @@ w.is_valid_import_current_nonce_and_balance_monthly IS TRUE
   )
   AND (
     w.import_nonce_and_balance_monthly_last_status IS NULL
-    OR w.import_nonce_and_balance_monthly_last_status = 'Completed'
+    OR w.import_nonce_and_balance_monthly_last_status IN ('Completed', 'Error', 'Processed')
     OR (
       w.import_nonce_and_balance_monthly_last_status = 'Pending'
       AND w.updated_at < NOW() - make_interval(secs => %(stale_seconds)s)

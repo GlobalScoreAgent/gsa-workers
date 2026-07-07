@@ -19,7 +19,7 @@ WITH candidates AS (
     )
     AND (
       w.import_nonce_and_balance_daily_last_status IS NULL
-      OR w.import_nonce_and_balance_daily_last_status IN ('Completed', 'Error')
+      OR w.import_nonce_and_balance_daily_last_status IN ('Completed', 'Error', 'Processed')
       OR (
         w.import_nonce_and_balance_daily_last_status = 'Pending'
         AND w.import_nonce_and_balance_daily_claimed_at IS NOT NULL
