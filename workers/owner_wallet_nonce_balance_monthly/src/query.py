@@ -109,25 +109,25 @@ async def query_single_network(
 
 
 async def query_all_chains(
+    client: httpx.AsyncClient,
     address: str,
     wallet_id: int,
     alchemy_subdomains: Mapping[int, str | None],
     alchemy_key: str | None,
 ) -> list[dict]:
     """Query all chains in parallel and return results in stable order."""
-    async with httpx.AsyncClient() as client:
-        tasks = [
-            query_single_network(
-                client,
-                chain_key,
-                address,
-                wallet_id,
-                alchemy_subdomains,
-                alchemy_key,
-            )
-            for chain_key in CHAIN_ORDER
-        ]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+    tasks = [
+        query_single_network(
+            client,
+            chain_key,
+            address,
+            wallet_id,
+            alchemy_subdomains,
+            alchemy_key,
+        )
+        for chain_key in CHAIN_ORDER
+    ]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
 
     ordered: list[dict] = []
     for chain_key, result in zip(CHAIN_ORDER, results):

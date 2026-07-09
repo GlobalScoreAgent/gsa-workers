@@ -34,7 +34,7 @@ WITH candidates AS (
   SELECT w.id
   FROM erc_8004.wallets w
   WHERE {ELIGIBLE_WHERE}
-  ORDER BY w.id
+  ORDER BY w.import_nonce_and_balance_monthly_at NULLS FIRST, w.id
   LIMIT %(limit)s
   FOR UPDATE SKIP LOCKED
 )
@@ -111,5 +111,22 @@ class Database:
             cur.execute(
                 UPDATE_WALLET_SQL,
                 {"wallet_id": wallet_id, "payload": payload, "status": status},
+            )
+        self._conn.commit()
+
+    def save_wallet_results_batch(
+        self,
+        results: list[tuple[int, str, str]],
+    ) -> None:
+        if not results:
+            return
+        assert self._conn is not None
+        with self._conn.cursor() as cur:
+            cur.executemany(
+                UPDATE_WALLET_SQL,
+                [
+                    {"wallet_id": wallet_id, "payload": payload, "status": status}
+                    for wallet_id, payload, status in results
+                ],
             )
         self._conn.commit()
