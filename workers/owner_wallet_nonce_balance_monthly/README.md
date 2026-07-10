@@ -1,6 +1,15 @@
 # Owner wallet nonce balance monthly
 
-Batch job that queries native balance and nonce across 8 EVM chains for owner wallets in `erc_8004.wallets`, then persists JSON results to Supabase.
+Batch job that queries native balance and nonce across 8 EVM chains for owner wallets in `erc_8004.wallets`, persists JSON results, then applies the monthly snapshot inline (`wallet_owner_details` + `Processed`).
+
+## Pipeline
+
+1. **Claim** — `import_nonce_and_balance_monthly_next_eligible_at <= NOW()`
+2. **RPC** — balance/nonce per chain
+3. **Save** — JSON + `Completed` or `Error`
+4. **Snapshot** — `erc_8004.wallet_apply_monthly_snapshot(wallet_id)` → `wallet_owner_details` + `Processed`
+
+The pg_cron job `wallet_owner_update_transactions` is deprecated; post-processing runs in the worker.
 
 ## Eligibility (`import_nonce_and_balance_monthly_next_eligible_at`)
 
@@ -25,9 +34,24 @@ AND import_nonce_and_balance_monthly_next_eligible_at <= NOW()
 | New owner wallet (`is_valid` becomes true) | DB trigger `trg_wallet_monthly_next_eligible_at` → `-infinity` |
 | Claim (worker) | `NOW() + CLAIM_STALE_SECONDS` (default 2h) |
 | Save Completed/Error (worker) | `NOW() + 30 days` |
-| Downstream `Processed` | Unchanged (already scheduled at save) |
+| Snapshot OK (worker) | `Processed` on `import_nonce_and_balance_monthly_last_status` |
+| Downstream `Processed` | No separate cron; snapshot runs inline after save |
 
-Legacy columns (`import_nonce_and_balance_monthly_at`, `import_nonce_and_balance_monthly_last_status`, JSON) remain for auditing and downstream jobs.
+Legacy columns (`import_nonce_and_balance_monthly_at`, `import_nonce_and_balance_monthly_last_status`, JSON) remain for auditing.
+
+## Backfill stuck `Completed` wallets
+
+After disabling pg_cron, replay snapshots for wallets left in `Completed`:
+
+```sql
+SELECT erc_8004.wallet_apply_monthly_snapshot(w.id)
+FROM erc_8004.wallets w
+WHERE w.import_nonce_and_balance_monthly_last_status = 'Completed'
+  AND w.import_current_nonce_and_balance_monthly_json IS NOT NULL
+  AND w.import_current_nonce_and_balance_monthly_json <> '{}'::jsonb
+ORDER BY w.id
+LIMIT 50;
+```
 
 ## Manual re-queue
 
@@ -61,6 +85,23 @@ WHERE w.is_valid_import_current_nonce_and_balance_monthly IS TRUE
   AND w.import_nonce_and_balance_monthly_next_eligible_at <= NOW()
 ORDER BY w.import_nonce_and_balance_monthly_next_eligible_at, w.id
 LIMIT 200;
+```
+
+## Validation
+
+```sql
+-- Spot-check post-run
+SELECT w.id, w.import_nonce_and_balance_monthly_last_status,
+       d.chain_id, d.current_nonce, d.current_balance, d.wallet_type, d.update_nonce_at
+FROM erc_8004.wallets w
+JOIN erc_8004.wallet_owner_details d ON d.wallet_id = w.id
+WHERE w.import_nonce_and_balance_monthly_at >= NOW() - INTERVAL '24 hours'
+LIMIT 20;
+
+-- No recent Completed left hanging
+SELECT COUNT(*) FROM erc_8004.wallets
+WHERE import_nonce_and_balance_monthly_last_status = 'Completed'
+  AND import_nonce_and_balance_monthly_at >= NOW() - INTERVAL '7 days';
 ```
 
 ## Environment

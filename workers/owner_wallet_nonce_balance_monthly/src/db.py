@@ -59,6 +59,18 @@ SET
 WHERE id = %(wallet_id)s
 """
 
+APPLY_MONTHLY_SNAPSHOT_SQL = """
+SELECT erc_8004.wallet_apply_monthly_snapshot(%(wallet_id)s)
+"""
+
+MARK_SNAPSHOT_ERROR_SQL = """
+UPDATE erc_8004.wallets
+SET
+  import_nonce_and_balance_monthly_last_status = 'Error',
+  updated_at = NOW()
+WHERE id = %(wallet_id)s
+"""
+
 CLAIM_MAX_ATTEMPTS = 3
 CLAIM_RETRY_BASE_SECONDS = 2.0
 
@@ -151,3 +163,36 @@ class Database:
                 ],
             )
         self._conn.commit()
+
+    def apply_monthly_snapshots(self, wallet_ids: list[int]) -> list[int]:
+        """Run wallet_apply_monthly_snapshot; return wallet ids that failed."""
+        if not wallet_ids:
+            return []
+
+        assert self._conn is not None
+        failed: list[int] = []
+
+        for wallet_id in wallet_ids:
+            try:
+                with self._conn.cursor() as cur:
+                    cur.execute(
+                        APPLY_MONTHLY_SNAPSHOT_SQL,
+                        {"wallet_id": wallet_id},
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "Snapshot failed for wallet id=%s: %s",
+                    wallet_id,
+                    exc,
+                )
+                failed.append(wallet_id)
+
+        if failed:
+            with self._conn.cursor() as cur:
+                cur.executemany(
+                    MARK_SNAPSHOT_ERROR_SQL,
+                    [{"wallet_id": wallet_id} for wallet_id in failed],
+                )
+
+        self._conn.commit()
+        return failed

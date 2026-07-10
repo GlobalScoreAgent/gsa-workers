@@ -223,9 +223,16 @@ async def run_job() -> int:
                 async with db_lock:
                     db.save_wallet_results_batch(outcomes)
 
-                for _wallet_id, _payload, status in outcomes:
+                    completed_ids = [
+                        wallet_id
+                        for wallet_id, _payload, status in outcomes
+                        if status == STATUS_COMPLETED
+                    ]
+                    snapshot_failed = db.apply_monthly_snapshots(completed_ids)
+
+                for wallet_id, _payload, status in outcomes:
                     processed += 1
-                    if status == STATUS_COMPLETED:
+                    if status == STATUS_COMPLETED and wallet_id not in snapshot_failed:
                         completed += 1
                     else:
                         errors += 1
