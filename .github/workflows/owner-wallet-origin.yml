@@ -42,6 +42,7 @@ jobs:
           ALCHEMY_KEY: ${{ secrets.ALCHEMY_KEY }}
           MAX_RUNTIME_SECONDS: 19800
           CONCURRENCY: 4
-          CLAIM_BATCH_SIZE: 25
+          CLAIM_BATCH_SIZE: 50
           CLAIM_STALE_SECONDS: 7200
+          SKIP_ELIGIBLE_COUNT: 1
         run: uv run python job.py

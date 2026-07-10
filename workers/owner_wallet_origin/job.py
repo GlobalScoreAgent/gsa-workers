@@ -13,6 +13,8 @@ import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 
+import httpx
+
 sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 
 from address import AddressError, is_valid_evm_address, normalize_address
@@ -46,6 +48,13 @@ def env_int(name: str, default: int, minimum: int = 1, maximum: int | None = Non
     return value
 
 
+def env_bool(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None or raw.strip() == "":
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def build_wallet_payload(address: str, results: dict, error: dict | None = None) -> dict:
     payload: dict = {
         "address": address,
@@ -71,12 +80,14 @@ def determine_status(chain_results: list[dict]) -> str:
 
 
 async def process_wallet(
+    client: httpx.AsyncClient,
     address: str,
     alchemy_subdomains: dict[int, str | None],
     alchemy_key: str | None,
 ) -> tuple[dict, str]:
     normalized = normalize_address(address)
     chain_results = await query_all_chains_origin(
+        client,
         normalized,
         alchemy_subdomains,
         alchemy_key,
@@ -94,29 +105,33 @@ async def run_job() -> int:
         return 1
 
     concurrency = env_int("CONCURRENCY", default=4, minimum=1, maximum=5)
-    claim_batch_size = env_int("CLAIM_BATCH_SIZE", default=25, minimum=1)
+    claim_batch_size = env_int("CLAIM_BATCH_SIZE", default=50, minimum=1)
     claim_stale_seconds = env_int("CLAIM_STALE_SECONDS", default=7200, minimum=60)
     max_runtime_seconds = env_int("MAX_RUNTIME_SECONDS", default=19800, minimum=60)
+    skip_eligible_count = env_bool("SKIP_ELIGIBLE_COUNT", default=True)
     alchemy_key = os.environ.get("ALCHEMY_KEY") or None
 
     db = Database(dsn)
     db.connect()
     alchemy_subdomains = db.load_alchemy_subdomains()
 
-    eligible = db.count_eligible_wallets(claim_stale_seconds)
-    if eligible == 0:
-        logger.info("No eligible wallets. Auto-shutdown.")
-        db.close()
-        return 0
+    eligible: int | None = None
+    if not skip_eligible_count:
+        eligible = db.count_eligible_wallets()
+        if eligible == 0:
+            logger.info("No eligible wallets. Auto-shutdown.")
+            db.close()
+            return 0
 
     logger.info(
         "Started eligible=%s concurrency=%s claim_batch_size=%s "
-        "claim_stale_seconds=%s max_runtime=%ss alchemy=%s",
-        eligible,
+        "claim_stale_seconds=%s max_runtime=%ss skip_eligible_count=%s alchemy=%s",
+        eligible if eligible is not None else "skipped",
         concurrency,
         claim_batch_size,
         claim_stale_seconds,
         max_runtime_seconds,
+        skip_eligible_count,
         "enabled" if alchemy_key else "disabled",
     )
 
@@ -126,85 +141,92 @@ async def run_job() -> int:
     errors = 0
     sem = asyncio.Semaphore(concurrency)
     db_lock = asyncio.Lock()
+    http_limits = httpx.Limits(max_connections=50, max_keepalive_connections=20)
 
     try:
-        while True:
-            elapsed = time.monotonic() - start
-            if elapsed >= max_runtime_seconds:
+        async with httpx.AsyncClient(timeout=30.0, limits=http_limits) as http_client:
+            while True:
+                elapsed = time.monotonic() - start
+                if elapsed >= max_runtime_seconds:
+                    logger.info(
+                        "Time budget reached (%.0fs). Processed=%s completed=%s errors=%s",
+                        elapsed,
+                        processed,
+                        completed,
+                        errors,
+                    )
+                    break
+
+                async with db_lock:
+                    wallets = db.claim_wallets(
+                        limit=claim_batch_size,
+                        stale_seconds=claim_stale_seconds,
+                    )
+                if not wallets:
+                    if processed == 0:
+                        logger.info("No eligible wallets found. Auto-shutdown.")
+                    else:
+                        logger.info("No more eligible wallets in this run.")
+                    break
+
                 logger.info(
-                    "Time budget reached (%.0fs). Processed=%s completed=%s errors=%s",
-                    elapsed,
-                    processed,
-                    completed,
-                    errors,
+                    "Claimed batch size=%s first_id=%s last_id=%s",
+                    len(wallets),
+                    wallets[0]["id"],
+                    wallets[-1]["id"],
                 )
-                break
 
-            async with db_lock:
-                wallets = db.claim_wallets(
-                    limit=claim_batch_size,
-                    stale_seconds=claim_stale_seconds,
-                )
-            if not wallets:
-                if processed == 0:
-                    logger.info("No eligible wallets found. Auto-shutdown.")
-                else:
-                    logger.info("No more eligible wallets in this run.")
-                break
+                async def handle_wallet(row: dict) -> tuple[int, str, str]:
+                    wallet_id = int(row["id"])
+                    address = str(row["address"])
 
-            logger.info(
-                "Claimed batch size=%s first_id=%s last_id=%s",
-                len(wallets),
-                wallets[0]["id"],
-                wallets[-1]["id"],
-            )
-
-            async def handle_wallet(row: dict) -> tuple[int, str]:
-                wallet_id = int(row["id"])
-                address = str(row["address"])
-
-                async with sem:
-                    try:
-                        if not is_valid_evm_address(address):
-                            raise AddressError(
-                                f"Non-EVM or invalid address for wallet id={wallet_id}"
+                    async with sem:
+                        try:
+                            if not is_valid_evm_address(address):
+                                raise AddressError(
+                                    f"Non-EVM or invalid address for wallet id={wallet_id}"
+                                )
+                            payload, status = await process_wallet(
+                                http_client,
+                                address,
+                                alchemy_subdomains,
+                                alchemy_key,
                             )
-                        payload, status = await process_wallet(
-                            address,
-                            alchemy_subdomains,
-                            alchemy_key,
-                        )
-                    except Exception as exc:
-                        status = STATUS_ERROR
-                        payload = build_wallet_payload(
-                            address.strip().lower(),
-                            results={},
-                            error={
-                                "type": exc.__class__.__name__,
-                                "message": str(exc),
-                            },
-                        )
-                        logger.warning(
-                            "Wallet id=%s failed: %s",
-                            wallet_id,
-                            exc,
-                        )
+                        except Exception as exc:
+                            status = STATUS_ERROR
+                            payload = build_wallet_payload(
+                                address.strip().lower(),
+                                results={},
+                                error={
+                                    "type": exc.__class__.__name__,
+                                    "message": str(exc),
+                                },
+                            )
+                            logger.warning(
+                                "Wallet id=%s failed: %s",
+                                wallet_id,
+                                exc,
+                            )
 
-                    async with db_lock:
-                        db.save_wallet_result(
-                            wallet_id,
-                            json.dumps(payload),
-                            status,
-                        )
-                    return wallet_id, status
+                    return wallet_id, json.dumps(payload), status
 
-            outcomes = await asyncio.gather(*(handle_wallet(row) for row in wallets))
-            for _wallet_id, status in outcomes:
-                processed += 1
-                if status == STATUS_COMPLETED:
-                    completed += 1
-                else:
-                    errors += 1
+                outcomes = await asyncio.gather(*(handle_wallet(row) for row in wallets))
+                async with db_lock:
+                    db.save_wallet_results_batch(outcomes)
+
+                    completed_ids = [
+                        wallet_id
+                        for wallet_id, _payload, status in outcomes
+                        if status == STATUS_COMPLETED
+                    ]
+                    snapshot_failed = db.apply_owner_history_snapshots(completed_ids)
+
+                for wallet_id, _payload, status in outcomes:
+                    processed += 1
+                    if status == STATUS_COMPLETED and wallet_id not in snapshot_failed:
+                        completed += 1
+                    else:
+                        errors += 1
 
     except Exception:
         logger.error("Critical job failure:\n%s", traceback.format_exc())

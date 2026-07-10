@@ -23,7 +23,7 @@ def main() -> None:
     db = Database(dsn)
     db.connect()
     try:
-        eligible = db.count_eligible_wallets(stale_seconds)
+        eligible = db.count_eligible_wallets()
     finally:
         db.close()
 

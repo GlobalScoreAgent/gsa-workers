@@ -262,22 +262,22 @@ async def query_single_chain_origin(
 
 
 async def query_all_chains_origin(
+    client: httpx.AsyncClient,
     address: str,
     alchemy_subdomains: dict[int, str | None],
     alchemy_key: str | None,
 ) -> list[dict]:
-    async with httpx.AsyncClient() as client:
-        tasks = [
-            query_single_chain_origin(
-                client,
-                chain_key,
-                address,
-                alchemy_subdomains,
-                alchemy_key,
-            )
-            for chain_key in CHAIN_ORDER
-        ]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+    tasks = [
+        query_single_chain_origin(
+            client,
+            chain_key,
+            address,
+            alchemy_subdomains,
+            alchemy_key,
+        )
+        for chain_key in CHAIN_ORDER
+    ]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
 
     ordered: list[dict] = []
     for chain_key, result in zip(CHAIN_ORDER, results):
