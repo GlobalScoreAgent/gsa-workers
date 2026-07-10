@@ -37,6 +37,8 @@ Legacy columns (`import_nonce_and_balance_daily_at`, `import_nonce_and_balance_d
 4. Call `erc_8004.wallet_apply_daily_snapshot(wallet_id)` for each `Completed` wallet
 5. Snapshot sets `import_nonce_and_balance_daily_last_status = 'Processed'`
 
+`chain_nonces` purge (>60d) was removed from the snapshot function to avoid deadlocks under parallel workers; chain-level 30d aggregates are planned as a separate job.
+
 The pg_cron job `wallet_update_transactions` is deprecated; snapshot runs inline in this worker.
 
 ## Manual re-queue
