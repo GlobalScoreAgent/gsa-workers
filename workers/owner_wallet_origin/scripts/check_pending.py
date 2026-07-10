@@ -19,7 +19,6 @@ def main() -> None:
         print(json.dumps({"error": "SUPABASE_DB_URL is required"}))
         raise SystemExit(1)
 
-    stale_seconds = int(os.environ.get("CLAIM_STALE_SECONDS", "7200"))
     db = Database(dsn)
     db.connect()
     try:
