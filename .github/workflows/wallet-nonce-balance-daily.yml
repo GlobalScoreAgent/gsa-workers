@@ -43,7 +43,8 @@ jobs:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
           ALCHEMY_KEY: ${{ secrets.ALCHEMY_KEY }}
           WORKER_ID: ${{ matrix.worker_id }}
-          CONCURRENCY: 15
-          CLAIM_BATCH_SIZE: 100
+          CONCURRENCY: 20
+          CLAIM_BATCH_SIZE: 200
           CLAIM_STALE_SECONDS: 7200
+          MAX_RUNTIME_SECONDS: 19800
         run: uv run python job.py

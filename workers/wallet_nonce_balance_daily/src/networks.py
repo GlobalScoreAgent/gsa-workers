@@ -16,9 +16,9 @@ NETWORKS = {
         "chain_id": 8453,
         "symbol": "ETH",
         "rpcs": [
-            "https://mainnet.base.org",
             "https://base-rpc.publicnode.com",
             "https://base.drpc.org",
+            "https://mainnet.base.org",
         ],
     },
     "arbitrum": {
@@ -36,9 +36,9 @@ NETWORKS = {
         "chain_id": 137,
         "symbol": "POL/MATIC",
         "rpcs": [
-            "https://polygon-rpc.com",
             "https://polygon.drpc.org",
             "https://polygon-bor.publicnode.com",
+            "https://polygon-rpc.com",
         ],
     },
     "bsc": {
