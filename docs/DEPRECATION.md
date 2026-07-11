@@ -1,17 +1,31 @@
-# Deprecation notes (Phase 2)
+# Deprecation notes
+
+## pg_cron (do not re-enable)
+
+These jobs were replaced by **inline** `wallet_apply_*_snapshot` calls in the GitHub Actions workers. Functions may remain as no-op stubs; cron should stay **disabled**.
+
+| Cron job name | Replaced by |
+|---|---|
+| `wallet_update_transactions` | `wallet_nonce_balance_daily` → `wallet_apply_daily_snapshot` |
+| `wallet_owner_update_transactions` | `owner_wallet_nonce_balance_monthly` → `wallet_apply_monthly_snapshot` |
+| `wallet_owner_update_first_transactions` | `owner_wallet_origin` → `wallet_apply_owner_history_snapshot` |
+
+`wallet_hourly_process` no longer toggles those OwnerTx / daily snapshot crons.
+
+## Phase 2 — Cloudflare / Edge (after daily is stable)
 
 After `wallet_nonce_balance_daily` is validated in production:
 
-## Cloudflare
+### Cloudflare
 
 - Worker: `wallet-snapshot` in `gsa-cloudflare-workers`
 - Route: `api.globalscoreagent.com/wallet-snapshot*`
-- Action: disable route and retire worker when GitHub Actions job covers all use cases
+- Action: disable route and retire worker when GitHub Actions covers all use cases
 
-## Supabase Edge Functions
+### Supabase Edge Functions
 
-- `wallets-query-snapshot` — proxy to Cloudflare Worker
-- `wallet-transactional-current-batch` — remains in use for `wallet_transactional_details` (different table/flow)
+- `wallets-query-snapshot` — proxy to Cloudflare Worker (deprecate with daily)
+- `wallet-transactional-current-batch` — **remains** for `wallet_transactional_details` (different table/flow)
 
 Only remove components after confirming no external consumers depend on them.
 

@@ -1,5 +1,7 @@
 # Owner wallet origin
 
+> Project context: [AGENTS.md](../../AGENTS.md) · [Supabase map](../../docs/SUPABASE.md) · [Architecture](../../docs/ARCHITECTURE.md)
+
 Batch job that finds the first on-chain activity block/date per chain (binary search on historical RPC) for owner wallets, then persists results and applies the owner history snapshot inline.
 
 ## Eligibility (`import_wallet_history_next_eligible_at`)

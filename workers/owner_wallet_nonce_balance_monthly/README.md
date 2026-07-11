@@ -1,5 +1,7 @@
 # Owner wallet nonce balance monthly
 
+> Project context: [AGENTS.md](../../AGENTS.md) · [Supabase map](../../docs/SUPABASE.md) · [Architecture](../../docs/ARCHITECTURE.md)
+
 Batch job that queries native balance and nonce across 8 EVM chains for owner wallets in `erc_8004.wallets`, persists JSON results, then applies the monthly snapshot inline (`wallet_owner_details` + `Processed`).
 
 ## Pipeline

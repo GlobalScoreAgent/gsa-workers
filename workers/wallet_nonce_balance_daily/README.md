@@ -1,5 +1,7 @@
 # Wallet nonce balance daily
 
+> Project context: [AGENTS.md](../../AGENTS.md) · [Supabase map](../../docs/SUPABASE.md) · [Architecture](../../docs/ARCHITECTURE.md)
+
 Batch job that queries native balance and nonce across 8 EVM chains for wallets in `erc_8004.wallets`, persists JSON results, and applies the daily snapshot inline (`wallet_transactions`, `chain_nonces`, `Processed` status).
 
 ## Eligibility (`import_nonce_and_balance_daily_next_eligible_at`)
