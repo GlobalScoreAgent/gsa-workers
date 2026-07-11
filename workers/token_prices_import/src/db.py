@@ -104,7 +104,8 @@ class Database:
         raise last_exc
 
     def upsert_token_prices(self, rows: list[dict[str, Any]]) -> str:
-        payload = json.dumps(rows, separators=(",", ":"))
+        cleaned = [_sanitize_row(row) for row in rows]
+        payload = json.dumps(cleaned, separators=(",", ":"), ensure_ascii=True)
 
         def _upsert() -> str:
             assert self._conn is not None
@@ -117,3 +118,20 @@ class Database:
             return str(result["message"])
 
         return self._run_with_db_retry("token_prices_upsert", _upsert)
+
+
+def _sanitize_value(value: Any) -> Any:
+    """Strip NUL bytes; Postgres jsonb rejects \\u0000 escapes."""
+    if isinstance(value, str):
+        return value.replace("\x00", "")
+    if isinstance(value, dict):
+        return {str(k).replace("\x00", ""): _sanitize_value(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_sanitize_value(v) for v in value]
+    return value
+
+
+def _sanitize_row(row: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(row, dict):
+        raise TypeError(f"expected dict row, got {type(row).__name__}")
+    return {str(k).replace("\x00", ""): _sanitize_value(v) for k, v in row.items()}
