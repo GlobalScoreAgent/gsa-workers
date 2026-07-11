@@ -41,6 +41,8 @@ Adjust column names for monthly / origin ([SUPABASE.md](./SUPABASE.md)).
 | Log line | Meaning |
 |---|---|
 | `Fetching Dune query … page N` | HTTP page fetch in progress |
+| `Waiting … before next Dune page` | Rate-limit pacing between pages |
+| `Dune HTTP 429 rate limited; sleeping` | Hit Free/Plus rpm cap; retrying with backoff |
 | `Fetched N rows from Dune; calling wallets.cex_addresses_upsert` | Dune OK; about to upsert |
 | `Done in …s — WALLETS CEX ADDRESSES UPSERT → N rows` | Success |
 | `Dune returned 0 rows; refusing to upsert` | Exit 1; table left unchanged |
@@ -77,20 +79,21 @@ Reference-data job (`token_prices_import`). No claim / `Pending` / `next_eligibl
 |---|---|---|
 | Workflow fails immediately | Missing/invalid `DUNE_KEY` or `SUPABASE_DB_URL` | Check repo secrets; re-run |
 | `Dune returned 0 rows` | Empty/stale Dune result | Check query `7526826` on Dune; re-run when data exists |
+| `Dune HTTP 429` after retries | Rate limit (Free high-limit ≈ 40 rpm) | Wait a minute; keep `DUNE_PAGE_DELAY_SECONDS=2`; Plus can lower to `0.3` |
 | Upsert / function does not exist | Migration not applied | Deploy `wallets.token_prices_upsert` in **gsa-supabase-schema** first |
-| Upsert timeout | Large payload / DB load | Check `statement_timeout`; re-run; chunk only if pooler rejects payload |
+| Upsert timeout | Large payload / DB load | Lower `UPSERT_CHUNK_SIZE` (default 5000); check `statement_timeout` |
 | `max(price_date)` old | Dune query stale or last run failed | Fix Dune query; `workflow_dispatch` on **Token prices import** |
 
 **Re-run:** GitHub → **Actions** → **Token prices import** → **Run workflow**.
 
-**Verify after a successful run** (~2k rows per Dune latest result; conflicts are no-ops):
+**Verify after a successful run** (~2k–225k rows per Dune latest result depending on query filters; conflicts are no-ops):
 
 ```sql
 SELECT count(*) AS rows, max(price_date) AS max_price_date
 FROM wallets.token_prices;
 ```
 
-Worker details: [token_prices_import/README.md](../workers/token_prices_import/README.md).
+Large imports use `DUNE_PAGE_DELAY_SECONDS=2` (Free ≈ 40 rpm) and `UPSERT_CHUNK_SIZE=5000`. Worker details: [token_prices_import/README.md](../workers/token_prices_import/README.md).
 
 ## Dual daily workers
 

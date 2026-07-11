@@ -27,6 +27,7 @@ GitHub Actions: days **1 and 16** at 00:00 UTC (`0 0 1,16 * *`) + `workflow_disp
 | `DUNE_KEY` | Yes | — | Dune API key |
 | `DUNE_QUERY_ID` | No | `7520736` | Dune query id |
 | `DUNE_PAGE_SIZE` | No | `10000` | Rows per Dune page |
+| `DUNE_PAGE_DELAY_SECONDS` | No | `2` | Sleep between Dune pages (Free-safe ~40 rpm high-limit) |
 
 ## Local run
 

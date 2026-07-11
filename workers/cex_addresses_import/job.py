@@ -13,7 +13,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 
 from db import Database
-from dune import DEFAULT_PAGE_SIZE, DuneError, fetch_latest_rows
+from dune import (
+    DEFAULT_PAGE_DELAY_SECONDS,
+    DEFAULT_PAGE_SIZE,
+    DuneError,
+    fetch_latest_rows,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -42,6 +47,17 @@ def env_int(name: str, default: int, minimum: int = 1) -> int:
     return value
 
 
+def env_float(name: str, default: float, minimum: float = 0.0) -> float:
+    raw = os.environ.get(name)
+    if raw is None or raw.strip() == "":
+        value = default
+    else:
+        value = float(raw)
+    if value < minimum:
+        raise ValueError(f"{name} must be >= {minimum}")
+    return value
+
+
 def load_dotenv_if_present() -> None:
     env_path = Path(__file__).resolve().parent / ".env"
     if not env_path.is_file():
@@ -65,18 +81,25 @@ def main() -> int:
         dune_key = env_required("DUNE_KEY")
         query_id = env_int("DUNE_QUERY_ID", DEFAULT_QUERY_ID)
         page_size = env_int("DUNE_PAGE_SIZE", DEFAULT_PAGE_SIZE)
+        page_delay = env_float("DUNE_PAGE_DELAY_SECONDS", DEFAULT_PAGE_DELAY_SECONDS)
     except ValueError as exc:
         logger.error("%s", exc)
         return 1
 
     logger.info(
-        "Starting CEX addresses import (query_id=%s, page_size=%s)",
+        "Starting CEX addresses import (query_id=%s, page_size=%s, page_delay=%.1fs)",
         query_id,
         page_size,
+        page_delay,
     )
 
     try:
-        rows = fetch_latest_rows(dune_key, query_id, page_size=page_size)
+        rows = fetch_latest_rows(
+            dune_key,
+            query_id,
+            page_size=page_size,
+            page_delay_seconds=page_delay,
+        )
     except DuneError as exc:
         logger.error("Dune fetch failed: %s", exc)
         return 1

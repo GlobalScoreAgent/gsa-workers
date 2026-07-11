@@ -2,20 +2,22 @@
 
 > Project context: [AGENTS.md](../../AGENTS.md) · [Supabase map](../../docs/SUPABASE.md) · [Architecture](../../docs/ARCHITECTURE.md)
 
-Reference-data job: fetch the latest Dune token-price list and insert into `wallets.token_prices` via one SQL RPC. No wallet claim / eligibility loop.
+Reference-data job: fetch the latest Dune token-price list and insert into `wallets.token_prices` via SQL RPC chunks. No wallet claim / eligibility loop.
 
 ## Pipeline
 
-1. `GET https://api.dune.com/api/v1/query/{DUNE_QUERY_ID}/results` (paginated)
+1. `GET https://api.dune.com/api/v1/query/{DUNE_QUERY_ID}/results` (paginated, paced)
 2. Fail if 0 rows (do not wipe good data)
-3. `SELECT wallets.token_prices_upsert(rows::jsonb)`
+3. `SELECT wallets.token_prices_upsert(chunk::jsonb)` per chunk of `UPSERT_CHUNK_SIZE`
 4. Exit 0 on success, 1 on Dune/DB failure
 
 Default query id: **7526826**.
 
 Conflict policy: `ON CONFLICT (contract_address, blockchain, price_date) DO NOTHING` (same as legacy `walcert.token_prices_process`).
 
-If a single jsonb payload is too large for the pooler, call the same RPC in chunks of N rows (same insert semantics). Start with one call (~2k rows typical).
+### Dune rate limits
+
+`GET …/results` is a **high-limit** endpoint ([Dune docs](https://docs.dune.com/api-reference/overview/rate-limits)): Free **40 rpm**, Plus **200 rpm**. Large results (~225k rows ≈ 23 pages at 10k) need pacing. Default `DUNE_PAGE_DELAY_SECONDS=2` stays under Free. On 429/503 the client retries with exponential backoff (honors `Retry-After` when present).
 
 ## Schedule
 
@@ -29,6 +31,8 @@ GitHub Actions: daily at **01:00 UTC** (`0 1 * * *`) + `workflow_dispatch` (same
 | `DUNE_KEY` | Yes | — | Dune API key |
 | `DUNE_QUERY_ID` | No | `7526826` | Dune query id |
 | `DUNE_PAGE_SIZE` | No | `10000` | Rows per Dune page |
+| `DUNE_PAGE_DELAY_SECONDS` | No | `2` | Sleep between Dune pages (Free-safe; Plus can use `0.3`) |
+| `UPSERT_CHUNK_SIZE` | No | `5000` | Rows per `token_prices_upsert` call |
 
 ## Local run
 

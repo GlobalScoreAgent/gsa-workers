@@ -39,4 +39,5 @@ jobs:
           DUNE_KEY: ${{ secrets.DUNE_KEY }}
           DUNE_QUERY_ID: "7520736"
           DUNE_PAGE_SIZE: "10000"
+          DUNE_PAGE_DELAY_SECONDS: "2"
         run: uv run python job.py
