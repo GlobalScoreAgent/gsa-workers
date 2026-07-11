@@ -13,6 +13,8 @@ The pg_cron job `wallet_owner_update_transactions` is deprecated; post-processin
 
 Claim, batch save, and snapshot reconnect and retry up to 3 times on Supabase connection drops (`OperationalError` / `InterfaceError`), so a transient SSL/DB close does not kill the whole run.
 
+Retryable DB errors (timeout, connection, deadlock) are retried 3×; if they persist, the worker skips that batch and continues until the time budget.
+
 ## Eligibility (`import_nonce_and_balance_monthly_next_eligible_at`)
 
 The worker claims wallets when:

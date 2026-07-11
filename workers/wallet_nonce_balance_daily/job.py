@@ -19,7 +19,7 @@ import httpx
 sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 
 from address import AddressError, is_valid_evm_address, normalize_address
-from db import Database
+from db import CLAIM_RETRY_BASE_SECONDS, Database
 from query import query_all_chains
 
 logging.basicConfig(
@@ -156,11 +156,19 @@ async def run_job() -> int:
                     break
 
                 async with db_lock:
-                    wallets = db.claim_wallets(
-                        worker_id=worker_id,
-                        limit=claim_batch_size,
-                        stale_seconds=claim_stale_seconds,
-                    )
+                    try:
+                        wallets = db.claim_wallets(
+                            worker_id=worker_id,
+                            limit=claim_batch_size,
+                            stale_seconds=claim_stale_seconds,
+                        )
+                    except Exception as exc:
+                        logger.error(
+                            "Claim failed; will retry next loop: %s",
+                            exc,
+                        )
+                        await asyncio.sleep(CLAIM_RETRY_BASE_SECONDS)
+                        continue
                 if not wallets:
                     if processed == 0:
                         logger.info("No pending wallets found. Exiting.")
@@ -213,14 +221,23 @@ async def run_job() -> int:
 
                 outcomes = await asyncio.gather(*(handle_wallet(row) for row in wallets))
                 async with db_lock:
-                    db.save_wallet_results_batch(outcomes)
+                    try:
+                        db.save_wallet_results_batch(outcomes)
 
-                    completed_ids = [
-                        wallet_id
-                        for wallet_id, _payload, status in outcomes
-                        if status == STATUS_COMPLETED
-                    ]
-                    snapshot_failed = db.apply_daily_snapshots(completed_ids)
+                        completed_ids = [
+                            wallet_id
+                            for wallet_id, _payload, status in outcomes
+                            if status == STATUS_COMPLETED
+                        ]
+                        snapshot_failed = db.apply_daily_snapshots(completed_ids)
+                    except Exception as exc:
+                        logger.error(
+                            "Save/snapshot failed for batch; wallets stay Pending: %s",
+                            exc,
+                        )
+                        processed += len(outcomes)
+                        errors += len(outcomes)
+                        continue
 
                 for wallet_id, _payload, status in outcomes:
                     processed += 1

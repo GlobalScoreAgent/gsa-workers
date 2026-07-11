@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any
+from collections.abc import Callable
+from typing import Any, TypeVar
 
 import psycopg
 from psycopg.rows import dict_row
@@ -73,7 +74,13 @@ WHERE id = %(wallet_id)s
 
 CLAIM_MAX_ATTEMPTS = 3
 CLAIM_RETRY_BASE_SECONDS = 2.0
-CONN_RETRY_EXCEPTIONS = (psycopg.OperationalError, psycopg.InterfaceError)
+RETRYABLE_DB_EXCEPTIONS = (psycopg.OperationalError, psycopg.InterfaceError)
+_NO_RECONNECT_EXCEPTIONS = (
+    psycopg.errors.QueryCanceled,
+    psycopg.errors.DeadlockDetected,
+)
+
+T = TypeVar("T")
 
 
 class Database:
@@ -111,71 +118,79 @@ class Database:
         except Exception:
             pass
 
-    def load_alchemy_subdomains(self) -> dict[int, str | None]:
-        self.ensure_connected()
-        assert self._conn is not None
-        with self._conn.cursor() as cur:
-            cur.execute(CHAINS_ALCHEMY_SQL)
-            rows = cur.fetchall()
-        mapping: dict[int, str | None] = {}
-        for row in rows:
-            mapping[int(row["chain_id"])] = row["subdomain_alchemy"]
-        return mapping
-
-    def count_eligible_wallets(self, stale_seconds: int) -> int:
-        self.ensure_connected()
-        assert self._conn is not None
-        with self._conn.cursor() as cur:
-            cur.execute(COUNT_ELIGIBLE_SQL, {"stale_seconds": stale_seconds})
-            row = cur.fetchone()
-        return int(row["count"]) if row else 0
-
-    def claim_wallets(self, limit: int, stale_seconds: int) -> list[dict[str, Any]]:
+    def _run_with_db_retry(self, operation: str, fn: Callable[[], T]) -> T:
         last_exc: Exception | None = None
-
         for attempt in range(1, CLAIM_MAX_ATTEMPTS + 1):
             try:
                 self.ensure_connected()
-                assert self._conn is not None
-                with self._conn.cursor() as cur:
-                    cur.execute(
-                        CLAIM_WALLETS_SQL,
-                        {"limit": limit, "stale_seconds": stale_seconds},
+                return fn()
+            except RETRYABLE_DB_EXCEPTIONS as exc:
+                last_exc = exc
+                self._safe_rollback()
+                if attempt >= CLAIM_MAX_ATTEMPTS:
+                    break
+                delay = CLAIM_RETRY_BASE_SECONDS * attempt
+                if isinstance(exc, _NO_RECONNECT_EXCEPTIONS):
+                    logger.warning(
+                        "%s attempt %s/%s retryable DB error (%s); retrying in %.1fs",
+                        operation,
+                        attempt,
+                        CLAIM_MAX_ATTEMPTS,
+                        exc.__class__.__name__,
+                        delay,
                     )
-                    rows = list(cur.fetchall())
-                self._conn.commit()
-                return rows
-            except psycopg.errors.QueryCanceled as exc:
-                last_exc = exc
+                    time.sleep(delay)
+                else:
+                    logger.warning(
+                        "%s attempt %s/%s connection error (%s); reconnecting in %.1fs",
+                        operation,
+                        attempt,
+                        CLAIM_MAX_ATTEMPTS,
+                        exc,
+                        delay,
+                    )
+                    time.sleep(delay)
+                    self._reconnect()
+            except Exception:
                 self._safe_rollback()
-                if attempt >= CLAIM_MAX_ATTEMPTS:
-                    break
-                delay = CLAIM_RETRY_BASE_SECONDS * attempt
-                logger.warning(
-                    "Claim attempt %s/%s timed out; retrying in %.1fs",
-                    attempt,
-                    CLAIM_MAX_ATTEMPTS,
-                    delay,
-                )
-                time.sleep(delay)
-            except CONN_RETRY_EXCEPTIONS as exc:
-                last_exc = exc
-                self._safe_rollback()
-                if attempt >= CLAIM_MAX_ATTEMPTS:
-                    break
-                delay = CLAIM_RETRY_BASE_SECONDS * attempt
-                logger.warning(
-                    "Claim attempt %s/%s connection error (%s); reconnecting in %.1fs",
-                    attempt,
-                    CLAIM_MAX_ATTEMPTS,
-                    exc,
-                    delay,
-                )
-                time.sleep(delay)
-                self._reconnect()
+                raise
 
         assert last_exc is not None
         raise last_exc
+
+    def load_alchemy_subdomains(self) -> dict[int, str | None]:
+        def _load() -> dict[int, str | None]:
+            assert self._conn is not None
+            with self._conn.cursor() as cur:
+                cur.execute(CHAINS_ALCHEMY_SQL)
+                rows = cur.fetchall()
+            return {int(row["chain_id"]): row["subdomain_alchemy"] for row in rows}
+
+        return self._run_with_db_retry("load_alchemy_subdomains", _load)
+
+    def count_eligible_wallets(self, stale_seconds: int) -> int:
+        def _count() -> int:
+            assert self._conn is not None
+            with self._conn.cursor() as cur:
+                cur.execute(COUNT_ELIGIBLE_SQL, {"stale_seconds": stale_seconds})
+                row = cur.fetchone()
+            return int(row["count"]) if row else 0
+
+        return self._run_with_db_retry("count_eligible", _count)
+
+    def claim_wallets(self, limit: int, stale_seconds: int) -> list[dict[str, Any]]:
+        def _claim() -> list[dict[str, Any]]:
+            assert self._conn is not None
+            with self._conn.cursor() as cur:
+                cur.execute(
+                    CLAIM_WALLETS_SQL,
+                    {"limit": limit, "stale_seconds": stale_seconds},
+                )
+                rows = list(cur.fetchall())
+            self._conn.commit()
+            return rows
+
+        return self._run_with_db_retry("claim", _claim)
 
     def save_wallet_result(self, wallet_id: int, payload: str, status: str) -> None:
         self.save_wallet_results_batch([(wallet_id, payload, status)])
@@ -187,41 +202,18 @@ class Database:
         if not results:
             return
 
-        last_exc: Exception | None = None
         params = [
             {"wallet_id": wallet_id, "payload": payload, "status": status}
             for wallet_id, payload, status in results
         ]
 
-        for attempt in range(1, CLAIM_MAX_ATTEMPTS + 1):
-            try:
-                self.ensure_connected()
-                assert self._conn is not None
-                with self._conn.cursor() as cur:
-                    cur.executemany(UPDATE_WALLET_SQL, params)
-                self._conn.commit()
-                return
-            except CONN_RETRY_EXCEPTIONS as exc:
-                last_exc = exc
-                self._safe_rollback()
-                if attempt >= CLAIM_MAX_ATTEMPTS:
-                    break
-                delay = CLAIM_RETRY_BASE_SECONDS * attempt
-                logger.warning(
-                    "Save batch attempt %s/%s connection error (%s); reconnecting in %.1fs",
-                    attempt,
-                    CLAIM_MAX_ATTEMPTS,
-                    exc,
-                    delay,
-                )
-                time.sleep(delay)
-                self._reconnect()
-            except Exception:
-                self._safe_rollback()
-                raise
+        def _save() -> None:
+            assert self._conn is not None
+            with self._conn.cursor() as cur:
+                cur.executemany(UPDATE_WALLET_SQL, params)
+            self._conn.commit()
 
-        assert last_exc is not None
-        raise last_exc
+        self._run_with_db_retry("save_batch", _save)
 
     def apply_monthly_snapshots(self, wallet_ids: list[int]) -> list[int]:
         """Run wallet_apply_monthly_snapshot; return wallet ids that failed."""
@@ -243,11 +235,11 @@ class Database:
                         )
                     applied = True
                     break
-                except CONN_RETRY_EXCEPTIONS as exc:
+                except RETRYABLE_DB_EXCEPTIONS as exc:
                     self._safe_rollback()
                     if attempt >= CLAIM_MAX_ATTEMPTS:
                         logger.warning(
-                            "Snapshot failed for wallet id=%s after %s connection retries: %s",
+                            "Snapshot failed for wallet id=%s after %s retries: %s",
                             wallet_id,
                             CLAIM_MAX_ATTEMPTS,
                             exc,
@@ -255,15 +247,26 @@ class Database:
                         failed.append(wallet_id)
                         break
                     delay = CLAIM_RETRY_BASE_SECONDS * attempt
-                    logger.warning(
-                        "Snapshot wallet id=%s attempt %s/%s connection error; reconnecting in %.1fs",
-                        wallet_id,
-                        attempt,
-                        CLAIM_MAX_ATTEMPTS,
-                        delay,
-                    )
-                    time.sleep(delay)
-                    self._reconnect()
+                    if isinstance(exc, _NO_RECONNECT_EXCEPTIONS):
+                        logger.warning(
+                            "Snapshot wallet id=%s attempt %s/%s %s; retrying in %.1fs",
+                            wallet_id,
+                            attempt,
+                            CLAIM_MAX_ATTEMPTS,
+                            exc.__class__.__name__,
+                            delay,
+                        )
+                        time.sleep(delay)
+                    else:
+                        logger.warning(
+                            "Snapshot wallet id=%s attempt %s/%s connection error; reconnecting in %.1fs",
+                            wallet_id,
+                            attempt,
+                            CLAIM_MAX_ATTEMPTS,
+                            delay,
+                        )
+                        time.sleep(delay)
+                        self._reconnect()
                 except Exception as exc:
                     self._safe_rollback()
                     logger.warning(
@@ -280,36 +283,19 @@ class Database:
         if failed:
             self._mark_snapshot_errors(failed)
 
-        self.ensure_connected()
-        assert self._conn is not None
-        self._conn.commit()
+        def _commit() -> None:
+            assert self._conn is not None
+            self._conn.commit()
+
+        self._run_with_db_retry("snapshot_commit", _commit)
         return failed
 
     def _mark_snapshot_errors(self, wallet_ids: list[int]) -> None:
-        last_exc: Exception | None = None
         params = [{"wallet_id": wallet_id} for wallet_id in wallet_ids]
 
-        for attempt in range(1, CLAIM_MAX_ATTEMPTS + 1):
-            try:
-                self.ensure_connected()
-                assert self._conn is not None
-                with self._conn.cursor() as cur:
-                    cur.executemany(MARK_SNAPSHOT_ERROR_SQL, params)
-                return
-            except CONN_RETRY_EXCEPTIONS as exc:
-                last_exc = exc
-                self._safe_rollback()
-                if attempt >= CLAIM_MAX_ATTEMPTS:
-                    break
-                delay = CLAIM_RETRY_BASE_SECONDS * attempt
-                logger.warning(
-                    "Mark snapshot errors attempt %s/%s connection error; reconnecting in %.1fs",
-                    attempt,
-                    CLAIM_MAX_ATTEMPTS,
-                    delay,
-                )
-                time.sleep(delay)
-                self._reconnect()
+        def _mark() -> None:
+            assert self._conn is not None
+            with self._conn.cursor() as cur:
+                cur.executemany(MARK_SNAPSHOT_ERROR_SQL, params)
 
-        if last_exc is not None:
-            raise last_exc
+        self._run_with_db_retry("mark_snapshot_errors", _mark)
