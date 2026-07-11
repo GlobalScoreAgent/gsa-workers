@@ -41,6 +41,8 @@ Legacy columns (`import_nonce_and_balance_daily_at`, `import_nonce_and_balance_d
 
 The pg_cron job `wallet_update_transactions` is deprecated; snapshot runs inline in this worker.
 
+Claim, batch save, and snapshot reconnect and retry up to 3 times on Supabase connection drops (`OperationalError` / `InterfaceError`), so a transient SSL/DB close does not kill the whole run.
+
 ## Manual re-queue
 
 Force wallets back into the claim queue after errors:

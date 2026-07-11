@@ -11,6 +11,8 @@ Batch job that queries native balance and nonce across 8 EVM chains for owner wa
 
 The pg_cron job `wallet_owner_update_transactions` is deprecated; post-processing runs in the worker.
 
+Claim, batch save, and snapshot reconnect and retry up to 3 times on Supabase connection drops (`OperationalError` / `InterfaceError`), so a transient SSL/DB close does not kill the whole run.
+
 ## Eligibility (`import_nonce_and_balance_monthly_next_eligible_at`)
 
 The worker claims wallets when:

@@ -35,6 +35,8 @@ AND import_wallet_history_next_eligible_at <= NOW()
 
 The pg_cron job `wallet_owner_update_first_transactions` is deprecated.
 
+Claim, batch save, and snapshot reconnect and retry up to 3 times on Supabase connection drops (`OperationalError` / `InterfaceError`), so a transient SSL/DB close does not kill the whole run.
+
 ## Manual re-queue
 
 ```sql
