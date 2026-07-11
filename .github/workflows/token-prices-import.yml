@@ -1,8 +1,9 @@
 name: Token prices import
 
 on:
-  schedule:
-    - cron: "0 1 * * *"
+  # Schedule paused (Dune Free credit burn on ~225k-row export). Re-enable after source review.
+  # schedule:
+  #   - cron: "0 1 * * *"
   workflow_dispatch:
 
 concurrency:

@@ -40,6 +40,8 @@ After `owner_wallet_origin` is validated in production, consider deprecating:
 
 Replaced by **`token_prices_import`** → `wallets.token_prices_upsert` → `wallets.token_prices`.
 
+**GHA schedule paused** (2026-07-11): daily cron off because Dune Free data-export credits (~20/MB) burn too fast on ~225k-row dumps. Workflow remains for manual `workflow_dispatch` until a cheaper source or filtered query is chosen.
+
 | Legacy component | Status |
 |---|---|
 | pg_cron `walcert_token_prices_import_data` (`0 1 * * *`) | Keep **disabled**; do not re-enable |

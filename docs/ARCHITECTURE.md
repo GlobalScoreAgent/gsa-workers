@@ -77,7 +77,7 @@ stateDiagram-v2
 
 Claim workers schedule: `0 0,6,12,18 * * *` UTC + `workflow_dispatch`.  
 CEX import schedule: `0 0 1,16 * *` UTC + `workflow_dispatch` (1st and 16th of each month ≈ every 15 days, same cadence as the former walcert CEX import cron).  
-Token prices import schedule: `0 1 * * *` UTC + `workflow_dispatch` (daily 01:00, same cadence as the former walcert token-prices import cron).
+Token prices import schedule: **paused** (manual `workflow_dispatch` only; daily `0 1 * * *` disabled pending cheaper data source / smaller export).
 
 ### What each worker does
 

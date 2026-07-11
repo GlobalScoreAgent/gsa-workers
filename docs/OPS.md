@@ -75,6 +75,8 @@ More monitoring SQL: [SUPABASE.md](./SUPABASE.md). Worker details: [cex_addresse
 
 Reference-data job (`token_prices_import`). No claim / `Pending` / `next_eligible_at`.
 
+**Schedule paused** — do not rely on daily cron; use **Run workflow** only if needed (burns Dune export credits).
+
 | Symptom | Likely cause | Action |
 |---|---|---|
 | Workflow fails immediately | Missing/invalid `DUNE_KEY` or `SUPABASE_DB_URL` | Check repo secrets; re-run |

@@ -21,7 +21,9 @@ Conflict policy: `ON CONFLICT (contract_address, blockchain, price_date) DO NOTH
 
 ## Schedule
 
-GitHub Actions: daily at **01:00 UTC** (`0 1 * * *`) + `workflow_dispatch` (same cadence as the former walcert token-prices import cron).
+**Paused:** daily cron disabled to avoid Dune Free credit burn on large result exports. Manual only: `workflow_dispatch`.
+
+Former cadence (to restore later): daily **01:00 UTC** (`0 1 * * *`).
 
 ## Env
 
