@@ -1,8 +1,8 @@
 # Supabase / Postgres interaction
 
-Workers connect with **direct Postgres** via `SUPABASE_DB_URL` (`psycopg`), not supabase-js or Edge Functions. Schema of truth for wallet jobs: `erc_8004`.
+Workers connect with **direct Postgres** via `SUPABASE_DB_URL` (`psycopg`), not supabase-js or Edge Functions. Schema of truth for wallet claim jobs: `erc_8004`. Reference-data CEX import uses schema `wallets`.
 
-Schema migrations and snapshot SQL live in the sibling repo **`gsa-supabase-schema`** (functions `wallet_apply_*_snapshot`, triggers, indexes). Code of truth for claim/save SQL in this repo: each worker’s `src/db.py`.
+Schema migrations and snapshot/upsert SQL live in the sibling repo **`gsa-supabase-schema`** (functions `wallet_apply_*_snapshot`, `wallets.cex_addresses_upsert`, triggers, indexes). Code of truth for claim/save SQL in this repo: each worker’s `src/db.py`.
 
 ## Connection
 
@@ -22,6 +22,7 @@ Schema migrations and snapshot SQL live in the sibling repo **`gsa-supabase-sche
 | `erc_8004.wallet_transactions` | Daily snapshot: current nonce/balance + 30d history + category |
 | `erc_8004.chain_nonces` | Daily snapshot: per-chain daily nonce totals (incremental) |
 | `erc_8004.wallet_owner_details` | Monthly + origin snapshots: owner metrics / first tx |
+| `wallets.cex_addresses` | CEX address reference list (Dune import) |
 
 ## Per-worker column map
 
@@ -71,6 +72,14 @@ Called inline by the worker after a successful `Completed` save:
 Canonical SQL / migrations: `gsa-supabase-schema/supabase/migrations/` and `supabase/scripts/wallet_apply_*.sql`.
 
 **Do not** re-enable the old pg_cron jobs that used to do this work (see [DEPRECATION.md](./DEPRECATION.md)).
+
+## Reference-data RPCs
+
+| Worker | Function | Writes |
+|---|---|---|
+| cex import | `wallets.cex_addresses_upsert(p_rows jsonb)` | `wallets.cex_addresses` (`ON CONFLICT (address, chain)`) |
+
+`p_rows` is a JSON array of Dune row objects (`blockchain`, `address`, `cex_name`, `distinct_name`). Empty array raises. Script: `gsa-supabase-schema/supabase/scripts/wallets_cex_addresses_upsert.sql`.
 
 ## Triggers (schema repo)
 
@@ -189,6 +198,19 @@ WHERE is_valid_import_current_nonce_and_balance_daily IS TRUE
 ```
 
 (Adjust column names for monthly / origin.)
+
+### CEX addresses (`wallets.cex_addresses`)
+
+```sql
+SELECT count(*) AS rows, max(updated_at) AS last_updated
+FROM wallets.cex_addresses;
+
+SELECT chain, count(*) AS n
+FROM wallets.cex_addresses
+GROUP BY 1
+ORDER BY n DESC
+LIMIT 10;
+```
 
 ## Related docs
 

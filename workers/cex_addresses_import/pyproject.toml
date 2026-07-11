@@ -1,0 +1,12 @@
+[project]
+name = "cex-addresses-import"
+version = "0.1.0"
+description = "Import CEX addresses from Dune into wallets.cex_addresses for GSA"
+requires-python = ">=3.12"
+dependencies = [
+    "httpx>=0.28",
+    "psycopg[binary]>=3.2",
+]
+
+[dependency-groups]
+dev = []

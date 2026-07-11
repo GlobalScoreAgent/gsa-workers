@@ -1,6 +1,6 @@
 # GSA Workers
 
-Unified Python batch workers for [Global Score Agent](https://www.globalscoreagent.com/), run via GitHub Actions against Supabase Postgres (`erc_8004`).
+Unified Python batch workers for [Global Score Agent](https://www.globalscoreagent.com/), run via GitHub Actions against Supabase Postgres.
 
 **For AI agents:** start at [AGENTS.md](./AGENTS.md). Architecture and DB maps: [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md), [docs/SUPABASE.md](./docs/SUPABASE.md), [docs/OPS.md](./docs/OPS.md).
 
@@ -11,24 +11,26 @@ Unified Python batch workers for [Global Score Agent](https://www.globalscoreage
 | [`wallet_nonce_balance_daily`](./workers/wallet_nonce_balance_daily/README.md) | 0, 6, 12, 18h (matrix `worker-a`/`worker-b`) | `is_valid_..._daily` + `import_nonce_and_balance_daily_next_eligible_at` | Balance + nonce → daily JSON → `wallet_apply_daily_snapshot` |
 | [`owner_wallet_origin`](./workers/owner_wallet_origin/README.md) | 0, 6, 12, 18h | monthly `is_valid` + `import_wallet_history_next_eligible_at` | First on-chain activity → history JSON → `wallet_apply_owner_history_snapshot` |
 | [`owner_wallet_nonce_balance_monthly`](./workers/owner_wallet_nonce_balance_monthly/README.md) | 0, 6, 12, 18h | `is_valid_..._monthly` + `import_nonce_and_balance_monthly_next_eligible_at` | Balance + nonce (30d) → monthly JSON → `wallet_apply_monthly_snapshot` |
+| [`cex_addresses_import`](./workers/cex_addresses_import/README.md) | 1st & 16th 00:00 | n/a (reference data) | Dune CEX list → `wallets.cex_addresses_upsert` |
 
-## Common pipeline
+## Common pipeline (claim workers)
 
 ```
 claim (Pending, next_eligible_at += CLAIM_STALE_SECONDS)
   → RPC (8 chains, public then Alchemy)
-  → save (Completed|Error + schedule next run)
+    → save (Completed|Error + schedule next run)
   → wallet_apply_*_snapshot → Processed
 ```
 
-Details: [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md). Column/RPC inventory: [docs/SUPABASE.md](./docs/SUPABASE.md).
+Reference-data (`cex_addresses_import`): Dune fetch → one upsert RPC. Details: [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md). Column/RPC inventory: [docs/SUPABASE.md](./docs/SUPABASE.md).
 
 ## Secrets
 
 | Secret | Required | Role |
 |---|---|---|
 | `SUPABASE_DB_URL` | Yes | Postgres pooler DSN |
-| `ALCHEMY_KEY` | Recommended | Alchemy fallback after public RPCs |
+| `ALCHEMY_KEY` | Recommended | Alchemy fallback after public RPCs (claim workers) |
+| `DUNE_KEY` | For CEX import | Dune Analytics API key |
 
 ## CI defaults (workflows)
 
@@ -37,6 +39,7 @@ Details: [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md). Column/RPC inventory: [
 | daily | 20 | 200 | 7200 | 19800 |
 | origin | 4 | 50 | 7200 | 19800 |
 | monthly | 20 | 200 | 7200 | 19800 |
+| cex import | n/a | n/a | n/a | GHA timeout 30m |
 
 Daily also sets `WORKER_ID` to `worker-a` or `worker-b`. Origin/monthly set `SKIP_ELIGIBLE_COUNT=1`.
 
@@ -47,7 +50,7 @@ Manual run: **Actions** → pick workflow → **Run workflow**.
 ```powershell
 cd workers/<worker_name>
 copy .env.example .env
-# Set SUPABASE_DB_URL and ALCHEMY_KEY
+# Set SUPABASE_DB_URL and ALCHEMY_KEY or DUNE_KEY as needed
 
 uv sync
 uv run python job.py
@@ -74,13 +77,17 @@ gsa-workers/
 │   │   ├── job.py
 │   │   ├── scripts/
 │   │   └── src/          # db, origin, ...
-│   └── owner_wallet_nonce_balance_monthly/
+│   ├── owner_wallet_nonce_balance_monthly/
+│   │   ├── job.py
+│   │   └── src/
+│   └── cex_addresses_import/
 │       ├── job.py
-│       └── src/
+│       └── src/          # db, dune
 └── .github/workflows/
     ├── wallet-nonce-balance-daily.yml
     ├── owner-wallet-origin.yml
-    └── owner-wallet-nonce-balance-monthly.yml
+    ├── owner-wallet-nonce-balance-monthly.yml
+    └── cex-addresses-import.yml
 ```
 
 Schema / snapshot SQL: sibling repo **`gsa-supabase-schema`**.

@@ -72,8 +72,10 @@ stateDiagram-v2
 | `wallet_nonce_balance_daily` | `wallet-nonce-balance-daily.yml` | per `worker-a` / `worker-b` | Matrix: 2 runners |
 | `owner_wallet_origin` | `owner-wallet-origin.yml` | `owner-wallet-origin` | 1 runner |
 | `owner_wallet_nonce_balance_monthly` | `owner-wallet-nonce-balance-monthly.yml` | `owner-wallet-nonce-balance-monthly` | 1 runner |
+| `cex_addresses_import` | `cex-addresses-import.yml` | `cex-addresses-import` | 1 runner |
 
-Schedule (all): `0 0,6,12,18 * * *` UTC + `workflow_dispatch`.
+Claim workers schedule: `0 0,6,12,18 * * *` UTC + `workflow_dispatch`.  
+CEX import schedule: `0 0 1,16 * *` UTC + `workflow_dispatch`.
 
 ### What each worker does
 
@@ -82,15 +84,31 @@ Schedule (all): `0 0,6,12,18 * * *` UTC + `workflow_dispatch`.
 | daily | `is_valid_import_current_nonce_and_balance_daily` | Balance/nonce JSON → `wallet_transactions` + `chain_nonces` |
 | monthly | `is_valid_import_current_nonce_and_balance_monthly` | Balance/nonce JSON → `wallet_owner_details` (current metrics) |
 | origin | same monthly flag | First-activity history JSON → `wallet_owner_details.first_transaction_at` |
+| cex import | n/a | Dune rows → `wallets.cex_addresses` via `cex_addresses_upsert` |
+
+## Reference-data workers
+
+`cex_addresses_import` does **not** use claim / `next_eligible_at`. Pipeline:
+
+1. Fetch latest Dune query result (paginated HTTP).
+2. Fail if zero rows.
+3. Call `wallets.cex_addresses_upsert(p_rows jsonb)` once with the full row array.
+
+```mermaid
+flowchart LR
+  ghaCex[GHA_cex_import] --> duneApi[Dune_API]
+  ghaCex --> upsertFn["wallets.cex_addresses_upsert"]
+  upsertFn --> cexTable[wallets.cex_addresses]
+```
 
 ## Time budgets
 
 | Limit | Value |
 |---|---|
-| GHA `timeout-minutes` | 360 |
-| `MAX_RUNTIME_SECONDS` | 19800 (~5.5h) — soft stop inside `job.py` |
+| GHA `timeout-minutes` | 360 (claim workers), 30 (cex import) |
+| `MAX_RUNTIME_SECONDS` | 19800 (~5.5h) — soft stop inside claim `job.py` |
 | Postgres `statement_timeout` | 300s |
-| HTTP client timeout | ~10s (daily/monthly), ~30s (origin) |
+| HTTP client timeout | ~10s (daily/monthly), ~30s (origin), ~120s (Dune) |
 
 ## Resilience
 
@@ -108,14 +126,15 @@ There is **no shared Python package**. Patterns are copy-pasted across workers:
 
 ```
 workers/<name>/
-├── job.py              # asyncio batch loop
+├── job.py              # asyncio batch loop (or sync one-shot for reference data)
 ├── pyproject.toml      # uv / Python 3.12
 ├── .env.example
 ├── README.md
 └── src/
-    ├── db.py           # claim / save / snapshot / reconnect
+    ├── db.py           # claim / save / snapshot / reconnect (or upsert RPC)
     ├── query.py        # balance+nonce (daily, monthly)
     ├── origin.py       # binary-search first activity (origin only)
+    ├── dune.py         # Dune HTTP client (cex import only)
     ├── rpc.py
     ├── alchemy.py
     ├── networks.py     # 8-chain public RPC list
@@ -131,8 +150,9 @@ Origin also has `scripts/check_pending.py` and `scripts/compare_smoke.py`.
 | daily | 20 | 200 | 7200 |
 | origin | 4 | 50 | 7200 |
 | monthly | 20 | 200 | 7200 |
+| cex import | n/a | n/a | n/a |
 
-Secrets: `SUPABASE_DB_URL` (required), `ALCHEMY_KEY` (recommended). Daily sets `WORKER_ID` from the matrix.
+Secrets: `SUPABASE_DB_URL` (required), `ALCHEMY_KEY` (recommended for claim workers), `DUNE_KEY` (cex import). Daily sets `WORKER_ID` from the matrix.
 
 ## Related docs
 
