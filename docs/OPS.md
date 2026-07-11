@@ -24,6 +24,8 @@ Adjust column names for monthly / origin ([SUPABASE.md](./SUPABASE.md)).
 
 ## Interpreting worker logs
 
+### Claim workers
+
 | Log line | Meaning |
 |---|---|
 | `Claimed batch size=...` | Claim OK; RPC about to run |
@@ -33,6 +35,62 @@ Adjust column names for monthly / origin ([SUPABASE.md](./SUPABASE.md)).
 | `Snapshot failed for wallet id=...` | That wallet marked Error (or retried); others continue |
 | `Time budget reached` | Soft stop (`MAX_RUNTIME_SECONDS`); exit 0 |
 | `Critical job failure` | Unexpected error outside the DB continue path |
+
+### CEX addresses import
+
+| Log line | Meaning |
+|---|---|
+| `Fetching Dune query … page N` | HTTP page fetch in progress |
+| `Fetched N rows from Dune; calling wallets.cex_addresses_upsert` | Dune OK; about to upsert |
+| `Done in …s — WALLETS CEX ADDRESSES UPSERT → N rows` | Success |
+| `Dune returned 0 rows; refusing to upsert` | Exit 1; table left unchanged |
+| `Dune fetch failed` / `Upsert failed` | Exit 1; fix secret/RPC/network and re-run |
+
+## CEX addresses import
+
+Reference-data job (`cex_addresses_import`). No claim / `Pending` / `next_eligible_at`.
+
+| Symptom | Likely cause | Action |
+|---|---|---|
+| Workflow fails immediately | Missing/invalid `DUNE_KEY` or `SUPABASE_DB_URL` | Check repo secrets; re-run |
+| `Dune returned 0 rows` | Empty/stale Dune result | Check query `7520736` on Dune; re-run when data exists |
+| Upsert / function does not exist | Migration not applied | Deploy `wallets.cex_addresses_upsert` in **gsa-supabase-schema** first |
+| Upsert timeout | Large payload / DB load | Check `statement_timeout`; re-run; chunk only if pooler rejects payload |
+| `max(updated_at)` old | Schedule not run or last run failed | `workflow_dispatch` on **CEX addresses import** |
+
+**Re-run:** GitHub → **Actions** → **CEX addresses import** → **Run workflow**.
+
+**Verify after a successful run** (~36k rows expected for query `7520736`):
+
+```sql
+SELECT count(*) AS rows, max(updated_at) AS last_updated
+FROM wallets.cex_addresses;
+```
+
+More monitoring SQL: [SUPABASE.md](./SUPABASE.md). Worker details: [cex_addresses_import/README.md](../workers/cex_addresses_import/README.md).
+
+## Token prices import
+
+Reference-data job (`token_prices_import`). No claim / `Pending` / `next_eligible_at`.
+
+| Symptom | Likely cause | Action |
+|---|---|---|
+| Workflow fails immediately | Missing/invalid `DUNE_KEY` or `SUPABASE_DB_URL` | Check repo secrets; re-run |
+| `Dune returned 0 rows` | Empty/stale Dune result | Check query `7526826` on Dune; re-run when data exists |
+| Upsert / function does not exist | Migration not applied | Deploy `wallets.token_prices_upsert` in **gsa-supabase-schema** first |
+| Upsert timeout | Large payload / DB load | Check `statement_timeout`; re-run; chunk only if pooler rejects payload |
+| `max(price_date)` old | Dune query stale or last run failed | Fix Dune query; `workflow_dispatch` on **Token prices import** |
+
+**Re-run:** GitHub → **Actions** → **Token prices import** → **Run workflow**.
+
+**Verify after a successful run** (~2k rows per Dune latest result; conflicts are no-ops):
+
+```sql
+SELECT count(*) AS rows, max(price_date) AS max_price_date
+FROM wallets.token_prices;
+```
+
+Worker details: [token_prices_import/README.md](../workers/token_prices_import/README.md).
 
 ## Dual daily workers
 
@@ -56,8 +114,8 @@ No need to change code for a plain re-run. After a schema change, deploy the mig
 
 | Touch | Repo |
 |---|---|
-| Snapshot function body, triggers, indexes, new columns | `gsa-supabase-schema` |
-| Claim/save/retry/job loop/GHA env/RPC clients | `gsa-workers` |
+| Snapshot function body, `wallets.cex_addresses_upsert`, triggers, indexes, new columns | `gsa-supabase-schema` |
+| Claim/save/retry/job loop/GHA env/RPC clients / Dune client | `gsa-workers` |
 
 Deploy order when both change: **schema → worker → workflow_dispatch**.
 

@@ -35,3 +35,18 @@ After `owner_wallet_origin` is validated in production, consider deprecating:
 
 - Standalone `query_wallet_origin.py` CLI tool (replaced by this worker)
 - Any manual origin-import scripts or one-off jobs writing `import_wallet_history_data`
+
+## Token prices (walcert → GHA)
+
+Replaced by **`token_prices_import`** → `wallets.token_prices_upsert` → `wallets.token_prices`.
+
+| Legacy component | Status |
+|---|---|
+| pg_cron `walcert_token_prices_import_data` (`0 1 * * *`) | Keep **disabled**; do not re-enable |
+| pg_cron `walcert_token_prices_process` (`0 13 * * *`) | Keep **disabled**; do not re-enable |
+| `walcert.token_prices_import_data` (pg_net → Edge) | Superseded; leave in place until Edge retired |
+| `walcert.token_prices_process` | Superseded; leave in place |
+| Edge `walcert-update-token-prices` | Superseded; retire after GHA is validated |
+| `walcert.token_prices` / `walcert.token_prices_imported_data` | Legacy; new writes go to `wallets.token_prices` |
+
+Repointing consumers that still read `walcert.token_prices` is a separate follow-up.

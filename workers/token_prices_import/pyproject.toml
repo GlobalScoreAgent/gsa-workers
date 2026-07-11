@@ -1,0 +1,12 @@
+[project]
+name = "token-prices-import"
+version = "0.1.0"
+description = "Import token prices from Dune into wallets.token_prices for GSA"
+requires-python = ">=3.12"
+dependencies = [
+    "httpx>=0.28",
+    "psycopg[binary]>=3.2",
+]
+
+[dependency-groups]
+dev = []

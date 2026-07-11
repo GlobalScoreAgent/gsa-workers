@@ -1,8 +1,8 @@
 # Supabase / Postgres interaction
 
-Workers connect with **direct Postgres** via `SUPABASE_DB_URL` (`psycopg`), not supabase-js or Edge Functions. Schema of truth for wallet claim jobs: `erc_8004`. Reference-data CEX import uses schema `wallets`.
+Workers connect with **direct Postgres** via `SUPABASE_DB_URL` (`psycopg`), not supabase-js or Edge Functions. Schema of truth for wallet claim jobs: `erc_8004`. Reference-data imports (CEX addresses, token prices) use schema `wallets`.
 
-Schema migrations and snapshot/upsert SQL live in the sibling repo **`gsa-supabase-schema`** (functions `wallet_apply_*_snapshot`, `wallets.cex_addresses_upsert`, triggers, indexes). Code of truth for claim/save SQL in this repo: each worker’s `src/db.py`.
+Schema migrations and snapshot/upsert SQL live in the sibling repo **`gsa-supabase-schema`** (functions `wallet_apply_*_snapshot`, `wallets.cex_addresses_upsert`, `wallets.token_prices_upsert`, triggers, indexes). Code of truth for claim/save SQL in this repo: each worker’s `src/db.py`.
 
 ## Connection
 
@@ -23,6 +23,7 @@ Schema migrations and snapshot/upsert SQL live in the sibling repo **`gsa-supaba
 | `erc_8004.chain_nonces` | Daily snapshot: per-chain daily nonce totals (incremental) |
 | `erc_8004.wallet_owner_details` | Monthly + origin snapshots: owner metrics / first tx |
 | `wallets.cex_addresses` | CEX address reference list (Dune import) |
+| `wallets.token_prices` | Daily token prices (Dune import) |
 
 ## Per-worker column map
 
@@ -78,8 +79,11 @@ Canonical SQL / migrations: `gsa-supabase-schema/supabase/migrations/` and `supa
 | Worker | Function | Writes |
 |---|---|---|
 | cex import | `wallets.cex_addresses_upsert(p_rows jsonb)` | `wallets.cex_addresses` (`ON CONFLICT (address, chain)`) |
+| token prices | `wallets.token_prices_upsert(p_rows jsonb)` | `wallets.token_prices` (`ON CONFLICT (contract_address, blockchain, price_date) DO NOTHING`) |
 
-`p_rows` is a JSON array of Dune row objects (`blockchain`, `address`, `cex_name`, `distinct_name`). Empty array raises. Script: `gsa-supabase-schema/supabase/scripts/wallets_cex_addresses_upsert.sql`.
+CEX `p_rows` is a JSON array of Dune row objects (`blockchain`, `address`, `cex_name`, `distinct_name`). Empty array raises. Script: `gsa-supabase-schema/supabase/scripts/wallets_cex_addresses_upsert.sql`.
+
+Token prices `p_rows` is a JSON array of Dune row objects (`symbol`, `blockchain`, `day`, `avg_price`, `contract_address`). Empty array raises. Script: `gsa-supabase-schema/supabase/scripts/wallets_token_prices_upsert.sql`.
 
 ## Triggers (schema repo)
 
@@ -207,6 +211,19 @@ FROM wallets.cex_addresses;
 
 SELECT chain, count(*) AS n
 FROM wallets.cex_addresses
+GROUP BY 1
+ORDER BY n DESC
+LIMIT 10;
+```
+
+### Token prices (`wallets.token_prices`)
+
+```sql
+SELECT count(*) AS rows, max(price_date) AS max_price_date
+FROM wallets.token_prices;
+
+SELECT blockchain, count(*) AS n
+FROM wallets.token_prices
 GROUP BY 1
 ORDER BY n DESC
 LIMIT 10;

@@ -73,9 +73,11 @@ stateDiagram-v2
 | `owner_wallet_origin` | `owner-wallet-origin.yml` | `owner-wallet-origin` | 1 runner |
 | `owner_wallet_nonce_balance_monthly` | `owner-wallet-nonce-balance-monthly.yml` | `owner-wallet-nonce-balance-monthly` | 1 runner |
 | `cex_addresses_import` | `cex-addresses-import.yml` | `cex-addresses-import` | 1 runner |
+| `token_prices_import` | `token-prices-import.yml` | `token-prices-import` | 1 runner |
 
 Claim workers schedule: `0 0,6,12,18 * * *` UTC + `workflow_dispatch`.  
-CEX import schedule: `0 0 1,16 * *` UTC + `workflow_dispatch`.
+CEX import schedule: `0 0 1,16 * *` UTC + `workflow_dispatch` (1st and 16th of each month ≈ every 15 days, same cadence as the former walcert CEX import cron).  
+Token prices import schedule: `0 1 * * *` UTC + `workflow_dispatch` (daily 01:00, same cadence as the former walcert token-prices import cron).
 
 ### What each worker does
 
@@ -85,27 +87,31 @@ CEX import schedule: `0 0 1,16 * *` UTC + `workflow_dispatch`.
 | monthly | `is_valid_import_current_nonce_and_balance_monthly` | Balance/nonce JSON → `wallet_owner_details` (current metrics) |
 | origin | same monthly flag | First-activity history JSON → `wallet_owner_details.first_transaction_at` |
 | cex import | n/a | Dune rows → `wallets.cex_addresses` via `cex_addresses_upsert` |
+| token prices | n/a | Dune rows → `wallets.token_prices` via `token_prices_upsert` |
 
 ## Reference-data workers
 
-`cex_addresses_import` does **not** use claim / `next_eligible_at`. Pipeline:
+`cex_addresses_import` and `token_prices_import` do **not** use claim / `next_eligible_at`. Pipeline:
 
 1. Fetch latest Dune query result (paginated HTTP).
 2. Fail if zero rows.
-3. Call `wallets.cex_addresses_upsert(p_rows jsonb)` once with the full row array.
+3. Call the matching upsert RPC once with the full row array.
 
 ```mermaid
 flowchart LR
   ghaCex[GHA_cex_import] --> duneApi[Dune_API]
-  ghaCex --> upsertFn["wallets.cex_addresses_upsert"]
-  upsertFn --> cexTable[wallets.cex_addresses]
+  ghaCex --> upsertCex["wallets.cex_addresses_upsert"]
+  upsertCex --> cexTable[wallets.cex_addresses]
+  ghaPrices[GHA_token_prices] --> duneApi
+  ghaPrices --> upsertPrices["wallets.token_prices_upsert"]
+  upsertPrices --> pricesTable[wallets.token_prices]
 ```
 
 ## Time budgets
 
 | Limit | Value |
 |---|---|
-| GHA `timeout-minutes` | 360 (claim workers), 30 (cex import) |
+| GHA `timeout-minutes` | 360 (claim workers), 30 (cex / token-prices import) |
 | `MAX_RUNTIME_SECONDS` | 19800 (~5.5h) — soft stop inside claim `job.py` |
 | Postgres `statement_timeout` | 300s |
 | HTTP client timeout | ~10s (daily/monthly), ~30s (origin), ~120s (Dune) |
@@ -134,7 +140,7 @@ workers/<name>/
     ├── db.py           # claim / save / snapshot / reconnect (or upsert RPC)
     ├── query.py        # balance+nonce (daily, monthly)
     ├── origin.py       # binary-search first activity (origin only)
-    ├── dune.py         # Dune HTTP client (cex import only)
+    ├── dune.py         # Dune HTTP client (cex / token-prices import)
     ├── rpc.py
     ├── alchemy.py
     ├── networks.py     # 8-chain public RPC list
@@ -151,8 +157,9 @@ Origin also has `scripts/check_pending.py` and `scripts/compare_smoke.py`.
 | origin | 4 | 50 | 7200 |
 | monthly | 20 | 200 | 7200 |
 | cex import | n/a | n/a | n/a |
+| token prices | n/a | n/a | n/a |
 
-Secrets: `SUPABASE_DB_URL` (required), `ALCHEMY_KEY` (recommended for claim workers), `DUNE_KEY` (cex import). Daily sets `WORKER_ID` from the matrix.
+Secrets: `SUPABASE_DB_URL` (required), `ALCHEMY_KEY` (recommended for claim workers), `DUNE_KEY` (cex / token-prices import). Daily sets `WORKER_ID` from the matrix.
 
 ## Related docs
 

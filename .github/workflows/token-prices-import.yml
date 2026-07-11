@@ -1,0 +1,42 @@
+name: Token prices import
+
+on:
+  schedule:
+    - cron: "0 1 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: token-prices-import
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        working-directory: workers/token_prices_import
+        run: uv sync
+
+      - name: Run token prices import
+        working-directory: workers/token_prices_import
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          DUNE_KEY: ${{ secrets.DUNE_KEY }}
+          DUNE_QUERY_ID: "7526826"
+          DUNE_PAGE_SIZE: "10000"
+        run: uv run python job.py

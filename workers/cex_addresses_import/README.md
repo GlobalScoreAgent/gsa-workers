@@ -17,7 +17,7 @@ If a single jsonb payload is too large for the pooler, call the same RPC in chun
 
 ## Schedule
 
-GitHub Actions: days **1 and 16** at 00:00 UTC + `workflow_dispatch`.
+GitHub Actions: days **1 and 16** at 00:00 UTC (`0 0 1,16 * *`) + `workflow_dispatch`. Roughly every 15 days (same cadence as the former walcert CEX import cron).
 
 ## Env
 
@@ -41,6 +41,8 @@ uv run python job.py
 
 ## Monitoring SQL
 
+Smoke check after a successful run: expect on the order of **~36k rows** for query `7520736`, with a fresh `max(updated_at)`.
+
 ```sql
 SELECT count(*) AS rows, max(updated_at) AS last_updated
 FROM wallets.cex_addresses;
@@ -60,4 +62,4 @@ LIMIT 10;
 
 ## Schema dependency
 
-RPC lives in sibling repo **`gsa-supabase-schema`**: `wallets.cex_addresses_upsert(p_rows jsonb)`. Deploy that migration before relying on this worker.
+RPC lives in sibling repo **`gsa-supabase-schema`**: `wallets.cex_addresses_upsert(p_rows jsonb)`. Deploy that migration before relying on this worker. See also `supabase/docs/wallets-cex-addresses-upsert.md` in that repo.
