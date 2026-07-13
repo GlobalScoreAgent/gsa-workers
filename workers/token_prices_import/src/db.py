@@ -34,7 +34,7 @@ WHERE subdomain_coingecko IS NOT NULL
 """
 
 LOAD_CANDIDATES_SQL = """
-SELECT DISTINCT
+SELECT DISTINCT ON (p.chain_id, lower(p.contract_address))
   p.chain_id,
   lower(p.contract_address) AS contract_address,
   p.symbol
@@ -48,7 +48,7 @@ WHERE p.has_price_error IS TRUE
     c.subdomain_dexscreener IS NOT NULL
     OR c.subdomain_coingecko IS NOT NULL
   )
-ORDER BY p.chain_id, lower(p.contract_address)
+ORDER BY p.chain_id, lower(p.contract_address), p.symbol NULLS LAST
 """
 
 LOAD_FRESH_CACHE_SQL = """

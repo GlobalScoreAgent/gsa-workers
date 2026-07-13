@@ -144,15 +144,17 @@ def main() -> int:
             len(chains),
         )
 
-        by_chain: dict[int, list[dict[str, Any]]] = {}
+        by_chain: dict[int, dict[str, dict[str, Any]]] = {}
         for row in need:
-            by_chain.setdefault(int(row["chain_id"]), []).append(row)
+            chain_id = int(row["chain_id"])
+            contract = str(row["contract_address"]).lower()
+            by_chain.setdefault(chain_id, {})[contract] = row
 
         with httpx.Client(
             headers={"User-Agent": "gsa-workers/token_prices_import"},
             timeout=30.0,
         ) as client:
-            for chain_id, rows in by_chain.items():
+            for chain_id, by_contract in by_chain.items():
                 if time.monotonic() - started >= max_runtime:
                     logger.warning("Max runtime reached; stopping fetch early")
                     break
@@ -160,9 +162,9 @@ def main() -> int:
                 meta = chains.get(chain_id) or {}
                 dex_slug = meta.get("subdomain_dexscreener")
                 cg_slug = meta.get("subdomain_coingecko")
-                contracts = [str(r["contract_address"]).lower() for r in rows]
+                contracts = list(by_contract.keys())
                 symbol_by = {
-                    str(r["contract_address"]).lower(): r.get("symbol") for r in rows
+                    c: by_contract[c].get("symbol") for c in contracts
                 }
                 resolved: set[str] = set()
 
