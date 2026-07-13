@@ -13,7 +13,7 @@ Unified Python batch workers for [Global Score Agent](https://www.globalscoreage
 | [`owner_wallet_nonce_balance_monthly`](./workers/owner_wallet_nonce_balance_monthly/README.md) | 0, 6, 12, 18h | `is_valid_..._monthly` + `import_nonce_and_balance_monthly_next_eligible_at` | Balance + nonce (30d) → monthly JSON → `wallet_apply_monthly_snapshot` |
 | [`cex_addresses_import`](./workers/cex_addresses_import/README.md) | 1st & 16th 00:00 (~every 15 days) | n/a (reference data) | Dune CEX list → `wallets.cex_addresses_upsert` |
 | [`token_prices_import`](./workers/token_prices_import/README.md) | **paused** (manual only) | n/a (reference data) | Dune token prices → `wallets.token_prices_upsert` |
-| [`wallet_token_contracts_discovery`](./workers/wallet_token_contracts_discovery/README.md) | 0, 6, 12, 18h | `wallet_transactions.does_need_discovery_contracts` + `chains.subdomain_alchemy` | Alchemy ERC-20 balances → `wallet_token_contracts_replace` |
+| [`wallet_token_contracts_discovery`](./workers/wallet_token_contracts_discovery/README.md) | 0, 6, 12, 18h | `wallet_transactions.does_need_discovery_contracts` + `chains.subdomain_alchemy` | Alchemy ERC-20 balances → `wallet_token_contracts_upsert` |
 
 ## Common pipeline (claim workers)
 

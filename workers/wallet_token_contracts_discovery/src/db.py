@@ -71,7 +71,7 @@ WHERE id = %(row_id)s
 """
 
 REPLACE_CONTRACTS_SQL = """
-SELECT wallets.wallet_token_contracts_replace(
+SELECT wallets.wallet_token_contracts_upsert(
   %(wallet_id)s,
   %(chain_id)s,
   %(rows)s::jsonb
@@ -188,7 +188,7 @@ class Database:
 
         return self._run_with_db_retry("claim", _claim)
 
-    def replace_contracts_and_mark_done(
+    def upsert_contracts_and_mark_done(
         self,
         row_id: int,
         wallet_id: int,
@@ -213,7 +213,7 @@ class Database:
                 return ""
             return str(next(iter(result.values())))
 
-        return self._run_with_db_retry("replace_and_mark_done", _save)
+        return self._run_with_db_retry("upsert_and_mark_done", _save)
 
     def mark_error(self, row_id: int, error_message: str) -> None:
         """Advance queue after failure: flag FALSE + persist error columns."""

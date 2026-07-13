@@ -2,7 +2,7 @@
 
 Workers connect with **direct Postgres** via `SUPABASE_DB_URL` (`psycopg`), not supabase-js or Edge Functions. Schema of truth for wallet claim jobs: `erc_8004`. Reference-data imports (CEX addresses, token prices) use schema `wallets`.
 
-Schema migrations and snapshot/upsert SQL live in the sibling repo **`gsa-supabase-schema`** (functions `wallet_apply_*_snapshot`, `wallets.cex_addresses_upsert`, `wallets.token_prices_upsert`, `wallets.wallet_token_contracts_replace`, triggers, indexes). Code of truth for claim/save SQL in this repo: each worker’s `src/db.py`.
+Schema migrations and snapshot/upsert SQL live in the sibling repo **`gsa-supabase-schema`** (functions `wallet_apply_*_snapshot`, `wallets.cex_addresses_upsert`, `wallets.token_prices_upsert`, `wallets.wallet_token_contracts_upsert`, triggers, indexes). Code of truth for claim/save SQL in this repo: each worker’s `src/db.py`.
 
 ## Connection
 
@@ -93,13 +93,13 @@ Canonical SQL / migrations: `gsa-supabase-schema/supabase/migrations/` and `supa
 |---|---|---|
 | cex import | `wallets.cex_addresses_upsert(p_rows jsonb)` | `wallets.cex_addresses` (`ON CONFLICT (address, chain)`) |
 | token prices | `wallets.token_prices_upsert(p_rows jsonb)` | `wallets.token_prices` (`ON CONFLICT (contract_address, blockchain, price_date) DO NOTHING`) |
-| token contracts discovery | `wallets.wallet_token_contracts_replace(p_wallet_id, p_chain_id, p_rows jsonb)` | `wallets.wallet_token_contracts` (delete+insert for wallet+chain) |
+| token contracts discovery | `wallets.wallet_token_contracts_upsert(p_wallet_id, p_chain_id, p_rows jsonb)` | `wallets.wallet_token_contracts` (insert/update only; no delete) |
 
 CEX `p_rows` is a JSON array of Dune row objects (`blockchain`, `address`, `cex_name`, `distinct_name`). Empty array raises. Script: `gsa-supabase-schema/supabase/scripts/wallets_cex_addresses_upsert.sql`.
 
 Token prices `p_rows` is a JSON array of Dune row objects (`symbol`, `blockchain`, `day`, `avg_price`, `contract_address`). Empty array raises. Script: `gsa-supabase-schema/supabase/scripts/wallets_token_prices_upsert.sql`.
 
-Discovery `p_rows` is a JSON array of `{contract_address, source?}`; empty array clears contracts for that wallet+chain. Script: `gsa-supabase-schema/supabase/scripts/wallet_token_contracts_discovery.sql`.
+Discovery `p_rows` is a JSON array of `{contract_address, source?}`. Empty array is a no-op (does not delete). Script: `gsa-supabase-schema/supabase/scripts/wallet_token_contracts_upsert_no_delete.sql`.
 
 ## Triggers (schema repo)
 

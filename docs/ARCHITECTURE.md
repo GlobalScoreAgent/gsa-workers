@@ -89,7 +89,7 @@ Token prices import schedule: **paused** (manual `workflow_dispatch` only; daily
 | origin | same monthly flag | First-activity history JSON → `wallet_owner_details.first_transaction_at` |
 | cex import | n/a | Dune rows → `wallets.cex_addresses` via `cex_addresses_upsert` |
 | token prices | n/a | Dune rows → `wallets.token_prices` via `token_prices_upsert` |
-| token contracts discovery | `wallet_transactions.does_need_discovery_contracts` + `chains.subdomain_alchemy` | Alchemy ERC-20 balances → `wallets.wallet_token_contracts` via `wallet_token_contracts_replace` |
+| token contracts discovery | `wallet_transactions.does_need_discovery_contracts` + `chains.subdomain_alchemy` | Alchemy ERC-20 balances → `wallets.wallet_token_contracts` via `wallet_token_contracts_upsert` |
 
 ## Token contracts discovery
 
@@ -97,15 +97,15 @@ Claims **`erc_8004.wallet_transactions`** rows (not `wallets`). Pipeline:
 
 1. Claim rows with `does_need_discovery_contracts IS DISTINCT FROM FALSE` and non-empty `chains.subdomain_alchemy`.
 2. Alchemy `alchemy_getTokenBalances(address, "erc20")` (paginate); keep balance > 0.
-3. `wallets.wallet_token_contracts_replace(wallet_id, chain_id, rows)` then set flag `FALSE`.
+3. `wallets.wallet_token_contracts_upsert(wallet_id, chain_id, rows)` then set flag `FALSE`.
 
 ```mermaid
 flowchart LR
   claimWt[Claim_wallet_transactions]
   alchemy[Alchemy_getTokenBalances]
-  replace["wallet_token_contracts_replace"]
+  upsertFn["wallet_token_contracts_upsert"]
   done[Flag_false]
-  claimWt --> alchemy --> replace --> done
+  claimWt --> alchemy --> upsertFn --> done
 ```
 
 ## Reference-data workers

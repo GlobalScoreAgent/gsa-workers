@@ -165,7 +165,7 @@ async def run_job() -> int:
                                 alchemy_key=alchemy_key,
                             )
                             async with db_lock:
-                                msg = db.replace_contracts_and_mark_done(
+                                msg = db.upsert_contracts_and_mark_done(
                                     row_id=row_id,
                                     wallet_id=wallet_id,
                                     chain_id=chain_id,
