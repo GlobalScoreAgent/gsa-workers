@@ -6,7 +6,6 @@ import json
 import logging
 import time
 from collections.abc import Callable
-from pathlib import Path
 from typing import Any, TypeVar
 
 import psycopg
@@ -89,29 +88,6 @@ _NO_RECONNECT_EXCEPTIONS = (
 )
 
 T = TypeVar("T")
-
-# #region agent log
-_DEBUG_LOG_PATH = Path(__file__).resolve().parents[3] / "debug-8029d5.log"
-
-
-def _agent_log(hypothesis_id: str, location: str, message: str, data: dict[str, Any]) -> None:
-    try:
-        payload = {
-            "sessionId": "8029d5",
-            "runId": "pre-fix",
-            "hypothesisId": hypothesis_id,
-            "location": location,
-            "message": message,
-            "data": data,
-            "timestamp": int(time.time() * 1000),
-        }
-        with _DEBUG_LOG_PATH.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(payload, ensure_ascii=True) + "\n")
-    except Exception:
-        pass
-
-
-# #endregion
 
 
 class Database:
@@ -231,48 +207,7 @@ class Database:
                     },
                 )
                 result = cur.fetchone()
-                # #region agent log
-                _agent_log(
-                    "A",
-                    "db.py:replace_contracts_and_mark_done",
-                    "before_MARK_DONE_SQL",
-                    {
-                        "row_id": row_id,
-                        "wallet_id": wallet_id,
-                        "chain_id": chain_id,
-                        "contract_count": len(contracts),
-                        "mark_done_nulls_claimed_at": False,
-                        "mark_done_sets_claimed_at_now": True,
-                    },
-                )
-                # #endregion
                 cur.execute(MARK_DONE_SQL, {"row_id": row_id})
-                # #region agent log
-                cur.execute(
-                    """
-                    SELECT does_need_discovery_contracts,
-                           discovery_contracts_claimed_at IS NULL AS claimed_at_is_null,
-                           discovery_contracts_claimed_by,
-                           has_discovery_contracts_error
-                    FROM erc_8004.wallet_transactions
-                    WHERE id = %(row_id)s
-                    """,
-                    {"row_id": row_id},
-                )
-                after = cur.fetchone() or {}
-                _agent_log(
-                    "A",
-                    "db.py:replace_contracts_and_mark_done",
-                    "after_MARK_DONE_SQL",
-                    {
-                        "row_id": row_id,
-                        "wallet_id": wallet_id,
-                        "chain_id": chain_id,
-                        "after": dict(after) if after else {},
-                        "runId": "post-fix",
-                    },
-                )
-                # #endregion
             self._conn.commit()
             if result is None:
                 return ""
@@ -293,14 +228,6 @@ class Database:
                     MARK_ERROR_SQL,
                     {"row_id": row_id, "error_message": msg},
                 )
-                # #region agent log
-                _agent_log(
-                    "B",
-                    "db.py:mark_error",
-                    "after_MARK_ERROR_SQL",
-                    {"row_id": row_id, "error_len": len(msg)},
-                )
-                # #endregion
             self._conn.commit()
 
         self._run_with_db_retry("mark_error", _mark)
