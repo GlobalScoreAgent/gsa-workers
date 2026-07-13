@@ -25,6 +25,27 @@ AND chains.subdomain_alchemy IS NOT NULL
 
 Native row uses `contract_address = 'native'`. Missing DeFiLlama price → `has_price_error = true`.
 
+### `token_quality` / `quality_reason`
+
+| `token_quality` | When |
+|---|---|
+| `priced` | DeFiLlama returned price > 0 |
+| `spam` | No price + symbol matches claim/URL/telegram heuristics (ERC-20 only; native never spam) |
+| `unpriced` | No price and not spam |
+
+`quality_reason` examples: `claim_in_symbol`, `url_in_symbol`, `telegram_in_symbol`, `no_defillama_price` (null when priced).
+
+Polygon native uses DeFiLlama key `coingecko:polygon-ecosystem-token` (POL).
+
+### Re-run after pricing / quality changes
+
+Insert is `ON CONFLICT DO NOTHING`, so schema/worker fixes do not rewrite existing rows. After deploy:
+
+1. Apply schema migration `wallet_token_positions_quality`
+2. Deploy this worker
+3. Run `gsa-supabase-schema/supabase/scripts/wallet_token_portfolio_discovery_reset.sql` (TRUNCATE positions + re-flag queue)
+4. `workflow_dispatch` this workflow
+
 ## Environment
 
 | Variable | Default | Description |

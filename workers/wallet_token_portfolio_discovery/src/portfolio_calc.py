@@ -6,6 +6,7 @@ Decoupled from the claim loop so a future 15-day updater can reuse this module.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 import httpx
@@ -16,6 +17,34 @@ logger = logging.getLogger("wallet_token_portfolio_discovery")
 
 NATIVE_SENTINEL = "native"
 CHUNK_SIZE = 80
+
+# Heuristic spam markers in ERC-20 symbols (case-insensitive).
+_SPAM_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"t\.me", re.I), "telegram_in_symbol"),
+    (re.compile(r"https?://", re.I), "url_in_symbol"),
+    (re.compile(r"bio\.link", re.I), "url_in_symbol"),
+    (re.compile(r"\bclaim\b", re.I), "claim_in_symbol"),
+    (re.compile(r"voucher", re.I), "claim_in_symbol"),
+    (re.compile(r"visit\s+to\s+claim", re.I), "claim_in_symbol"),
+    (re.compile(r"air\s*drop|airusdt|airdrop", re.I), "claim_in_symbol"),
+    (re.compile(r"liquid-ether|aerodrome\.supply|brettbased", re.I), "url_in_symbol"),
+]
+
+
+def classify_token_quality(
+    *,
+    symbol: str | None,
+    has_price_error: bool,
+    category: str,
+) -> tuple[str, str | None]:
+    """Return (token_quality, quality_reason). Native is never spam."""
+    if not has_price_error:
+        return "priced", None
+    if category != "native" and symbol:
+        for pattern, reason in _SPAM_PATTERNS:
+            if pattern.search(symbol):
+                return "spam", reason
+    return "unpriced", "no_defillama_price"
 
 
 def _alchemy_url(subdomain: str, api_key: str) -> str:
@@ -154,6 +183,11 @@ def _row(
     value_usd = None
     if price_usd is not None and not has_price_error:
         value_usd = amount_float * price_usd
+    token_quality, quality_reason = classify_token_quality(
+        symbol=symbol,
+        has_price_error=has_price_error,
+        category=category,
+    )
     return {
         "contract_address": contract_address,
         "symbol": symbol,
@@ -164,6 +198,8 @@ def _row(
         "value_usd": value_usd,
         "has_price_error": has_price_error,
         "category": category,
+        "token_quality": token_quality,
+        "quality_reason": quality_reason,
         "source": "portfolio_discovery",
     }
 

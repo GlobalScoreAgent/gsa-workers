@@ -115,8 +115,9 @@ flowchart LR
 After contract discovery succeeds, claims rows with `does_need_portfolio_discovery` pending:
 
 1. Load contracts from `wallet_token_contracts`.
-2. Shared `portfolio_calc` (Alchemy balances + DeFiLlama prices; no `token_prices`).
+2. Shared `portfolio_calc` (Alchemy balances + DeFiLlama prices; no `token_prices`; sets `token_quality` / `quality_reason`).
 3. `wallet_token_positions_insert` (INSERT only; native as `contract_address='native'`).
+   Rediscovery after pricing/quality changes: `wallet_token_portfolio_discovery_reset.sql` then re-run the workflow.
 
 ```mermaid
 flowchart LR

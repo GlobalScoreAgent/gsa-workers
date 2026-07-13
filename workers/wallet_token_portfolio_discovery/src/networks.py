@@ -22,7 +22,7 @@ CHAIN_META: dict[int, dict[str, str]] = {
         "name": "polygon",
         "llama_chain": "polygon",
         "native_symbol": "POL",
-        "native_llama": "coingecko:matic-network",
+        "native_llama": "coingecko:polygon-ecosystem-token",
         "decimals": "18",
     },
     4: {

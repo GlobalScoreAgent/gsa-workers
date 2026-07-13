@@ -115,7 +115,7 @@ Token prices `p_rows` is a JSON array of Dune row objects (`symbol`, `blockchain
 
 Discovery `p_rows` is a JSON array of `{contract_address, source?}`. Empty array is a no-op (does not delete). Script: `gsa-supabase-schema/supabase/scripts/wallet_token_contracts_upsert_no_delete.sql`.
 
-Portfolio positions `p_rows` include `contract_address` (`'native'` or `0x…`), amounts, `price_usd`, `has_price_error`, etc. Prices come from DeFiLlama only (not `token_prices`). Script: `gsa-supabase-schema/supabase/scripts/wallet_token_portfolio_discovery.sql`.
+Portfolio positions `p_rows` include `contract_address` (`'native'` or `0x…`), amounts, `price_usd`, `has_price_error`, `token_quality` (`priced`|`unpriced`|`spam`), `quality_reason`, etc. Prices come from DeFiLlama only (not `token_prices`). Script: `gsa-supabase-schema/supabase/scripts/wallet_token_portfolio_discovery.sql`. Quality columns: `gsa-supabase-schema/supabase/scripts/wallet_token_positions_quality.sql`. Reset / re-queue: `wallet_token_portfolio_discovery_reset.sql` (TRUNCATE + re-flag; required because insert is DO NOTHING).
 
 ## Triggers (schema repo)
 
@@ -315,7 +315,23 @@ SELECT count(*) AS positions,
        count(*) FILTER (WHERE contract_address = 'native') AS native_rows,
        count(*) FILTER (WHERE has_price_error IS TRUE) AS price_errors
 FROM wallets.wallet_token_positions;
+
+SELECT token_quality, quality_reason, count(*)
+FROM wallets.wallet_token_positions
+GROUP BY 1, 2
+ORDER BY count(*) DESC;
+
+-- Polygon native should be priced after POL key fix + reset re-run
+SELECT chain_id,
+       count(*) FILTER (WHERE has_price_error IS NOT TRUE) AS native_ok,
+       count(*) FILTER (WHERE has_price_error IS TRUE) AS native_err
+FROM wallets.wallet_token_positions
+WHERE contract_address = 'native'
+GROUP BY 1
+ORDER BY 1;
 ```
+
+**Full rediscovery** (after pricing/quality code changes): deploy schema + worker, then run `gsa-supabase-schema/supabase/scripts/wallet_token_portfolio_discovery_reset.sql`, then `workflow_dispatch` `wallet-token-portfolio-discovery`.
 
 ## Related docs
 
