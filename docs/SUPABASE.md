@@ -44,7 +44,7 @@ Daily also uses claim metadata:
 | Column | Role |
 |---|---|
 | `does_need_discovery_contracts` | `NULL`/`true` = pending; `false` = attempted (success or error) |
-| `discovery_contracts_claimed_at` | Claim lock / stale reclaim (cleared after attempt) |
+| `discovery_contracts_claimed_at` | In-flight claim lock; after attempt kept as last-attempt timestamp (`NOW()`) |
 | `discovery_contracts_claimed_by` | Audit id `wallet_token_contracts_discovery/gha:{WORKER_ID}` (kept after attempt) |
 | `has_discovery_contracts_error` | `TRUE` if last attempt failed |
 | `discovery_contracts_message_error` | Last error text; `NULL` on success |

@@ -148,6 +148,35 @@ async def run_job() -> int:
                     rows[0]["id"],
                     rows[-1]["id"],
                 )
+                # #region agent log
+                try:
+                    import json as _json
+                    from pathlib import Path as _Path
+                    from time import time as _time
+
+                    _p = _Path(__file__).resolve().parents[2] / "debug-8029d5.log"
+                    with _p.open("a", encoding="utf-8") as _fh:
+                        _fh.write(
+                            _json.dumps(
+                                {
+                                    "sessionId": "8029d5",
+                                    "runId": "pre-fix",
+                                    "hypothesisId": "B",
+                                    "location": "job.py:claim_batch",
+                                    "message": "claimed_batch_ids",
+                                    "data": {
+                                        "ids": [int(r["id"]) for r in rows],
+                                        "wallet_ids": [int(r["wallet_id"]) for r in rows],
+                                        "chain_ids": [int(r["chain_id"]) for r in rows],
+                                    },
+                                    "timestamp": int(_time() * 1000),
+                                }
+                            )
+                            + "\n"
+                        )
+                except Exception:
+                    pass
+                # #endregion
 
                 async def handle_row(row: dict) -> tuple[int, bool, int]:
                     row_id = int(row["id"])
@@ -179,6 +208,36 @@ async def run_job() -> int:
                                 len(contracts),
                                 msg,
                             )
+                            # #region agent log
+                            try:
+                                import json as _json
+                                from pathlib import Path as _Path
+                                from time import time as _time
+
+                                _p = _Path(__file__).resolve().parents[2] / "debug-8029d5.log"
+                                with _p.open("a", encoding="utf-8") as _fh:
+                                    _fh.write(
+                                        _json.dumps(
+                                            {
+                                                "sessionId": "8029d5",
+                                                "runId": "pre-fix",
+                                                "hypothesisId": "C",
+                                                "location": "job.py:handle_row_success",
+                                                "message": "row_marked_done",
+                                                "data": {
+                                                    "row_id": row_id,
+                                                    "wallet_id": wallet_id,
+                                                    "chain_id": chain_id,
+                                                    "contracts": len(contracts),
+                                                },
+                                                "timestamp": int(_time() * 1000),
+                                            }
+                                        )
+                                        + "\n"
+                                    )
+                            except Exception:
+                                pass
+                            # #endregion
                             return row_id, True, len(contracts)
                         except Exception as exc:
                             err_text = f"{exc.__class__.__name__}: {exc}"
@@ -198,6 +257,36 @@ async def run_job() -> int:
                                     row_id,
                                     mark_exc,
                                 )
+                            # #region agent log
+                            try:
+                                import json as _json
+                                from pathlib import Path as _Path
+                                from time import time as _time
+
+                                _p = _Path(__file__).resolve().parents[2] / "debug-8029d5.log"
+                                with _p.open("a", encoding="utf-8") as _fh:
+                                    _fh.write(
+                                        _json.dumps(
+                                            {
+                                                "sessionId": "8029d5",
+                                                "runId": "pre-fix",
+                                                "hypothesisId": "B",
+                                                "location": "job.py:handle_row_error",
+                                                "message": "row_marked_error_or_failed",
+                                                "data": {
+                                                    "row_id": row_id,
+                                                    "wallet_id": wallet_id,
+                                                    "chain_id": chain_id,
+                                                    "error_type": exc.__class__.__name__,
+                                                },
+                                                "timestamp": int(_time() * 1000),
+                                            }
+                                        )
+                                        + "\n"
+                                    )
+                            except Exception:
+                                pass
+                            # #endregion
                             return row_id, False, 0
 
                 outcomes = await asyncio.gather(*(handle_row(row) for row in rows))
