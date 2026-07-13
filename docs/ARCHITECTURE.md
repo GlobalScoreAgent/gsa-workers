@@ -74,6 +74,7 @@ stateDiagram-v2
 | `owner_wallet_nonce_balance_monthly` | `owner-wallet-nonce-balance-monthly.yml` | `owner-wallet-nonce-balance-monthly` | 1 runner |
 | `cex_addresses_import` | `cex-addresses-import.yml` | `cex-addresses-import` | 1 runner |
 | `token_prices_import` | `token-prices-import.yml` | `token-prices-import` | 1 runner |
+| `wallet_token_contracts_discovery` | `wallet-token-contracts-discovery.yml` | `wallet-token-contracts-discovery` | 1 runner |
 
 Claim workers schedule: `0 0,6,12,18 * * *` UTC + `workflow_dispatch`.  
 CEX import schedule: `0 0 1,16 * *` UTC + `workflow_dispatch` (1st and 16th of each month ≈ every 15 days, same cadence as the former walcert CEX import cron).  
@@ -88,6 +89,24 @@ Token prices import schedule: **paused** (manual `workflow_dispatch` only; daily
 | origin | same monthly flag | First-activity history JSON → `wallet_owner_details.first_transaction_at` |
 | cex import | n/a | Dune rows → `wallets.cex_addresses` via `cex_addresses_upsert` |
 | token prices | n/a | Dune rows → `wallets.token_prices` via `token_prices_upsert` |
+| token contracts discovery | `wallet_transactions.does_need_discovery_contracts` + `chains.subdomain_alchemy` | Alchemy ERC-20 balances → `wallets.wallet_token_contracts` via `wallet_token_contracts_replace` |
+
+## Token contracts discovery
+
+Claims **`erc_8004.wallet_transactions`** rows (not `wallets`). Pipeline:
+
+1. Claim rows with `does_need_discovery_contracts IS DISTINCT FROM FALSE` and non-empty `chains.subdomain_alchemy`.
+2. Alchemy `alchemy_getTokenBalances(address, "erc20")` (paginate); keep balance > 0.
+3. `wallets.wallet_token_contracts_replace(wallet_id, chain_id, rows)` then set flag `FALSE`.
+
+```mermaid
+flowchart LR
+  claimWt[Claim_wallet_transactions]
+  alchemy[Alchemy_getTokenBalances]
+  replace["wallet_token_contracts_replace"]
+  done[Flag_false]
+  claimWt --> alchemy --> replace --> done
+```
 
 ## Reference-data workers
 
@@ -158,8 +177,9 @@ Origin also has `scripts/check_pending.py` and `scripts/compare_smoke.py`.
 | monthly | 20 | 200 | 7200 |
 | cex import | n/a | n/a | n/a |
 | token prices | n/a | n/a | n/a |
+| token contracts discovery | 10 | 50 | 7200 |
 
-Secrets: `SUPABASE_DB_URL` (required), `ALCHEMY_KEY` (recommended for claim workers), `DUNE_KEY` (cex / token-prices import). Daily sets `WORKER_ID` from the matrix.
+Secrets: `SUPABASE_DB_URL` (required), `ALCHEMY_KEY` (recommended for balance/nonce claim workers), `ALCHEMY_FREE_KEY` (token contracts discovery), `DUNE_KEY` (cex / token-prices import). Daily sets `WORKER_ID` from the matrix.
 
 ## Related docs
 

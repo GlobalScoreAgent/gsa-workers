@@ -38,18 +38,19 @@ Ops / stuck wallets: [docs/OPS.md](./docs/OPS.md). Deprecations: [docs/DEPRECATI
 | `owner_wallet_origin` | `owner-wallet-origin.yml` | `wallet_apply_owner_history_snapshot` | `wallet_owner_details.first_transaction_at` |
 | `cex_addresses_import` | `cex-addresses-import.yml` | `wallets.cex_addresses_upsert` | `wallets.cex_addresses` |
 | `token_prices_import` | `token-prices-import.yml` | `wallets.token_prices_upsert` | `wallets.token_prices` |
+| `wallet_token_contracts_discovery` | `wallet-token-contracts-discovery.yml` | `wallets.wallet_token_contracts_replace` | `wallets.wallet_token_contracts` |
 
 ## How to validate a change
 
-1. Local: `cd workers/<name>`, `uv sync`, `uv run python job.py` with `SUPABASE_DB_URL` (+ `ALCHEMY_KEY` or `DUNE_KEY` as needed).
+1. Local: `cd workers/<name>`, `uv sync`, `uv run python job.py` with `SUPABASE_DB_URL` (+ `ALCHEMY_KEY` / `ALCHEMY_FREE_KEY` or `DUNE_KEY` as needed).
 2. Or GitHub Actions → workflow → **Run workflow** (`workflow_dispatch`).
-3. Logs: look for `Claimed batch`, `Reconnecting to Postgres`, `Claim failed; will retry`, `Save/snapshot failed` (claim workers) or Dune fetch / upsert messages (`cex_addresses_import`, `token_prices_import`).
-4. SQL: eligible counts and stuck `Completed` queries in [docs/SUPABASE.md](./docs/SUPABASE.md); CEX / token-prices monitoring in the same doc.
+3. Logs: look for `Claimed batch`, `Reconnecting to Postgres`, `Claim failed; will retry`, `Save/snapshot failed` (claim workers), Dune fetch / upsert messages (`cex_addresses_import`, `token_prices_import`), or `Done wt_id=` (`wallet_token_contracts_discovery`).
+4. SQL: eligible counts and stuck `Completed` queries in [docs/SUPABASE.md](./docs/SUPABASE.md); CEX / token-prices / discovery monitoring in the same doc.
 
 ## When to touch which repo
 
 | Change | Repo |
 |---|---|
 | Claim SQL, retries, job loop, RPC clients, GHA env | **gsa-workers** |
-| `wallet_apply_*_snapshot`, `wallets.cex_addresses_upsert`, `wallets.token_prices_upsert`, triggers, indexes, `next_eligible_at` columns | **gsa-supabase-schema** |
+| `wallet_apply_*_snapshot`, `wallets.cex_addresses_upsert`, `wallets.token_prices_upsert`, `wallets.wallet_token_contracts_replace`, triggers, indexes, `next_eligible_at` / discovery flags | **gsa-supabase-schema** |
 | Deploy order | Schema first (if needed) → push worker → `workflow_dispatch` |

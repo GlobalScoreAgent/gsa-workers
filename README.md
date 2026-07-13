@@ -13,6 +13,7 @@ Unified Python batch workers for [Global Score Agent](https://www.globalscoreage
 | [`owner_wallet_nonce_balance_monthly`](./workers/owner_wallet_nonce_balance_monthly/README.md) | 0, 6, 12, 18h | `is_valid_..._monthly` + `import_nonce_and_balance_monthly_next_eligible_at` | Balance + nonce (30d) → monthly JSON → `wallet_apply_monthly_snapshot` |
 | [`cex_addresses_import`](./workers/cex_addresses_import/README.md) | 1st & 16th 00:00 (~every 15 days) | n/a (reference data) | Dune CEX list → `wallets.cex_addresses_upsert` |
 | [`token_prices_import`](./workers/token_prices_import/README.md) | **paused** (manual only) | n/a (reference data) | Dune token prices → `wallets.token_prices_upsert` |
+| [`wallet_token_contracts_discovery`](./workers/wallet_token_contracts_discovery/README.md) | 0, 6, 12, 18h | `wallet_transactions.does_need_discovery_contracts` + `chains.subdomain_alchemy` | Alchemy ERC-20 balances → `wallet_token_contracts_replace` |
 
 ## Common pipeline (claim workers)
 
@@ -31,6 +32,7 @@ Reference-data (`cex_addresses_import`, `token_prices_import`): Dune fetch → o
 |---|---|---|
 | `SUPABASE_DB_URL` | Yes | Postgres pooler DSN |
 | `ALCHEMY_KEY` | Recommended | Alchemy fallback after public RPCs (claim workers) |
+| `ALCHEMY_FREE_KEY` | For token contracts discovery | Alchemy Token API (`getTokenBalances`) |
 | `DUNE_KEY` | For CEX / token-prices import | Dune Analytics API key |
 
 ## CI defaults (workflows)
@@ -42,6 +44,7 @@ Reference-data (`cex_addresses_import`, `token_prices_import`): Dune fetch → o
 | monthly | 20 | 200 | 7200 | 19800 |
 | cex import | n/a | n/a | n/a | GHA timeout 30m |
 | token prices | n/a | n/a | n/a | GHA timeout 30m |
+| token contracts discovery | 10 | 50 | 7200 | 19800 |
 
 Daily also sets `WORKER_ID` to `worker-a` or `worker-b`. Origin/monthly set `SKIP_ELIGIBLE_COUNT=1`.
 
@@ -85,15 +88,19 @@ gsa-workers/
 │   ├── cex_addresses_import/
 │   │   ├── job.py
 │   │   └── src/          # db, dune
-│   └── token_prices_import/
+│   ├── token_prices_import/
+│   │   ├── job.py
+│   │   └── src/          # db, dune
+│   └── wallet_token_contracts_discovery/
 │       ├── job.py
-│       └── src/          # db, dune
+│       └── src/          # db, alchemy_tokens
 └── .github/workflows/
     ├── wallet-nonce-balance-daily.yml
     ├── owner-wallet-origin.yml
     ├── owner-wallet-nonce-balance-monthly.yml
     ├── cex-addresses-import.yml
-    └── token-prices-import.yml
+    ├── token-prices-import.yml
+    └── wallet-token-contracts-discovery.yml
 ```
 
 Schema / snapshot SQL: sibling repo **`gsa-supabase-schema`**.
