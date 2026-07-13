@@ -11,9 +11,14 @@ Chain platform slugs come from `erc_8004.chains.subdomain_dexscreener` / `subdom
 1. Load chain subdomains from `erc_8004.chains`
 2. `DISTINCT (chain_id, contract)` where `has_price_error`, not spam, not `native`
 3. Skip rows with fresh cache (`fetched_at` within `PRICE_CACHE_TTL_HOURS`, including misses)
-4. DexScreener (min liquidity) → else CoinGecko batch by platform
-5. `wallets.token_prices_upsert` (`source` = `dexscreener` | `coingecko` | `miss`)
-6. `wallets.wallet_token_positions_apply_prices()`
+4. Per chain, per API batch:
+   - DexScreener (~30 contracts/request) → **upsert hits immediately**
+   - CoinGecko (~100 contracts/request) for remainder → **upsert hits immediately**
+   - Upsert misses for unresolved
+   - `wallet_token_positions_apply_prices()` after each chain
+5. Final `apply_prices` at end
+
+CoinGecko auth uses header from `COINGECKO_KEY` + `COINGECKO_API_PLAN` (`demo` → `x-cg-demo-api-key` / `api.coingecko.com`; `pro` → `x-cg-pro-api-key` / `pro-api.coingecko.com`).
 
 ## Schedule
 
@@ -25,9 +30,9 @@ Manual `workflow_dispatch` (optional cron later). Requires GitHub secret `COINGE
 |---|---|---|---|
 | `SUPABASE_DB_URL` | Yes | — | Postgres |
 | `COINGECKO_KEY` | Yes | — | CoinGecko Demo/Pro key |
+| `COINGECKO_API_PLAN` | No | `demo` | `demo` or `pro` |
 | `PRICE_CACHE_TTL_HOURS` | No | `24` | Skip API if cache fresh |
 | `MIN_LIQUIDITY_USD` | No | `1000` | Dex pair floor |
-| `UPSERT_CHUNK_SIZE` | No | `500` | Rows per upsert RPC |
 | `MAX_RUNTIME_SECONDS` | No | `19800` | Soft stop on fetch |
 
 ## Local run

@@ -35,8 +35,8 @@ jobs:
         env:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
           COINGECKO_KEY: ${{ secrets.COINGECKO_KEY }}
+          COINGECKO_API_PLAN: "demo"
           PRICE_CACHE_TTL_HOURS: "24"
           MIN_LIQUIDITY_USD: "1000"
-          UPSERT_CHUNK_SIZE: "500"
           MAX_RUNTIME_SECONDS: "19800"
         run: uv run python job.py

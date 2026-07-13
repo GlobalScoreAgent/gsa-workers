@@ -4,15 +4,31 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 
 logger = logging.getLogger("token_prices_import")
 
-CG_TOKEN_PRICE_URL = "https://api.coingecko.com/api/v3/simple/token_price/{platform}"
 DEFAULT_BATCH_SIZE = 100
 DEFAULT_REQUEST_DELAY_SECONDS = 0.7
+
+ApiPlan = Literal["demo", "pro"]
+
+_PLAN_CONFIG: dict[str, dict[str, str]] = {
+    "demo": {
+        "base_url": "https://api.coingecko.com/api/v3",
+        "header": "x-cg-demo-api-key",
+    },
+    "pro": {
+        "base_url": "https://pro-api.coingecko.com/api/v3",
+        "header": "x-cg-pro-api-key",
+    },
+}
+
+
+class CoinGeckoAuthError(RuntimeError):
+    """Raised when CoinGecko rejects the API key (e.g. error_code 10002)."""
 
 
 def fetch_coingecko_prices(
@@ -21,6 +37,7 @@ def fetch_coingecko_prices(
     api_key: str,
     platform: str,
     contracts: list[str],
+    api_plan: ApiPlan = "demo",
     batch_size: int = DEFAULT_BATCH_SIZE,
     request_delay_seconds: float = DEFAULT_REQUEST_DELAY_SECONDS,
 ) -> dict[str, float]:
@@ -29,6 +46,12 @@ def fetch_coingecko_prices(
     if not contracts or not platform or not api_key:
         return out
 
+    plan = (api_plan or "demo").strip().lower()
+    if plan not in _PLAN_CONFIG:
+        raise ValueError(f"COINGECKO_API_PLAN must be demo|pro, got {api_plan!r}")
+    cfg = _PLAN_CONFIG[plan]
+    headers = {cfg["header"]: api_key}
+
     for i in range(0, len(contracts), batch_size):
         if i > 0 and request_delay_seconds > 0:
             time.sleep(request_delay_seconds)
@@ -36,20 +59,37 @@ def fetch_coingecko_prices(
         params: dict[str, Any] = {
             "contract_addresses": ",".join(chunk),
             "vs_currencies": "usd",
-            "x_cg_demo_api_key": api_key,
         }
-        url = CG_TOKEN_PRICE_URL.format(platform=platform)
+        url = f"{cfg['base_url']}/simple/token_price/{platform}"
         try:
-            response = client.get(url, params=params, timeout=30.0)
+            response = client.get(url, params=params, headers=headers, timeout=30.0)
             if response.status_code == 429:
                 logger.warning("CoinGecko 429; sleeping 5s")
                 time.sleep(5.0)
-                response = client.get(url, params=params, timeout=30.0)
+                response = client.get(url, params=params, headers=headers, timeout=30.0)
+            data = response.json() if response.content else {}
+            if isinstance(data, dict):
+                status = data.get("status")
+                if isinstance(status, dict) and status.get("error_code") is not None:
+                    code = status.get("error_code")
+                    msg = status.get("error_message") or status.get("error_code")
+                    logger.error(
+                        "CoinGecko API error plan=%s platform=%s code=%s msg=%s",
+                        plan,
+                        platform,
+                        code,
+                        msg,
+                    )
+                    if int(code) in (10002, 10010, 10011):
+                        raise CoinGeckoAuthError(f"CoinGecko auth failed ({code}): {msg}")
+                    continue
             response.raise_for_status()
-            data = response.json()
+        except CoinGeckoAuthError:
+            raise
         except Exception as exc:
             logger.warning(
-                "CoinGecko batch failed platform=%s n=%s: %s",
+                "CoinGecko batch failed plan=%s platform=%s n=%s: %s",
+                plan,
                 platform,
                 len(chunk),
                 exc,
@@ -59,7 +99,7 @@ def fetch_coingecko_prices(
         if not isinstance(data, dict):
             continue
         for addr, info in data.items():
-            if not isinstance(info, dict):
+            if addr == "status" or not isinstance(info, dict):
                 continue
             try:
                 price = float(info.get("usd") or 0.0)

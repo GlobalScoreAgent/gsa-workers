@@ -24,7 +24,11 @@ def fetch_dex_prices(
     batch_size: int = DEFAULT_BATCH_SIZE,
     request_delay_seconds: float = DEFAULT_REQUEST_DELAY_SECONDS,
 ) -> dict[str, dict[str, Any]]:
-    """Return contract -> {price_usd, liquidity_usd, symbol} for dex_chain_id."""
+    """Return contract -> {price_usd, liquidity_usd, symbol} for dex_chain_id.
+
+    Only prices baseToken.address that appear in the requested contracts set
+    (priceUsd is always the base token USD price).
+    """
     out: dict[str, dict[str, Any]] = {}
     if not contracts or not dex_chain_id:
         return out
@@ -32,7 +36,8 @@ def fetch_dex_prices(
     for i in range(0, len(contracts), batch_size):
         if i > 0 and request_delay_seconds > 0:
             time.sleep(request_delay_seconds)
-        chunk = contracts[i : i + batch_size]
+        chunk = [c.strip().lower() for c in contracts[i : i + batch_size]]
+        requested = set(chunk)
         url = DEX_TOKENS_URL.format(addresses=",".join(chunk))
         try:
             response = client.get(url, timeout=30.0)
@@ -58,7 +63,7 @@ def fetch_dex_prices(
                 continue
             base = pair.get("baseToken") if isinstance(pair.get("baseToken"), dict) else {}
             addr = str(base.get("address") or "").strip().lower()
-            if not addr:
+            if not addr or addr not in requested:
                 continue
             try:
                 price = float(pair.get("priceUsd") or 0.0)
