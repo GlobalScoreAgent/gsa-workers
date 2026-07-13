@@ -89,9 +89,9 @@ Token prices import schedule: `0 0,6,12,18 * * *` UTC + `workflow_dispatch` (Dex
 | monthly | `is_valid_import_current_nonce_and_balance_monthly` | Balance/nonce JSON → `wallet_owner_details` (current metrics) |
 | origin | same monthly flag | First-activity history JSON → `wallet_owner_details.first_transaction_at` |
 | cex import | n/a | Dune rows → `wallets.cex_addresses` via `cex_addresses_upsert` |
-| token prices | n/a | Unpriced positions → Dex/CG → `token_prices` → apply prices |
+| token prices | n/a | Unpriced ERC-20s → Dex/CG → `token_prices` → apply hits / mark misses |
 | token contracts discovery | `wallet_transactions.does_need_discovery_contracts` + `chains.subdomain_alchemy` | Alchemy ERC-20 balances → `wallets.wallet_token_contracts` via `wallet_token_contracts_upsert` |
-| token portfolio discovery | `does_need_portfolio_discovery` after contract discovery | Alchemy amounts + DeFiLlama → `wallet_token_positions_insert` |
+| token portfolio discovery | `does_need_portfolio_discovery` after contract discovery | Alchemy amounts + DeFiLlama → fungible `wallet_token_positions_insert` |
 
 ## Token contracts discovery
 
@@ -118,6 +118,7 @@ After contract discovery succeeds, claims rows with `does_need_portfolio_discove
 2. Shared `portfolio_calc` (Alchemy balances + DeFiLlama prices; no `token_prices`; sets `token_quality` / `quality_reason`).
 3. `wallet_token_positions_insert` (INSERT only; native as `contract_address='native'`).
    Rediscovery after pricing/quality changes: `wallet_token_portfolio_discovery_reset.sql` then re-run the workflow.
+   **Does not** discover Uniswap V3 / LP NFT positions — see [PENDING_LP_POSITIONS.md](./PENDING_LP_POSITIONS.md).
 
 ```mermaid
 flowchart LR
@@ -133,7 +134,7 @@ flowchart LR
 
 **CEX:** Fetch latest Dune query → fail if zero rows → `cex_addresses_upsert`.
 
-**Token prices:** Load chain `subdomain_*` → distinct unpriced ERC-20s → cache TTL → DexScreener → CoinGecko → `token_prices_upsert` → `wallet_token_positions_apply_prices`.
+**Token prices:** Load chain `subdomain_*` → distinct unpriced ERC-20s (`DISTINCT ON` chain+contract) → cache TTL → DexScreener → CoinGecko → `token_prices_upsert` (deduped PK) → per-chain `apply_prices` → `mark_price_misses` for unresolved contracts → final `apply_prices`.
 
 ```mermaid
 flowchart LR
@@ -141,9 +142,14 @@ flowchart LR
   ghaCex --> upsertCex["wallets.cex_addresses_upsert"]
   upsertCex --> cexTable[wallets.cex_addresses]
   ghaPrices[GHA_token_prices] --> dexCg[Dex_CoinGecko]
-  dexCg --> upsertPrices["wallets.token_prices_upsert"]
+  dexCg --> upsertPrices["token_prices_upsert"]
   upsertPrices --> applyPos["apply_prices"]
+  upsertPrices --> markMiss["mark_price_misses"]
 ```
+
+## Pending: LP positions
+
+Not implemented. Spec and agent kickoff prompt: [PENDING_LP_POSITIONS.md](./PENDING_LP_POSITIONS.md). Catalog: [PROCESSES.md](./PROCESSES.md).
 
 ## Time budgets
 
@@ -178,7 +184,8 @@ workers/<name>/
     ├── db.py           # claim / save / snapshot / reconnect (or upsert RPC)
     ├── query.py        # balance+nonce (daily, monthly)
     ├── origin.py       # binary-search first activity (origin only)
-    ├── dune.py         # Dune HTTP client (cex / token-prices import)
+    ├── dune.py         # Dune HTTP client (cex import)
+    ├── dexscreener.py / coingecko.py  # token_prices_import
     ├── rpc.py
     ├── alchemy.py
     ├── networks.py     # 8-chain public RPC list
@@ -199,10 +206,12 @@ Origin also has `scripts/check_pending.py` and `scripts/compare_smoke.py`.
 | token contracts discovery | 10 | 50 | 7200 |
 | token portfolio discovery | 5 | 25 | 7200 |
 
-Secrets: `SUPABASE_DB_URL` (required), `ALCHEMY_KEY` (recommended for balance/nonce claim workers), `ALCHEMY_FREE_KEY` (token contracts discovery), `DUNE_KEY` (cex / token-prices import). Daily sets `WORKER_ID` from the matrix.
+Secrets: `SUPABASE_DB_URL` (required), `ALCHEMY_KEY` (balance/nonce claim workers), `ALCHEMY_FREE_KEY` (contracts / portfolio discovery), `DUNE_KEY` (cex), `COINGECKO_KEY` (token prices). Daily sets `WORKER_ID` from the matrix.
 
 ## Related docs
 
+- [PROCESSES.md](./PROCESSES.md) — process catalog
+- [PENDING_LP_POSITIONS.md](./PENDING_LP_POSITIONS.md) — LP discovery (pending)
 - [SUPABASE.md](./SUPABASE.md) — columns, RPCs, monitoring SQL
 - [OPS.md](./OPS.md) — operations / stuck states
 - [AGENTS.md](../AGENTS.md) — agent entry point

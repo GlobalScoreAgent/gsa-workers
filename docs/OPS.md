@@ -81,8 +81,10 @@ Enriches unpriced ERC-20 rows via cache → DexScreener → CoinGecko. Requires 
 |---|---|---|
 | Workflow fails immediately | Missing/invalid `COINGECKO_KEY` or `SUPABASE_DB_URL` | Check repo secrets; re-run |
 | CoinGecko 429 | Demo rate/credits | Rely on Dex + TTL; upgrade plan |
-| Upsert / apply missing | Migration not applied | Deploy spot-cache migration in **gsa-supabase-schema** |
-| Positions still unpriced | Miss / spam / low liquidity | Check `token_prices.source` and `token_quality` |
+| Upsert / apply missing | Migration not applied | Deploy spot-cache + `mark_price_misses` / upsert DISTINCT ON in **gsa-supabase-schema** |
+| `CardinalityViolation` on upsert | Duplicate `(chain_id, contract)` in one batch | Fixed via candidate `DISTINCT ON` + upsert dedupe; redeploy if old code |
+| Positions still `has_price_error` forever | Misses not marked | Need `mark_price_misses` after miss upsert; check `quality_reason` |
+| Positions still unpriced USD | Miss / spam / low liquidity | Check `token_prices.source` and `token_quality`; known-unknown uses `unknown_token_dex_coingecko_defillama` |
 
 **Re-run:** GitHub → **Actions** → **Token prices import** → **Run workflow**.
 
@@ -116,13 +118,15 @@ No need to change code for a plain re-run. After a schema change, deploy the mig
 
 | Touch | Repo |
 |---|---|
-| Snapshot function body, `wallets.cex_addresses_upsert`, triggers, indexes, new columns | `gsa-supabase-schema` |
-| Claim/save/retry/job loop/GHA env/RPC clients / Dune client | `gsa-workers` |
+| Snapshot / upsert RPCs (`wallet_apply_*`, CEX, token_prices, discovery, mark_price_misses), triggers, indexes, new columns | `gsa-supabase-schema` |
+| Claim/save/retry/job loop/GHA env/RPC / Dune / Dex / CoinGecko clients | `gsa-workers` |
 
 Deploy order when both change: **schema → worker → workflow_dispatch**.
 
 ## Related
 
+- [PROCESSES.md](./PROCESSES.md) — live pipeline catalog
+- [PENDING_LP_POSITIONS.md](./PENDING_LP_POSITIONS.md) — LP discovery (not built)
 - [SUPABASE.md](./SUPABASE.md) — monitoring and backfill SQL
 - [ARCHITECTURE.md](./ARCHITECTURE.md) — pipeline and budgets
 - [DEPRECATION.md](./DEPRECATION.md) — do not re-enable old crons

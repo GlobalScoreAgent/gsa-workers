@@ -2,7 +2,7 @@
 
 Unified Python batch workers for [Global Score Agent](https://www.globalscoreagent.com/), run via GitHub Actions against Supabase Postgres.
 
-**For AI agents:** start at [AGENTS.md](./AGENTS.md). Architecture and DB maps: [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md), [docs/SUPABASE.md](./docs/SUPABASE.md), [docs/OPS.md](./docs/OPS.md).
+**For AI agents:** start at [AGENTS.md](./AGENTS.md). Process catalog: [docs/PROCESSES.md](./docs/PROCESSES.md). Architecture / DB / ops: [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md), [docs/SUPABASE.md](./docs/SUPABASE.md), [docs/OPS.md](./docs/OPS.md). Pending LP work: [docs/PENDING_LP_POSITIONS.md](./docs/PENDING_LP_POSITIONS.md).
 
 ## Workers
 
@@ -12,9 +12,11 @@ Unified Python batch workers for [Global Score Agent](https://www.globalscoreage
 | [`owner_wallet_origin`](./workers/owner_wallet_origin/README.md) | 0, 6, 12, 18h | monthly `is_valid` + `import_wallet_history_next_eligible_at` | First on-chain activity → history JSON → `wallet_apply_owner_history_snapshot` |
 | [`owner_wallet_nonce_balance_monthly`](./workers/owner_wallet_nonce_balance_monthly/README.md) | 0, 6, 12, 18h | `is_valid_..._monthly` + `import_nonce_and_balance_monthly_next_eligible_at` | Balance + nonce (30d) → monthly JSON → `wallet_apply_monthly_snapshot` |
 | [`cex_addresses_import`](./workers/cex_addresses_import/README.md) | 1st & 16th 00:00 (~every 15 days) | n/a (reference data) | Dune CEX list → `wallets.cex_addresses_upsert` |
-| [`token_prices_import`](./workers/token_prices_import/README.md) | manual `workflow_dispatch` | n/a (reference data) | Dex/CG → `token_prices` → apply to unpriced positions |
+| [`token_prices_import`](./workers/token_prices_import/README.md) | 0, 6, 12, 18h | n/a (reference data) | Dex/CG → `token_prices` → apply / mark known-unknown misses |
 | [`wallet_token_contracts_discovery`](./workers/wallet_token_contracts_discovery/README.md) | 0, 6, 12, 18h | `wallet_transactions.does_need_discovery_contracts` + `chains.subdomain_alchemy` | Alchemy ERC-20 balances → `wallet_token_contracts_upsert` |
-| [`wallet_token_portfolio_discovery`](./workers/wallet_token_portfolio_discovery/README.md) | 0, 6, 12, 18h | portfolio discovery flag after contract discovery | Alchemy amounts + DeFiLlama → `wallet_token_positions_insert` |
+| [`wallet_token_portfolio_discovery`](./workers/wallet_token_portfolio_discovery/README.md) | 0, 6, 12, 18h | portfolio discovery flag after contract discovery | Alchemy amounts + DeFiLlama → fungible `wallet_token_positions` |
+
+Pending (not built): [LP positions discovery](./docs/PENDING_LP_POSITIONS.md).
 
 ## Common pipeline (claim workers)
 
@@ -25,7 +27,7 @@ claim (Pending, next_eligible_at += CLAIM_STALE_SECONDS)
   → wallet_apply_*_snapshot → Processed
 ```
 
-Reference-data: `cex_addresses_import` (Dune → upsert); `token_prices_import` (Dex/CG enrich). Details: [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md). Column/RPC inventory: [docs/SUPABASE.md](./docs/SUPABASE.md).
+Reference-data: `cex_addresses_import` (Dune → upsert); `token_prices_import` (Dex/CG enrich + miss mark). Full catalog: [docs/PROCESSES.md](./docs/PROCESSES.md). Column/RPC inventory: [docs/SUPABASE.md](./docs/SUPABASE.md).
 
 ## Secrets
 
@@ -71,6 +73,8 @@ gsa-workers/
 ├── AGENTS.md
 ├── README.md
 ├── docs/
+│   ├── PROCESSES.md          # all live pipelines + diagram
+│   ├── PENDING_LP_POSITIONS.md
 │   ├── ARCHITECTURE.md
 │   ├── SUPABASE.md
 │   ├── OPS.md
@@ -93,7 +97,7 @@ gsa-workers/
 │   │   └── src/          # db, dune
 │   ├── token_prices_import/
 │   │   ├── job.py
-│   │   └── src/          # db, dune
+│   │   └── src/          # db, dexscreener, coingecko
 │   ├── wallet_token_contracts_discovery/
 │   │   ├── job.py
 │   │   └── src/          # db, alchemy_tokens
