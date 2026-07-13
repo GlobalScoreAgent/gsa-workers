@@ -39,6 +39,7 @@ Ops / stuck wallets: [docs/OPS.md](./docs/OPS.md). Deprecations: [docs/DEPRECATI
 | `cex_addresses_import` | `cex-addresses-import.yml` | `wallets.cex_addresses_upsert` | `wallets.cex_addresses` |
 | `token_prices_import` | `token-prices-import.yml` | `wallets.token_prices_upsert` | `wallets.token_prices` |
 | `wallet_token_contracts_discovery` | `wallet-token-contracts-discovery.yml` | `wallets.wallet_token_contracts_upsert` | `wallets.wallet_token_contracts` |
+| `wallet_token_portfolio_discovery` | `wallet-token-portfolio-discovery.yml` | `wallets.wallet_token_positions_insert` | `wallets.wallet_token_positions` |
 
 ## How to validate a change
 
@@ -52,5 +53,5 @@ Ops / stuck wallets: [docs/OPS.md](./docs/OPS.md). Deprecations: [docs/DEPRECATI
 | Change | Repo |
 |---|---|
 | Claim SQL, retries, job loop, RPC clients, GHA env | **gsa-workers** |
-| `wallet_apply_*_snapshot`, `wallets.cex_addresses_upsert`, `wallets.token_prices_upsert`, `wallets.wallet_token_contracts_upsert`, triggers, indexes, `next_eligible_at` / discovery flags | **gsa-supabase-schema** |
+| `wallet_apply_*_snapshot`, `wallets.cex_addresses_upsert`, `wallets.token_prices_upsert`, `wallets.wallet_token_contracts_upsert`, `wallets.wallet_token_positions_insert`, triggers, indexes, `next_eligible_at` / discovery flags | **gsa-supabase-schema** |
 | Deploy order | Schema first (if needed) → push worker → `workflow_dispatch` |

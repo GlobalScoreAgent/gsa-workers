@@ -1,0 +1,12 @@
+[project]
+name = "wallet-token-portfolio-discovery"
+version = "0.1.0"
+description = "Initial fungible portfolio discovery from wallet_token_contracts via Alchemy + DeFiLlama"
+requires-python = ">=3.12"
+dependencies = [
+    "httpx>=0.28",
+    "psycopg[binary]>=3.2",
+]
+
+[dependency-groups]
+dev = []

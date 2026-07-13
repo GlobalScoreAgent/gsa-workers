@@ -2,7 +2,7 @@
 
 Workers connect with **direct Postgres** via `SUPABASE_DB_URL` (`psycopg`), not supabase-js or Edge Functions. Schema of truth for wallet claim jobs: `erc_8004`. Reference-data imports (CEX addresses, token prices) use schema `wallets`.
 
-Schema migrations and snapshot/upsert SQL live in the sibling repo **`gsa-supabase-schema`** (functions `wallet_apply_*_snapshot`, `wallets.cex_addresses_upsert`, `wallets.token_prices_upsert`, `wallets.wallet_token_contracts_upsert`, triggers, indexes). Code of truth for claim/save SQL in this repo: each worker’s `src/db.py`.
+Schema migrations and snapshot/upsert SQL live in the sibling repo **`gsa-supabase-schema`** (functions `wallet_apply_*_snapshot`, `wallets.cex_addresses_upsert`, `wallets.token_prices_upsert`, `wallets.wallet_token_contracts_upsert`, `wallets.wallet_token_positions_insert`, triggers, indexes). Code of truth for claim/save SQL in this repo: each worker’s `src/db.py`.
 
 ## Connection
 
@@ -25,6 +25,7 @@ Schema migrations and snapshot/upsert SQL live in the sibling repo **`gsa-supaba
 | `wallets.cex_addresses` | CEX address reference list (Dune import) |
 | `wallets.token_prices` | Daily token prices (Dune import) |
 | `wallets.wallet_token_contracts` | ERC-20 contracts with balance > 0 per wallet+chain (discovery) |
+| `wallets.wallet_token_positions` | Fungible positions (native=`'native'` + ERC-20); initial INSERT discovery |
 
 ## Per-worker column map
 
@@ -50,6 +51,18 @@ Daily also uses claim metadata:
 | `discovery_contracts_message_error` | Last error text; `NULL` on success |
 
 Eligibility: flag pending **and** `chains.subdomain_alchemy` non-empty. New `wallet_transactions` inserts get the flag from trigger `trg_wallet_transactions_discovery_flag_bi`. On process error the worker sets flag `FALSE` and fills the error columns so the queue does not re-claim the same row forever.
+
+### Token portfolio discovery (`wallet_transactions`)
+
+| Column | Role |
+|---|---|
+| `does_need_portfolio_discovery` | Pending after contract discovery done |
+| `portfolio_discovery_claimed_at` | Claim lock / last attempt |
+| `portfolio_discovery_claimed_by` | `wallet_token_portfolio_discovery/gha:{WORKER_ID}` |
+| `has_portfolio_discovery_error` | Last attempt failed |
+| `portfolio_discovery_message_error` | Error text |
+
+Trigger `trg_wallet_transactions_portfolio_flag_bu` sets portfolio pending when contract discovery completes successfully.
 
 ### `next_eligible_at` semantics
 
@@ -94,12 +107,15 @@ Canonical SQL / migrations: `gsa-supabase-schema/supabase/migrations/` and `supa
 | cex import | `wallets.cex_addresses_upsert(p_rows jsonb)` | `wallets.cex_addresses` (`ON CONFLICT (address, chain)`) |
 | token prices | `wallets.token_prices_upsert(p_rows jsonb)` | `wallets.token_prices` (`ON CONFLICT (contract_address, blockchain, price_date) DO NOTHING`) |
 | token contracts discovery | `wallets.wallet_token_contracts_upsert(p_wallet_id, p_chain_id, p_rows jsonb)` | `wallets.wallet_token_contracts` (insert/update only; no delete) |
+| token portfolio discovery | `wallets.wallet_token_positions_insert(p_wallet_id, p_chain_id, p_rows jsonb)` | `wallets.wallet_token_positions` (INSERT … ON CONFLICT DO NOTHING) |
 
 CEX `p_rows` is a JSON array of Dune row objects (`blockchain`, `address`, `cex_name`, `distinct_name`). Empty array raises. Script: `gsa-supabase-schema/supabase/scripts/wallets_cex_addresses_upsert.sql`.
 
 Token prices `p_rows` is a JSON array of Dune row objects (`symbol`, `blockchain`, `day`, `avg_price`, `contract_address`). Empty array raises. Script: `gsa-supabase-schema/supabase/scripts/wallets_token_prices_upsert.sql`.
 
 Discovery `p_rows` is a JSON array of `{contract_address, source?}`. Empty array is a no-op (does not delete). Script: `gsa-supabase-schema/supabase/scripts/wallet_token_contracts_upsert_no_delete.sql`.
+
+Portfolio positions `p_rows` include `contract_address` (`'native'` or `0x…`), amounts, `price_usd`, `has_price_error`, etc. Prices come from DeFiLlama only (not `token_prices`). Script: `gsa-supabase-schema/supabase/scripts/wallet_token_portfolio_discovery.sql`.
 
 ## Triggers (schema repo)
 
@@ -109,6 +125,7 @@ When `is_valid_*` becomes true, DB triggers set the matching `next_eligible_at` 
 - `trg_wallet_monthly_next_eligible_at`
 - `trg_wallet_history_next_eligible_at`
 - `trg_wallet_transactions_discovery_flag_bi` (sets `does_need_discovery_contracts` on insert from `chains.subdomain_alchemy`)
+- `trg_wallet_transactions_portfolio_flag_bu` (sets `does_need_portfolio_discovery` when contract discovery completes)
 
 ## Claim pattern
 
@@ -284,6 +301,20 @@ FROM wallets.wallet_token_contracts;
 --     discovery_contracts_claimed_at = NULL,
 --     discovery_contracts_claimed_by = NULL
 -- WHERE has_discovery_contracts_error IS TRUE;
+```
+
+### Token portfolio discovery
+
+```sql
+SELECT
+  count(*) FILTER (WHERE does_need_portfolio_discovery IS DISTINCT FROM FALSE) AS pending,
+  count(*) FILTER (WHERE has_portfolio_discovery_error IS TRUE) AS errors
+FROM erc_8004.wallet_transactions;
+
+SELECT count(*) AS positions,
+       count(*) FILTER (WHERE contract_address = 'native') AS native_rows,
+       count(*) FILTER (WHERE has_price_error IS TRUE) AS price_errors
+FROM wallets.wallet_token_positions;
 ```
 
 ## Related docs

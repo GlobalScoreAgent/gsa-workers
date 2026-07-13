@@ -75,6 +75,7 @@ stateDiagram-v2
 | `cex_addresses_import` | `cex-addresses-import.yml` | `cex-addresses-import` | 1 runner |
 | `token_prices_import` | `token-prices-import.yml` | `token-prices-import` | 1 runner |
 | `wallet_token_contracts_discovery` | `wallet-token-contracts-discovery.yml` | `wallet-token-contracts-discovery` | 1 runner |
+| `wallet_token_portfolio_discovery` | `wallet-token-portfolio-discovery.yml` | `wallet-token-portfolio-discovery` | 1 runner |
 
 Claim workers schedule: `0 0,6,12,18 * * *` UTC + `workflow_dispatch`.  
 CEX import schedule: `0 0 1,16 * *` UTC + `workflow_dispatch` (1st and 16th of each month ≈ every 15 days, same cadence as the former walcert CEX import cron).  
@@ -90,6 +91,7 @@ Token prices import schedule: **paused** (manual `workflow_dispatch` only; daily
 | cex import | n/a | Dune rows → `wallets.cex_addresses` via `cex_addresses_upsert` |
 | token prices | n/a | Dune rows → `wallets.token_prices` via `token_prices_upsert` |
 | token contracts discovery | `wallet_transactions.does_need_discovery_contracts` + `chains.subdomain_alchemy` | Alchemy ERC-20 balances → `wallets.wallet_token_contracts` via `wallet_token_contracts_upsert` |
+| token portfolio discovery | `does_need_portfolio_discovery` after contract discovery | Alchemy amounts + DeFiLlama → `wallet_token_positions_insert` |
 
 ## Token contracts discovery
 
@@ -106,6 +108,22 @@ flowchart LR
   upsertFn["wallet_token_contracts_upsert"]
   done[Flag_false]
   claimWt --> alchemy --> upsertFn --> done
+```
+
+## Token portfolio discovery
+
+After contract discovery succeeds, claims rows with `does_need_portfolio_discovery` pending:
+
+1. Load contracts from `wallet_token_contracts`.
+2. Shared `portfolio_calc` (Alchemy balances + DeFiLlama prices; no `token_prices`).
+3. `wallet_token_positions_insert` (INSERT only; native as `contract_address='native'`).
+
+```mermaid
+flowchart LR
+  claimP[Claim_portfolio_discovery]
+  calc[portfolio_calc]
+  ins["wallet_token_positions_insert"]
+  claimP --> calc --> ins
 ```
 
 ## Reference-data workers
@@ -178,6 +196,7 @@ Origin also has `scripts/check_pending.py` and `scripts/compare_smoke.py`.
 | cex import | n/a | n/a | n/a |
 | token prices | n/a | n/a | n/a |
 | token contracts discovery | 10 | 50 | 7200 |
+| token portfolio discovery | 5 | 25 | 7200 |
 
 Secrets: `SUPABASE_DB_URL` (required), `ALCHEMY_KEY` (recommended for balance/nonce claim workers), `ALCHEMY_FREE_KEY` (token contracts discovery), `DUNE_KEY` (cex / token-prices import). Daily sets `WORKER_ID` from the matrix.
 

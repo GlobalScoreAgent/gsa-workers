@@ -1,0 +1,48 @@
+name: Wallet token portfolio discovery
+
+on:
+  schedule:
+    - cron: "0 0 * * *"
+    - cron: "0 6 * * *"
+    - cron: "0 12 * * *"
+    - cron: "0 18 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: wallet-token-portfolio-discovery
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        working-directory: workers/wallet_token_portfolio_discovery
+        run: uv sync
+
+      - name: Run wallet token portfolio discovery
+        working-directory: workers/wallet_token_portfolio_discovery
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          ALCHEMY_FREE_KEY: ${{ secrets.ALCHEMY_FREE_KEY }}
+          MAX_RUNTIME_SECONDS: 19800
+          CONCURRENCY: 5
+          CLAIM_BATCH_SIZE: 25
+          CLAIM_STALE_SECONDS: 7200
+          WORKER_ID: discovery-a
+        run: uv run python job.py
