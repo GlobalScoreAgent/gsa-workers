@@ -14,9 +14,11 @@ Chain platform slugs come from `erc_8004.chains.subdomain_dexscreener` / `subdom
 4. Per chain, per API batch:
    - DexScreener (~30 contracts/request) → **upsert hits immediately**
    - CoinGecko (~100 contracts/request) for remainder → **upsert hits immediately**
-   - Upsert misses for unresolved
+   - Upsert misses + **mark positions** (`has_price_error=false`, `quality_reason=unknown_token_dex_coingecko_defillama`) so they leave the enrich queue
    - `wallet_token_positions_apply_prices()` after each chain
 5. Final `apply_prices` at end
+
+`has_price_error=false` + `quality_reason=unknown_token_dex_coingecko_defillama` means Llama/Dex/CG all failed to price the token — not a transient worker error. Candidates require `has_price_error=true`, so those rows are not reprocessed on the next run.
 
 CoinGecko auth uses header from `COINGECKO_KEY` + `COINGECKO_API_PLAN` (`demo` → `x-cg-demo-api-key` / `api.coingecko.com`; `pro` → `x-cg-pro-api-key` / `pro-api.coingecko.com`).
 

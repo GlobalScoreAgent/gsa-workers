@@ -22,6 +22,10 @@ APPLY_PRICES_SQL = """
 SELECT wallets.wallet_token_positions_apply_prices() AS message
 """
 
+MARK_PRICE_MISSES_SQL = """
+SELECT wallets.wallet_token_positions_mark_price_misses(%(rows)s::jsonb) AS message
+"""
+
 LOAD_CHAINS_SQL = """
 SELECT id, subdomain_coingecko, subdomain_dexscreener
 FROM erc_8004.chains
@@ -202,6 +206,31 @@ class Database:
             return str(result["message"])
 
         return self._run_with_db_retry("apply_prices", _apply)
+
+    def mark_price_misses(self, rows: list[dict[str, Any]]) -> str:
+        """Mark positions as known-unknown after Dex+CG miss (leave enrich queue)."""
+        cleaned = [
+            {
+                "chain_id": int(r["chain_id"]),
+                "contract_address": str(r["contract_address"]).strip().lower(),
+            }
+            for r in rows
+        ]
+        payload = json.dumps(cleaned, separators=(",", ":"), ensure_ascii=True)
+
+        def _mark() -> str:
+            assert self._conn is not None
+            with self._conn.cursor() as cur:
+                cur.execute(MARK_PRICE_MISSES_SQL, {"rows": payload})
+                result = cur.fetchone()
+            self._conn.commit()
+            if not result or result.get("message") is None:
+                raise RuntimeError(
+                    "wallet_token_positions_mark_price_misses returned no message"
+                )
+            return str(result["message"])
+
+        return self._run_with_db_retry("mark_price_misses", _mark)
 
 
 def _sanitize_value(value: Any) -> Any:

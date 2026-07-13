@@ -260,6 +260,12 @@ def main() -> int:
                             len(chunk_rows),
                             msg,
                         )
+                        mark_msg = db.mark_price_misses(chunk_rows)
+                        logger.info(
+                            "Miss mark positions chain_id=%s — %s",
+                            chain_id,
+                            mark_msg,
+                        )
 
                 apply_msg = db.apply_prices()
                 logger.info(
