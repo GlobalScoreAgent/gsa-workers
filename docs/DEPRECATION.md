@@ -36,11 +36,11 @@ After `owner_wallet_origin` is validated in production, consider deprecating:
 - Standalone `query_wallet_origin.py` CLI tool (replaced by this worker)
 - Any manual origin-import scripts or one-off jobs writing `import_wallet_history_data`
 
-## Token prices (walcert → GHA)
+## Token prices (walcert → GHA → Dex/CoinGecko)
 
-Replaced by **`token_prices_import`** → `wallets.token_prices_upsert` → `wallets.token_prices`.
+Current: **`token_prices_import`** enriches unpriced `wallet_token_positions` via DexScreener → CoinGecko into spot cache `wallets.token_prices` (PK `chain_id`+`contract`), then `wallet_token_positions_apply_prices`.
 
-**GHA schedule paused** (2026-07-11): daily cron off because Dune Free data-export credits (~20/MB) burn too fast on ~225k-row dumps. Workflow remains for manual `workflow_dispatch` until a cheaper source or filtered query is chosen.
+Dune daily dumps into `wallets.token_prices` are **retired** (table redesigned 2026-07-13). Do not re-enable Dune export for this table.
 
 | Legacy component | Status |
 |---|---|
@@ -49,6 +49,7 @@ Replaced by **`token_prices_import`** → `wallets.token_prices_upsert` → `wal
 | `walcert.token_prices_import_data` (pg_net → Edge) | Superseded; leave in place until Edge retired |
 | `walcert.token_prices_process` | Superseded; leave in place |
 | Edge `walcert-update-token-prices` | Superseded; retire after GHA is validated |
-| `walcert.token_prices` / `walcert.token_prices_imported_data` | Legacy; new writes go to `wallets.token_prices` |
+| `walcert.token_prices` / `walcert.token_prices_imported_data` | Legacy; GHA writes go to redesigned `wallets.token_prices` |
+| Dune query `7526826` → old daily `wallets.token_prices` | Retired with spot-cache redesign |
 
 Repointing consumers that still read `walcert.token_prices` is a separate follow-up.

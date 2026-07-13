@@ -12,7 +12,7 @@ Unified Python batch workers for [Global Score Agent](https://www.globalscoreage
 | [`owner_wallet_origin`](./workers/owner_wallet_origin/README.md) | 0, 6, 12, 18h | monthly `is_valid` + `import_wallet_history_next_eligible_at` | First on-chain activity → history JSON → `wallet_apply_owner_history_snapshot` |
 | [`owner_wallet_nonce_balance_monthly`](./workers/owner_wallet_nonce_balance_monthly/README.md) | 0, 6, 12, 18h | `is_valid_..._monthly` + `import_nonce_and_balance_monthly_next_eligible_at` | Balance + nonce (30d) → monthly JSON → `wallet_apply_monthly_snapshot` |
 | [`cex_addresses_import`](./workers/cex_addresses_import/README.md) | 1st & 16th 00:00 (~every 15 days) | n/a (reference data) | Dune CEX list → `wallets.cex_addresses_upsert` |
-| [`token_prices_import`](./workers/token_prices_import/README.md) | **paused** (manual only) | n/a (reference data) | Dune token prices → `wallets.token_prices_upsert` |
+| [`token_prices_import`](./workers/token_prices_import/README.md) | manual `workflow_dispatch` | n/a (reference data) | Dex/CG → `token_prices` → apply to unpriced positions |
 | [`wallet_token_contracts_discovery`](./workers/wallet_token_contracts_discovery/README.md) | 0, 6, 12, 18h | `wallet_transactions.does_need_discovery_contracts` + `chains.subdomain_alchemy` | Alchemy ERC-20 balances → `wallet_token_contracts_upsert` |
 | [`wallet_token_portfolio_discovery`](./workers/wallet_token_portfolio_discovery/README.md) | 0, 6, 12, 18h | portfolio discovery flag after contract discovery | Alchemy amounts + DeFiLlama → `wallet_token_positions_insert` |
 
@@ -25,7 +25,7 @@ claim (Pending, next_eligible_at += CLAIM_STALE_SECONDS)
   → wallet_apply_*_snapshot → Processed
 ```
 
-Reference-data (`cex_addresses_import`, `token_prices_import`): Dune fetch → one upsert RPC. Details: [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md). Column/RPC inventory: [docs/SUPABASE.md](./docs/SUPABASE.md).
+Reference-data: `cex_addresses_import` (Dune → upsert); `token_prices_import` (Dex/CG enrich). Details: [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md). Column/RPC inventory: [docs/SUPABASE.md](./docs/SUPABASE.md).
 
 ## Secrets
 
@@ -34,7 +34,8 @@ Reference-data (`cex_addresses_import`, `token_prices_import`): Dune fetch → o
 | `SUPABASE_DB_URL` | Yes | Postgres pooler DSN |
 | `ALCHEMY_KEY` | Recommended | Alchemy fallback after public RPCs (claim workers) |
 | `ALCHEMY_FREE_KEY` | For token contracts / portfolio discovery | Alchemy Token API |
-| `DUNE_KEY` | For CEX / token-prices import | Dune Analytics API key |
+| `DUNE_KEY` | For CEX import | Dune Analytics API key |
+| `COINGECKO_KEY` | For token-prices enrich | CoinGecko Demo/Pro API key |
 
 ## CI defaults (workflows)
 
@@ -44,7 +45,7 @@ Reference-data (`cex_addresses_import`, `token_prices_import`): Dune fetch → o
 | origin | 4 | 50 | 7200 | 19800 |
 | monthly | 20 | 200 | 7200 | 19800 |
 | cex import | n/a | n/a | n/a | GHA timeout 30m |
-| token prices | n/a | n/a | n/a | GHA timeout 30m |
+| token prices | n/a | n/a | n/a | GHA timeout 360m |
 | token contracts discovery | 10 | 50 | 7200 | 19800 |
 | token portfolio discovery | 5 | 25 | 7200 | 19800 |
 

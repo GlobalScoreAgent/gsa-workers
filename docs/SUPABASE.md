@@ -23,7 +23,7 @@ Schema migrations and snapshot/upsert SQL live in the sibling repo **`gsa-supaba
 | `erc_8004.chain_nonces` | Daily snapshot: per-chain daily nonce totals (incremental) |
 | `erc_8004.wallet_owner_details` | Monthly + origin snapshots: owner metrics / first tx |
 | `wallets.cex_addresses` | CEX address reference list (Dune import) |
-| `wallets.token_prices` | Daily token prices (Dune import) |
+| `wallets.token_prices` | Spot USD cache PK `(chain_id, contract)`; Dex/CG enrich |
 | `wallets.wallet_token_contracts` | ERC-20 contracts with balance > 0 per wallet+chain (discovery) |
 | `wallets.wallet_token_positions` | Fungible positions (native=`'native'` + ERC-20); initial INSERT discovery |
 
@@ -105,17 +105,17 @@ Canonical SQL / migrations: `gsa-supabase-schema/supabase/migrations/` and `supa
 | Worker | Function | Writes |
 |---|---|---|
 | cex import | `wallets.cex_addresses_upsert(p_rows jsonb)` | `wallets.cex_addresses` (`ON CONFLICT (address, chain)`) |
-| token prices | `wallets.token_prices_upsert(p_rows jsonb)` | `wallets.token_prices` (`ON CONFLICT (contract_address, blockchain, price_date) DO NOTHING`) |
+| token prices | `wallets.token_prices_upsert` + `wallet_token_positions_apply_prices` | Spot cache then apply to unpriced positions |
 | token contracts discovery | `wallets.wallet_token_contracts_upsert(p_wallet_id, p_chain_id, p_rows jsonb)` | `wallets.wallet_token_contracts` (insert/update only; no delete) |
 | token portfolio discovery | `wallets.wallet_token_positions_insert(p_wallet_id, p_chain_id, p_rows jsonb)` | `wallets.wallet_token_positions` (INSERT … ON CONFLICT DO NOTHING) |
 
 CEX `p_rows` is a JSON array of Dune row objects (`blockchain`, `address`, `cex_name`, `distinct_name`). Empty array raises. Script: `gsa-supabase-schema/supabase/scripts/wallets_cex_addresses_upsert.sql`.
 
-Token prices `p_rows` is a JSON array of Dune row objects (`symbol`, `blockchain`, `day`, `avg_price`, `contract_address`). Empty array raises. Script: `gsa-supabase-schema/supabase/scripts/wallets_token_prices_upsert.sql`.
+Token prices enrich upserts `{chain_id, contract_address, symbol?, price_usd?, source, liquidity_usd?}` (`source` = dexscreener|coingecko|miss). Platforms from `chains.subdomain_*`. Scripts: `chains_price_subdomains.sql`, `wallets_token_prices_spot_cache.sql`.
 
 Discovery `p_rows` is a JSON array of `{contract_address, source?}`. Empty array is a no-op (does not delete). Script: `gsa-supabase-schema/supabase/scripts/wallet_token_contracts_upsert_no_delete.sql`.
 
-Portfolio positions `p_rows` include `contract_address` (`'native'` or `0x…`), amounts, `price_usd`, `has_price_error`, `token_quality` (`priced`|`unpriced`|`spam`), `quality_reason`, etc. Prices come from DeFiLlama only (not `token_prices`). Script: `gsa-supabase-schema/supabase/scripts/wallet_token_portfolio_discovery.sql`. Quality columns: `gsa-supabase-schema/supabase/scripts/wallet_token_positions_quality.sql`. Reset / re-queue: `wallet_token_portfolio_discovery_reset.sql` (TRUNCATE + re-flag; required because insert is DO NOTHING).
+Portfolio positions `p_rows` include `contract_address` (`'native'` or `0x…`), amounts, `price_usd`, `has_price_error`, `token_quality` (`priced`|`unpriced`|`spam`), `quality_reason`, etc. Initial prices from DeFiLlama; Dex/CG fill via `token_prices_import`. Script: `gsa-supabase-schema/supabase/scripts/wallet_token_portfolio_discovery.sql`. Quality columns: `gsa-supabase-schema/supabase/scripts/wallet_token_positions_quality.sql`. Reset / re-queue: `wallet_token_portfolio_discovery_reset.sql` (TRUNCATE + re-flag; required because insert is DO NOTHING).
 
 ## Triggers (schema repo)
 
@@ -264,14 +264,13 @@ LIMIT 10;
 ### Token prices (`wallets.token_prices`)
 
 ```sql
-SELECT count(*) AS rows, max(price_date) AS max_price_date
-FROM wallets.token_prices;
-
-SELECT blockchain, count(*) AS n
+SELECT source, count(*), count(*) FILTER (WHERE price_usd IS NOT NULL) AS with_price
 FROM wallets.token_prices
-GROUP BY 1
-ORDER BY n DESC
-LIMIT 10;
+GROUP BY 1;
+
+SELECT id, subdomain_coingecko, subdomain_dexscreener
+FROM erc_8004.chains
+ORDER BY id;
 ```
 
 ### Token contracts discovery

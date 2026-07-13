@@ -1,69 +1,62 @@
-# Token prices import
+# Token prices import (DexScreener → CoinGecko enrich)
 
 > Project context: [AGENTS.md](../../AGENTS.md) · [Supabase map](../../docs/SUPABASE.md) · [Architecture](../../docs/ARCHITECTURE.md)
 
-Reference-data job: fetch the latest Dune token-price list and insert into `wallets.token_prices` via SQL RPC chunks. No wallet claim / eligibility loop.
+Reference-data job: find distinct unpriced ERC-20s in `wallets.wallet_token_positions`, resolve USD via cache → **DexScreener** → **CoinGecko**, upsert `wallets.token_prices`, then apply to positions.
+
+Chain platform slugs come from `erc_8004.chains.subdomain_dexscreener` / `subdomain_coingecko` (not hardcoded).
 
 ## Pipeline
 
-1. `GET https://api.dune.com/api/v1/query/{DUNE_QUERY_ID}/results` (paginated, paced)
-2. Fail if 0 rows (do not wipe good data)
-3. `SELECT wallets.token_prices_upsert(chunk::jsonb)` per chunk of `UPSERT_CHUNK_SIZE`
-4. Exit 0 on success, 1 on Dune/DB failure
-
-Default query id: **7526826**.
-
-Conflict policy: `ON CONFLICT (contract_address, blockchain, price_date) DO NOTHING` (same as legacy `walcert.token_prices_process`).
-
-### Dune rate limits
-
-`GET …/results` is a **high-limit** endpoint ([Dune docs](https://docs.dune.com/api-reference/overview/rate-limits)): Free **40 rpm**, Plus **200 rpm**. Large results (~225k rows ≈ 23 pages at 10k) need pacing. Default `DUNE_PAGE_DELAY_SECONDS=2` stays under Free. On 429/503 the client retries with exponential backoff (honors `Retry-After` when present).
+1. Load chain subdomains from `erc_8004.chains`
+2. `DISTINCT (chain_id, contract)` where `has_price_error`, not spam, not `native`
+3. Skip rows with fresh cache (`fetched_at` within `PRICE_CACHE_TTL_HOURS`, including misses)
+4. DexScreener (min liquidity) → else CoinGecko batch by platform
+5. `wallets.token_prices_upsert` (`source` = `dexscreener` | `coingecko` | `miss`)
+6. `wallets.wallet_token_positions_apply_prices()`
 
 ## Schedule
 
-**Paused:** daily cron disabled to avoid Dune Free credit burn on large result exports. Manual only: `workflow_dispatch`.
-
-Former cadence (to restore later): daily **01:00 UTC** (`0 1 * * *`).
+Manual `workflow_dispatch` (optional cron later). Requires GitHub secret `COINGECKO_KEY`.
 
 ## Env
 
 | Variable | Required | Default | Role |
 |---|---|---|---|
-| `SUPABASE_DB_URL` | Yes | — | Postgres pooler DSN |
-| `DUNE_KEY` | Yes | — | Dune API key |
-| `DUNE_QUERY_ID` | No | `7526826` | Dune query id |
-| `DUNE_PAGE_SIZE` | No | `10000` | Rows per Dune page |
-| `DUNE_PAGE_DELAY_SECONDS` | No | `2` | Sleep between Dune pages (Free-safe; Plus can use `0.3`) |
-| `UPSERT_CHUNK_SIZE` | No | `5000` | Rows per `token_prices_upsert` call |
+| `SUPABASE_DB_URL` | Yes | — | Postgres |
+| `COINGECKO_KEY` | Yes | — | CoinGecko Demo/Pro key |
+| `PRICE_CACHE_TTL_HOURS` | No | `24` | Skip API if cache fresh |
+| `MIN_LIQUIDITY_USD` | No | `1000` | Dex pair floor |
+| `UPSERT_CHUNK_SIZE` | No | `500` | Rows per upsert RPC |
+| `MAX_RUNTIME_SECONDS` | No | `19800` | Soft stop on fetch |
 
 ## Local run
 
 ```powershell
 cd workers/token_prices_import
 copy .env.example .env
-# Set SUPABASE_DB_URL and DUNE_KEY
+# Set SUPABASE_DB_URL and COINGECKO_KEY
 
 uv sync
 uv run python job.py
 ```
 
-## Monitoring SQL
+## Monitoring
 
 ```sql
-SELECT count(*) AS rows, max(price_date) AS max_price_date
-FROM wallets.token_prices;
-
-SELECT blockchain, count(*) AS n
+SELECT source, count(*), count(*) FILTER (WHERE price_usd IS NOT NULL) AS with_price
 FROM wallets.token_prices
-GROUP BY 1
-ORDER BY n DESC
-LIMIT 10;
+GROUP BY 1;
+
+SELECT count(*) FILTER (WHERE has_price_error AND COALESCE(token_quality,'') <> 'spam'
+  AND contract_address <> 'native') AS still_unpriced
+FROM wallets.wallet_token_positions;
 ```
 
-## Schema dependency
+## Schema
 
-RPC lives in sibling repo **`gsa-supabase-schema`**: `wallets.token_prices_upsert(p_rows jsonb)`. Deploy that migration before relying on this worker. See also `supabase/docs/wallets-token-prices-upsert.md` in that repo.
+See `gsa-supabase-schema`: `chains_price_subdomains`, `wallets_token_prices_spot_cache`.
 
 ## Legacy
 
-Replaces Edge `walcert-update-token-prices` + SQL wrappers `walcert.token_prices_import_data` / `walcert.token_prices_process` + pg_cron jobs `walcert_token_prices_*`. Staging table `walcert.token_prices_imported_data` is no longer written by this worker.
+Dune daily import into this table is retired. `walcert.token_prices` history is unchanged.

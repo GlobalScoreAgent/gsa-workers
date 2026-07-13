@@ -79,7 +79,7 @@ stateDiagram-v2
 
 Claim workers schedule: `0 0,6,12,18 * * *` UTC + `workflow_dispatch`.  
 CEX import schedule: `0 0 1,16 * *` UTC + `workflow_dispatch` (1st and 16th of each month ≈ every 15 days, same cadence as the former walcert CEX import cron).  
-Token prices import schedule: **paused** (manual `workflow_dispatch` only; daily `0 1 * * *` disabled pending cheaper data source / smaller export).
+Token prices import schedule: manual `workflow_dispatch` (DexScreener → CoinGecko enrich; optional cron later).
 
 ### What each worker does
 
@@ -89,7 +89,7 @@ Token prices import schedule: **paused** (manual `workflow_dispatch` only; daily
 | monthly | `is_valid_import_current_nonce_and_balance_monthly` | Balance/nonce JSON → `wallet_owner_details` (current metrics) |
 | origin | same monthly flag | First-activity history JSON → `wallet_owner_details.first_transaction_at` |
 | cex import | n/a | Dune rows → `wallets.cex_addresses` via `cex_addresses_upsert` |
-| token prices | n/a | Dune rows → `wallets.token_prices` via `token_prices_upsert` |
+| token prices | n/a | Unpriced positions → Dex/CG → `token_prices` → apply prices |
 | token contracts discovery | `wallet_transactions.does_need_discovery_contracts` + `chains.subdomain_alchemy` | Alchemy ERC-20 balances → `wallets.wallet_token_contracts` via `wallet_token_contracts_upsert` |
 | token portfolio discovery | `does_need_portfolio_discovery` after contract discovery | Alchemy amounts + DeFiLlama → `wallet_token_positions_insert` |
 
@@ -129,28 +129,28 @@ flowchart LR
 
 ## Reference-data workers
 
-`cex_addresses_import` and `token_prices_import` do **not** use claim / `next_eligible_at`. Pipeline:
+`cex_addresses_import` and `token_prices_import` do **not** use claim / `next_eligible_at`.
 
-1. Fetch latest Dune query result (paginated HTTP).
-2. Fail if zero rows.
-3. Call the matching upsert RPC once with the full row array.
+**CEX:** Fetch latest Dune query → fail if zero rows → `cex_addresses_upsert`.
+
+**Token prices:** Load chain `subdomain_*` → distinct unpriced ERC-20s → cache TTL → DexScreener → CoinGecko → `token_prices_upsert` → `wallet_token_positions_apply_prices`.
 
 ```mermaid
 flowchart LR
   ghaCex[GHA_cex_import] --> duneApi[Dune_API]
   ghaCex --> upsertCex["wallets.cex_addresses_upsert"]
   upsertCex --> cexTable[wallets.cex_addresses]
-  ghaPrices[GHA_token_prices] --> duneApi
-  ghaPrices --> upsertPrices["wallets.token_prices_upsert"]
-  upsertPrices --> pricesTable[wallets.token_prices]
+  ghaPrices[GHA_token_prices] --> dexCg[Dex_CoinGecko]
+  dexCg --> upsertPrices["wallets.token_prices_upsert"]
+  upsertPrices --> applyPos["apply_prices"]
 ```
 
 ## Time budgets
 
 | Limit | Value |
 |---|---|
-| GHA `timeout-minutes` | 360 (claim workers), 30 (cex / token-prices import) |
-| `MAX_RUNTIME_SECONDS` | 19800 (~5.5h) — soft stop inside claim `job.py` |
+| GHA `timeout-minutes` | 360 (claim workers / token-prices), 30 (cex import) |
+| `MAX_RUNTIME_SECONDS` | 19800 (~5.5h) — soft stop inside claim / enrich `job.py` |
 | Postgres `statement_timeout` | 300s |
 | HTTP client timeout | ~10s (daily/monthly), ~30s (origin), ~120s (Dune) |
 

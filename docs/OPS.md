@@ -75,27 +75,24 @@ More monitoring SQL: [SUPABASE.md](./SUPABASE.md). Worker details: [cex_addresse
 
 Reference-data job (`token_prices_import`). No claim / `Pending` / `next_eligible_at`.
 
-**Schedule paused** — do not rely on daily cron; use **Run workflow** only if needed (burns Dune export credits).
+Enriches unpriced ERC-20 rows via cache → DexScreener → CoinGecko. Requires `COINGECKO_KEY`.
 
 | Symptom | Likely cause | Action |
 |---|---|---|
-| Workflow fails immediately | Missing/invalid `DUNE_KEY` or `SUPABASE_DB_URL` | Check repo secrets; re-run |
-| `Dune returned 0 rows` | Empty/stale Dune result | Check query `7526826` on Dune; re-run when data exists |
-| `Dune HTTP 429` after retries | Rate limit (Free high-limit ≈ 40 rpm) | Wait a minute; keep `DUNE_PAGE_DELAY_SECONDS=2`; Plus can lower to `0.3` |
-| Upsert / function does not exist | Migration not applied | Deploy `wallets.token_prices_upsert` in **gsa-supabase-schema** first |
-| Upsert timeout | Large payload / DB load | Lower `UPSERT_CHUNK_SIZE` (default 5000); check `statement_timeout` |
-| `max(price_date)` old | Dune query stale or last run failed | Fix Dune query; `workflow_dispatch` on **Token prices import** |
+| Workflow fails immediately | Missing/invalid `COINGECKO_KEY` or `SUPABASE_DB_URL` | Check repo secrets; re-run |
+| CoinGecko 429 | Demo rate/credits | Rely on Dex + TTL; upgrade plan |
+| Upsert / apply missing | Migration not applied | Deploy spot-cache migration in **gsa-supabase-schema** |
+| Positions still unpriced | Miss / spam / low liquidity | Check `token_prices.source` and `token_quality` |
 
 **Re-run:** GitHub → **Actions** → **Token prices import** → **Run workflow**.
 
-**Verify after a successful run** (~2k–225k rows per Dune latest result depending on query filters; conflicts are no-ops):
-
 ```sql
-SELECT count(*) AS rows, max(price_date) AS max_price_date
-FROM wallets.token_prices;
+SELECT source, count(*), count(*) FILTER (WHERE price_usd IS NOT NULL) AS with_price
+FROM wallets.token_prices
+GROUP BY 1;
 ```
 
-Large imports use `DUNE_PAGE_DELAY_SECONDS=2` (Free ≈ 40 rpm) and `UPSERT_CHUNK_SIZE=5000`. Worker details: [token_prices_import/README.md](../workers/token_prices_import/README.md).
+Worker details: [token_prices_import/README.md](../workers/token_prices_import/README.md).
 
 ## Dual daily workers
 

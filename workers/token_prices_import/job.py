@@ -1,25 +1,23 @@
 #!/usr/bin/env python3
-"""Import token prices from Dune into wallets.token_prices."""
+"""Enrich unpriced wallet_token_positions via DexScreener → CoinGecko cache."""
 
 from __future__ import annotations
 
 import logging
 import os
-import re
 import sys
 import time
 import traceback
 from pathlib import Path
+from typing import Any
+
+import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 
+from coingecko import fetch_coingecko_prices
 from db import Database
-from dune import (
-    DEFAULT_PAGE_DELAY_SECONDS,
-    DEFAULT_PAGE_SIZE,
-    DuneError,
-    fetch_latest_rows,
-)
+from dexscreener import fetch_dex_prices
 
 logging.basicConfig(
     level=logging.INFO,
@@ -27,9 +25,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger("token_prices_import")
 
-DEFAULT_QUERY_ID = 7526826
-DEFAULT_UPSERT_CHUNK_SIZE = 5000
-_INSERTED_RE = re.compile(r"(\d+)\s+rows inserted", re.IGNORECASE)
+DEFAULT_TTL_HOURS = 24
+DEFAULT_MIN_LIQUIDITY_USD = 1000.0
+DEFAULT_UPSERT_CHUNK = 500
+DEFAULT_MAX_RUNTIME_SECONDS = 19800
 
 
 def env_required(name: str) -> str:
@@ -75,11 +74,8 @@ def load_dotenv_if_present() -> None:
             os.environ[key] = value.strip().strip('"').strip("'")
 
 
-def _parse_inserted_count(message: str) -> int:
-    match = _INSERTED_RE.search(message)
-    if not match:
-        return 0
-    return int(match.group(1))
+def _chunk(rows: list[dict[str, Any]], size: int) -> list[list[dict[str, Any]]]:
+    return [rows[i : i + size] for i in range(0, len(rows), size)]
 
 
 def main() -> int:
@@ -88,79 +84,164 @@ def main() -> int:
 
     try:
         dsn = env_required("SUPABASE_DB_URL")
-        dune_key = env_required("DUNE_KEY")
-        query_id = env_int("DUNE_QUERY_ID", DEFAULT_QUERY_ID)
-        page_size = env_int("DUNE_PAGE_SIZE", DEFAULT_PAGE_SIZE)
-        page_delay = env_float("DUNE_PAGE_DELAY_SECONDS", DEFAULT_PAGE_DELAY_SECONDS)
-        chunk_size = env_int("UPSERT_CHUNK_SIZE", DEFAULT_UPSERT_CHUNK_SIZE)
+        cg_key = env_required("COINGECKO_KEY")
+        ttl_hours = env_int("PRICE_CACHE_TTL_HOURS", DEFAULT_TTL_HOURS, minimum=1)
+        min_liq = env_float("MIN_LIQUIDITY_USD", DEFAULT_MIN_LIQUIDITY_USD, minimum=0.0)
+        upsert_chunk = env_int("UPSERT_CHUNK_SIZE", DEFAULT_UPSERT_CHUNK)
+        max_runtime = env_int("MAX_RUNTIME_SECONDS", DEFAULT_MAX_RUNTIME_SECONDS)
     except ValueError as exc:
         logger.error("%s", exc)
         return 1
 
     logger.info(
-        "Starting token prices import (query_id=%s, page_size=%s, page_delay=%.1fs, chunk_size=%s)",
-        query_id,
-        page_size,
-        page_delay,
-        chunk_size,
-    )
-
-    try:
-        rows = fetch_latest_rows(
-            dune_key,
-            query_id,
-            page_size=page_size,
-            page_delay_seconds=page_delay,
-        )
-    except DuneError as exc:
-        logger.error("Dune fetch failed: %s", exc)
-        return 1
-    except Exception:
-        logger.error("Dune fetch failed unexpectedly:\n%s", traceback.format_exc())
-        return 1
-
-    if not rows:
-        logger.error("Dune returned 0 rows; refusing to upsert empty payload")
-        return 1
-
-    total_chunks = (len(rows) + chunk_size - 1) // chunk_size
-    logger.info(
-        "Fetched %s rows from Dune; upserting in %s chunk(s) of up to %s",
-        len(rows),
-        total_chunks,
-        chunk_size,
+        "Starting token price enrich (ttl_h=%s, min_liq=%s, upsert_chunk=%s)",
+        ttl_hours,
+        min_liq,
+        upsert_chunk,
     )
 
     db = Database(dsn)
-    inserted_total = 0
+    upsert_rows: list[dict[str, Any]] = []
+    stats = {"candidates": 0, "cache_skip": 0, "dex": 0, "cg": 0, "miss": 0}
+
     try:
         db.connect()
-        for chunk_idx in range(total_chunks):
-            start = chunk_idx * chunk_size
-            chunk = rows[start : start + chunk_size]
-            logger.info(
-                "Upserting chunk %s/%s (%s rows)",
-                chunk_idx + 1,
-                total_chunks,
-                len(chunk),
-            )
+        chains = db.load_chains()
+        candidates = db.load_candidates()
+        fresh = db.load_fresh_cache(ttl_hours)
+        stats["candidates"] = len(candidates)
+
+        need: list[dict[str, Any]] = []
+        for row in candidates:
+            key = (int(row["chain_id"]), str(row["contract_address"]).lower())
+            if key in fresh:
+                stats["cache_skip"] += 1
+                continue
+            need.append(row)
+
+        logger.info(
+            "Candidates=%s cache_fresh_skip=%s to_fetch=%s chains=%s",
+            stats["candidates"],
+            stats["cache_skip"],
+            len(need),
+            len(chains),
+        )
+
+        # Group by chain_id
+        by_chain: dict[int, list[dict[str, Any]]] = {}
+        for row in need:
+            by_chain.setdefault(int(row["chain_id"]), []).append(row)
+
+        with httpx.Client(
+            headers={"User-Agent": "gsa-workers/token_prices_import"},
+            timeout=30.0,
+        ) as client:
+            for chain_id, rows in by_chain.items():
+                if time.monotonic() - started >= max_runtime:
+                    logger.warning("Max runtime reached; stopping fetch early")
+                    break
+
+                meta = chains.get(chain_id) or {}
+                dex_slug = meta.get("subdomain_dexscreener")
+                cg_slug = meta.get("subdomain_coingecko")
+                contracts = [str(r["contract_address"]).lower() for r in rows]
+                symbol_by = {
+                    str(r["contract_address"]).lower(): r.get("symbol") for r in rows
+                }
+
+                dex_hits: dict[str, dict[str, Any]] = {}
+                if dex_slug:
+                    dex_hits = fetch_dex_prices(
+                        client,
+                        contracts=contracts,
+                        dex_chain_id=str(dex_slug),
+                        min_liquidity_usd=min_liq,
+                    )
+
+                remaining = [c for c in contracts if c not in dex_hits]
+                cg_hits: dict[str, float] = {}
+                if remaining and cg_slug:
+                    cg_hits = fetch_coingecko_prices(
+                        client,
+                        api_key=cg_key,
+                        platform=str(cg_slug),
+                        contracts=remaining,
+                    )
+
+                for contract in contracts:
+                    if contract in dex_hits:
+                        hit = dex_hits[contract]
+                        upsert_rows.append(
+                            {
+                                "chain_id": chain_id,
+                                "contract_address": contract,
+                                "symbol": hit.get("symbol") or symbol_by.get(contract),
+                                "price_usd": hit["price_usd"],
+                                "source": "dexscreener",
+                                "liquidity_usd": hit.get("liquidity_usd"),
+                            }
+                        )
+                        stats["dex"] += 1
+                    elif contract in cg_hits:
+                        upsert_rows.append(
+                            {
+                                "chain_id": chain_id,
+                                "contract_address": contract,
+                                "symbol": symbol_by.get(contract),
+                                "price_usd": cg_hits[contract],
+                                "source": "coingecko",
+                                "liquidity_usd": None,
+                            }
+                        )
+                        stats["cg"] += 1
+                    else:
+                        upsert_rows.append(
+                            {
+                                "chain_id": chain_id,
+                                "contract_address": contract,
+                                "symbol": symbol_by.get(contract),
+                                "price_usd": None,
+                                "source": "miss",
+                                "liquidity_usd": None,
+                            }
+                        )
+                        stats["miss"] += 1
+
+                logger.info(
+                    "chain_id=%s fetched=%s dex=%s cg=%s miss_so_far=%s",
+                    chain_id,
+                    len(contracts),
+                    len(dex_hits),
+                    len(cg_hits),
+                    stats["miss"],
+                )
+
+        for chunk in _chunk(upsert_rows, upsert_chunk):
+            if not chunk:
+                continue
+            # JSON null for price_usd: omit empty string — sanitize keeps None → null
             message = db.upsert_token_prices(chunk)
-            inserted = _parse_inserted_count(message)
-            inserted_total += inserted
-            logger.info("Chunk %s/%s — %s", chunk_idx + 1, total_chunks, message)
+            logger.info("%s", message)
+
+        apply_msg = db.apply_prices()
+        logger.info("%s", apply_msg)
+
     except Exception:
-        logger.error("Upsert failed:\n%s", traceback.format_exc())
+        logger.error("Token price enrich failed:\n%s", traceback.format_exc())
         return 1
     finally:
         db.close()
 
     elapsed = time.monotonic() - started
     logger.info(
-        "Done in %.1fs — fetched %s rows, inserted %s new rows across %s chunk(s)",
+        "Done in %.1fs — candidates=%s cache_skip=%s dex=%s cg=%s miss=%s upserted=%s",
         elapsed,
-        len(rows),
-        inserted_total,
-        total_chunks,
+        stats["candidates"],
+        stats["cache_skip"],
+        stats["dex"],
+        stats["cg"],
+        stats["miss"],
+        len(upsert_rows),
     )
     return 0
 

@@ -23,7 +23,7 @@ Ops / stuck wallets: [docs/OPS.md](./docs/OPS.md). Deprecations: [docs/DEPRECATI
 ## Hard rules
 
 1. **Eligibility** (claim workers) uses `is_valid_*` + `*_next_eligible_at <= NOW()`, not legacy “status + day window” alone.
-2. **Claim workers** pipeline is always claim → RPC → save → `wallet_apply_*_snapshot` → `Processed`. Do not reintroduce pg_cron for those snapshots. **Reference-data** (`cex_addresses_import`, `token_prices_import`): Dune fetch → upsert RPC (no claim loop).
+2. **Claim workers** pipeline is always claim → RPC → save → `wallet_apply_*_snapshot` → `Processed`. Do not reintroduce pg_cron for those snapshots. **Reference-data:** `cex_addresses_import` (Dune → upsert); `token_prices_import` (DexScreener/CoinGecko → `token_prices` → apply to positions).
 3. **Do not revive** deprecated cron jobs listed in [DEPRECATION.md](./docs/DEPRECATION.md).
 4. DB helpers are **copy-pasted** per worker (`src/db.py`). If you change reconnect/retry or claim SQL, update **all claim-based workers** unless the change is worker-specific.
 5. Snapshot / upsert SQL changes belong in **`gsa-supabase-schema`** migrations (+ `supabase/scripts/`), then deploy to prod before relying on new worker behavior.
@@ -37,15 +37,15 @@ Ops / stuck wallets: [docs/OPS.md](./docs/OPS.md). Deprecations: [docs/DEPRECATI
 | `owner_wallet_nonce_balance_monthly` | `owner-wallet-nonce-balance-monthly.yml` | `wallet_apply_monthly_snapshot` | `wallet_owner_details` |
 | `owner_wallet_origin` | `owner-wallet-origin.yml` | `wallet_apply_owner_history_snapshot` | `wallet_owner_details.first_transaction_at` |
 | `cex_addresses_import` | `cex-addresses-import.yml` | `wallets.cex_addresses_upsert` | `wallets.cex_addresses` |
-| `token_prices_import` | `token-prices-import.yml` | `wallets.token_prices_upsert` | `wallets.token_prices` |
+| `token_prices_import` | `token-prices-import.yml` | `token_prices_upsert` + `wallet_token_positions_apply_prices` | `wallets.token_prices` → positions |
 | `wallet_token_contracts_discovery` | `wallet-token-contracts-discovery.yml` | `wallets.wallet_token_contracts_upsert` | `wallets.wallet_token_contracts` |
 | `wallet_token_portfolio_discovery` | `wallet-token-portfolio-discovery.yml` | `wallets.wallet_token_positions_insert` | `wallets.wallet_token_positions` |
 
 ## How to validate a change
 
-1. Local: `cd workers/<name>`, `uv sync`, `uv run python job.py` with `SUPABASE_DB_URL` (+ `ALCHEMY_KEY` / `ALCHEMY_FREE_KEY` or `DUNE_KEY` as needed).
+1. Local: `cd workers/<name>`, `uv sync`, `uv run python job.py` with `SUPABASE_DB_URL` (+ `ALCHEMY_KEY` / `ALCHEMY_FREE_KEY`, `DUNE_KEY`, or `COINGECKO_KEY` as needed).
 2. Or GitHub Actions → workflow → **Run workflow** (`workflow_dispatch`).
-3. Logs: look for `Claimed batch`, `Reconnecting to Postgres`, `Claim failed; will retry`, `Save/snapshot failed` (claim workers), Dune fetch / upsert messages (`cex_addresses_import`, `token_prices_import`), or `Done wt_id=` (`wallet_token_contracts_discovery`).
+3. Logs: look for `Claimed batch`, `Reconnecting to Postgres`, `Claim failed; will retry`, `Save/snapshot failed` (claim workers), Dune/CEX upsert messages, token-price enrich (`dex=`/`cg=`/`miss=`), or `Done wt_id=` (`wallet_token_contracts_discovery`).
 4. SQL: eligible counts and stuck `Completed` queries in [docs/SUPABASE.md](./docs/SUPABASE.md); CEX / token-prices / discovery monitoring in the same doc.
 
 ## When to touch which repo
@@ -53,5 +53,5 @@ Ops / stuck wallets: [docs/OPS.md](./docs/OPS.md). Deprecations: [docs/DEPRECATI
 | Change | Repo |
 |---|---|
 | Claim SQL, retries, job loop, RPC clients, GHA env | **gsa-workers** |
-| `wallet_apply_*_snapshot`, `wallets.cex_addresses_upsert`, `wallets.token_prices_upsert`, `wallets.wallet_token_contracts_upsert`, `wallets.wallet_token_positions_insert`, triggers, indexes, `next_eligible_at` / discovery flags | **gsa-supabase-schema** |
+| `wallet_apply_*_snapshot`, `wallets.cex_addresses_upsert`, `wallets.token_prices_upsert`, `wallets.wallet_token_positions_apply_prices`, `wallets.wallet_token_contracts_upsert`, `wallets.wallet_token_positions_insert`, chain price subdomains, triggers, indexes, `next_eligible_at` / discovery flags | **gsa-supabase-schema** |
 | Deploy order | Schema first (if needed) → push worker → `workflow_dispatch` |

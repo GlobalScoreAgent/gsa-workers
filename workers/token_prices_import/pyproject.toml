@@ -1,7 +1,7 @@
 [project]
 name = "token-prices-import"
 version = "0.1.0"
-description = "Import token prices from Dune into wallets.token_prices for GSA"
+description = "Enrich unpriced positions via DexScreener/CoinGecko into wallets.token_prices"
 requires-python = ">=3.12"
 dependencies = [
     "httpx>=0.28",
