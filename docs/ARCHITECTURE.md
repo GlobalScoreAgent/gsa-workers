@@ -79,7 +79,7 @@ stateDiagram-v2
 
 Claim workers schedule: `0 0,6,12,18 * * *` UTC + `workflow_dispatch`.  
 CEX import schedule: `0 0 1,16 * *` UTC + `workflow_dispatch` (1st and 16th of each month ≈ every 15 days, same cadence as the former walcert CEX import cron).  
-Token prices import schedule: manual `workflow_dispatch` (DexScreener → CoinGecko enrich; optional cron later).
+Token prices import schedule: `0 0,6,12,18 * * *` UTC + `workflow_dispatch` (DexScreener → CoinGecko enrich; same cadence as claim workers).
 
 ### What each worker does
 
