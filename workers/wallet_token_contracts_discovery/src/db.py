@@ -55,15 +55,18 @@ UPDATE erc_8004.wallet_transactions
 SET
   does_need_discovery_contracts = FALSE,
   discovery_contracts_claimed_at = NULL,
-  discovery_contracts_claimed_by = NULL
+  has_discovery_contracts_error = FALSE,
+  discovery_contracts_message_error = NULL
 WHERE id = %(row_id)s
 """
 
-CLEAR_CLAIM_SQL = """
+MARK_ERROR_SQL = """
 UPDATE erc_8004.wallet_transactions
 SET
+  does_need_discovery_contracts = FALSE,
   discovery_contracts_claimed_at = NULL,
-  discovery_contracts_claimed_by = NULL
+  has_discovery_contracts_error = TRUE,
+  discovery_contracts_message_error = %(error_message)s
 WHERE id = %(row_id)s
 """
 
@@ -77,6 +80,7 @@ SELECT wallets.wallet_token_contracts_replace(
 
 CLAIM_MAX_ATTEMPTS = 3
 CLAIM_RETRY_BASE_SECONDS = 2.0
+ERROR_MESSAGE_MAX_LEN = 2000
 RETRYABLE_DB_EXCEPTIONS = (psycopg.OperationalError, psycopg.InterfaceError)
 _NO_RECONNECT_EXCEPTIONS = (
     psycopg.errors.QueryCanceled,
@@ -207,18 +211,23 @@ class Database:
             self._conn.commit()
             if result is None:
                 return ""
-            # dict_row: first column value
             return str(next(iter(result.values())))
 
         return self._run_with_db_retry("replace_and_mark_done", _save)
 
-    def clear_claim(self, row_id: int) -> None:
-        """Release claim lock without marking done (leave flag pending for retry)."""
+    def mark_error(self, row_id: int, error_message: str) -> None:
+        """Advance queue after failure: flag FALSE + persist error columns."""
+        msg = (error_message or "unknown error").strip()
+        if len(msg) > ERROR_MESSAGE_MAX_LEN:
+            msg = msg[: ERROR_MESSAGE_MAX_LEN - 3] + "..."
 
-        def _clear() -> None:
+        def _mark() -> None:
             assert self._conn is not None
             with self._conn.cursor() as cur:
-                cur.execute(CLEAR_CLAIM_SQL, {"row_id": row_id})
+                cur.execute(
+                    MARK_ERROR_SQL,
+                    {"row_id": row_id, "error_message": msg},
+                )
             self._conn.commit()
 
-        self._run_with_db_retry("clear_claim", _clear)
+        self._run_with_db_retry("mark_error", _mark)

@@ -43,11 +43,13 @@ Daily also uses claim metadata:
 
 | Column | Role |
 |---|---|
-| `does_need_discovery_contracts` | `NULL`/`true` = pending; `false` = done |
-| `discovery_contracts_claimed_at` | Claim lock / stale reclaim |
-| `discovery_contracts_claimed_by` | `WORKER_ID` |
+| `does_need_discovery_contracts` | `NULL`/`true` = pending; `false` = attempted (success or error) |
+| `discovery_contracts_claimed_at` | Claim lock / stale reclaim (cleared after attempt) |
+| `discovery_contracts_claimed_by` | Audit id `wallet_token_contracts_discovery/gha:{WORKER_ID}` (kept after attempt) |
+| `has_discovery_contracts_error` | `TRUE` if last attempt failed |
+| `discovery_contracts_message_error` | Last error text; `NULL` on success |
 
-Eligibility: flag pending **and** `chains.subdomain_alchemy` non-empty. New `wallet_transactions` inserts get the flag from trigger `trg_wallet_transactions_discovery_flag_bi`.
+Eligibility: flag pending **and** `chains.subdomain_alchemy` non-empty. New `wallet_transactions` inserts get the flag from trigger `trg_wallet_transactions_discovery_flag_bi`. On process error the worker sets flag `FALSE` and fills the error columns so the queue does not re-claim the same row forever.
 
 ### `next_eligible_at` semantics
 
@@ -260,7 +262,8 @@ LIMIT 10;
 ```sql
 SELECT
   count(*) FILTER (WHERE does_need_discovery_contracts IS DISTINCT FROM FALSE) AS pending,
-  count(*) FILTER (WHERE does_need_discovery_contracts = FALSE) AS done
+  count(*) FILTER (WHERE does_need_discovery_contracts = FALSE) AS attempted,
+  count(*) FILTER (WHERE has_discovery_contracts_error IS TRUE) AS errors
 FROM erc_8004.wallet_transactions;
 
 SELECT c.name, count(*) AS pending
@@ -273,12 +276,14 @@ ORDER BY pending DESC;
 SELECT count(*) AS contracts, count(DISTINCT wallet_id) AS wallets
 FROM wallets.wallet_token_contracts;
 
--- Re-queue one chain after enabling subdomain_alchemy
+-- Re-queue failures
 -- UPDATE erc_8004.wallet_transactions
 -- SET does_need_discovery_contracts = TRUE,
+--     has_discovery_contracts_error = NULL,
+--     discovery_contracts_message_error = NULL,
 --     discovery_contracts_claimed_at = NULL,
 --     discovery_contracts_claimed_by = NULL
--- WHERE chain_id = <id>;
+-- WHERE has_discovery_contracts_error IS TRUE;
 ```
 
 ## Related docs

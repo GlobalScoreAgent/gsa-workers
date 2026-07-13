@@ -15,7 +15,7 @@ import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 
-from alchemy_tokens import AlchemyError, fetch_erc20_contracts_with_balance
+from alchemy_tokens import fetch_erc20_contracts_with_balance
 from db import CLAIM_RETRY_BASE_SECONDS, Database
 
 logging.basicConfig(
@@ -23,6 +23,8 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(message)s",
 )
 logger = logging.getLogger("wallet_token_contracts_discovery")
+
+CLAIMED_BY_PREFIX = "wallet_token_contracts_discovery/gha"
 
 
 def env_int(name: str, default: int, minimum: int = 1, maximum: int | None = None) -> int:
@@ -43,6 +45,14 @@ def env_str(name: str, default: str) -> str:
     if raw is None or raw.strip() == "":
         return default
     return raw.strip()
+
+
+def build_claimed_by(worker_suffix: str) -> str:
+    """Stable audit id stored in discovery_contracts_claimed_by."""
+    suffix = worker_suffix.strip() or "discovery-a"
+    if suffix.startswith(CLAIMED_BY_PREFIX):
+        return suffix
+    return f"{CLAIMED_BY_PREFIX}:{suffix}"
 
 
 async def process_row(
@@ -72,7 +82,8 @@ async def run_job() -> int:
         logger.error("ALCHEMY_FREE_KEY (or ALCHEMY_KEY) is required")
         return 1
 
-    worker_id = env_str("WORKER_ID", "discovery-a")
+    worker_suffix = env_str("WORKER_ID", "discovery-a")
+    claimed_by = build_claimed_by(worker_suffix)
     concurrency = env_int("CONCURRENCY", default=10, minimum=1, maximum=20)
     claim_batch_size = env_int("CLAIM_BATCH_SIZE", default=50, minimum=1)
     claim_stale_seconds = env_int("CLAIM_STALE_SECONDS", default=7200, minimum=60)
@@ -81,9 +92,9 @@ async def run_job() -> int:
     db = Database(dsn)
     db.connect()
     logger.info(
-        "Started worker_id=%s concurrency=%s claim_batch_size=%s "
+        "Started claimed_by=%s concurrency=%s claim_batch_size=%s "
         "claim_stale_seconds=%s max_runtime=%ss",
-        worker_id,
+        claimed_by,
         concurrency,
         claim_batch_size,
         claim_stale_seconds,
@@ -115,7 +126,7 @@ async def run_job() -> int:
                 async with db_lock:
                     try:
                         rows = db.claim_rows(
-                            worker_id=worker_id,
+                            worker_id=claimed_by,
                             limit=claim_batch_size,
                             stale_seconds=claim_stale_seconds,
                         )
@@ -170,21 +181,22 @@ async def run_job() -> int:
                             )
                             return row_id, True, len(contracts)
                         except Exception as exc:
+                            err_text = f"{exc.__class__.__name__}: {exc}"
                             logger.warning(
                                 "Row wt_id=%s wallet_id=%s chain_id=%s failed: %s",
                                 row_id,
                                 wallet_id,
                                 chain_id,
-                                exc,
+                                err_text,
                             )
                             try:
                                 async with db_lock:
-                                    db.clear_claim(row_id)
-                            except Exception as clear_exc:
+                                    db.mark_error(row_id, err_text)
+                            except Exception as mark_exc:
                                 logger.error(
-                                    "clear_claim failed wt_id=%s: %s",
+                                    "mark_error failed wt_id=%s: %s",
                                     row_id,
-                                    clear_exc,
+                                    mark_exc,
                                 )
                             return row_id, False, 0
 
@@ -203,8 +215,8 @@ async def run_job() -> int:
         db.close()
 
     logger.info(
-        "Finished worker_id=%s processed=%s completed=%s errors=%s elapsed=%.0fs",
-        worker_id,
+        "Finished claimed_by=%s processed=%s completed=%s errors=%s elapsed=%.0fs",
+        claimed_by,
         processed,
         completed,
         errors,
