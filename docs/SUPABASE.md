@@ -1,8 +1,8 @@
 # Supabase / Postgres interaction
 
-Workers connect with **direct Postgres** via `SUPABASE_DB_URL` (`psycopg`), not supabase-js or Edge Functions. Schema of truth for wallet claim jobs: `erc_8004`. Reference-data imports (CEX addresses, token prices) use schema `wallets`.
+Workers connect with **direct Postgres** via `SUPABASE_DB_URL` (`psycopg`), not supabase-js or Edge Functions. Schema of truth for wallet claim jobs: `erc_8004`. Reference-data imports (CEX addresses, token prices) use schema `wallets`. URI ingest uses `erc_8004.uri_documents` + `erc_8004.agent_manifest`.
 
-Schema migrations and snapshot/upsert SQL live in the sibling repo **`gsa-supabase-schema`** (functions `wallet_apply_*_snapshot`, `wallets.cex_addresses_upsert`, `wallets.token_prices_upsert`, `wallet_token_positions_apply_prices`, `wallet_token_positions_mark_price_misses`, `wallet_token_contracts_upsert`, `wallet_token_positions_insert`, `wallet_lp_positions_upsert`, triggers, indexes). Code of truth for claim/save SQL in this repo: each worker’s `src/db.py`. Process catalog: [PROCESSES.md](./PROCESSES.md). LP refresh (15d) still pending: [PENDING_LP_POSITIONS.md](./PENDING_LP_POSITIONS.md).
+Schema migrations and snapshot/upsert SQL live in the sibling repo **`gsa-supabase-schema`** (functions `wallet_apply_*_snapshot`, CEX / token_prices / discovery upserts, URI indexes + helpers, triggers). Code of truth for claim/save SQL in this repo: each worker’s `src/db.py`. Process catalog: [PROCESSES.md](./PROCESSES.md). LP refresh (15d) still pending: [PENDING_LP_POSITIONS.md](./PENDING_LP_POSITIONS.md).
 
 ## Connection
 
@@ -19,8 +19,9 @@ Schema migrations and snapshot/upsert SQL live in the sibling repo **`gsa-supaba
 |---|---|
 | `erc_8004.wallets` | Claim queue, JSON payloads, status, `next_eligible_at` |
 | `erc_8004.chains` | Active chains + `subdomain_alchemy` for Alchemy fallback |
-| `erc_8004.wallet_transactions` | Daily snapshot: current nonce/balance + 30d history + category |
-| `erc_8004.chain_nonces` | Daily snapshot: per-chain daily nonce totals (incremental) |
+| `erc_8004.wallet_daily_metrics` | Daily flat nonce/balance per wallet×chain×date (written by daily snapshot) |
+| `erc_8004.wallet_transactions` | Read model: current nonce/balance + 30d history + category (rollup TBD) |
+| `erc_8004.chain_nonces` | Per-chain daily nonce totals (not written by current daily snapshot) |
 | `erc_8004.wallet_owner_details` | Monthly + origin snapshots: owner metrics / first tx |
 | `wallets.cex_addresses` | CEX address reference list (Dune import) |
 | `wallets.token_prices` | Spot USD cache PK `(chain_id, contract)`; Dex/CG enrich |
@@ -28,6 +29,10 @@ Schema migrations and snapshot/upsert SQL live in the sibling repo **`gsa-supaba
 | `wallets.wallet_token_positions` | Fungible positions (native=`'native'` + ERC-20); initial INSERT discovery |
 | `wallets.lp_pools` | Classic LP scan targets (`active` toggle); seeded Aerodrome V1 on Base |
 | `wallets.wallet_lp_positions` | LP snapshots (UniV3 NFT + classic); PK `(wallet_id, chain_id, position_kind, nft_manager, token_id, pool)`; FKs to `wallets`/`chains`; `calculated_at` for future 15d refresh |
+| `erc_8004.uri_documents` | Canonical resolved JSON by `uri_hash = md5(uri)` (UNIQUE); TTL `expires_at` (~15d write); `fetched_at` / `document` / `status` |
+| `erc_8004.agent_manifest` | Envelope per agent/feedback (`uri_document_id` FK); `source`, revoke fields, `has_download_error`, `reprocess_count`, `is_processed` — **no** `data`/`url` columns |
+| `erc_8004.agents` | Queue via `is_uri_processed` + `agent_uri_raw` |
+| `erc_8004.registration_feedbacks` | Queue via `is_feedback_processed` (`feedback_on_chain` / URI / endpoint); `is_uri_processed` unused for this pipeline |
 
 ## Per-worker column map
 
@@ -78,6 +83,27 @@ Trigger `trg_wallet_transactions_portfolio_flag_bu` sets portfolio pending when 
 
 Trigger `trg_wallet_transactions_lp_flag_bu` sets LP pending when portfolio discovery completes successfully.
 
+### URI ingest (`uri_documents` / `agent_manifest`)
+
+| Column / object | Role |
+|---|---|
+| `uri_documents.uri` | Canonical URI string (may be long; uniqueness is on hash) |
+| `uri_documents.uri_hash` | `md5(uri)` UNIQUE lookup key for upsert |
+| `uri_documents.document` | Resolved JSON payload |
+| `uri_documents.fetched_at` / `expires_at` | Refresh clock; reprocess refreshes off-chain when `fetched_at` &gt; 15d |
+| `uri_documents.status` | e.g. `valid` for refresh eligibility |
+| `agent_manifest.uri_document_id` | FK to canonical doc |
+| `agent_manifest.provider` / ids | Link back to `agents` or `registration_feedbacks` to recover URI (no `url` column) |
+| `agent_manifest.has_download_error` / `reprocess_count` | Error queue (max 3 retries; first immediate; later need `updated_at` &gt; 3d ago) |
+| `agent_manifest.does_need_manual_reprocess` | Force into error reprocess path |
+| `agent_manifest.is_processed` | Manifest consume flag; set `false` after successful error fix or **changed** refresh |
+| `agents.is_uri_processed` | `false` = pending resolve |
+| `registration_feedbacks.is_feedback_processed` | `false` = pending on-chain or external resolve |
+
+Partial indexes (schema migrations `00065`–`00069`): `idx_agents_pending_uri_processing`, `idx_rf_pending_uri_resolve`, `idx_rf_pending_on_chain`, `idx_am_pending_reprocess`, `idx_ud_pending_refresh_offchain`. Claim predicates use `= false` (not `IS DISTINCT FROM TRUE`) so indexes hit.
+
+Synthetic on-chain URI: `internal_on_chain_id_{feedback_id}`, `source='on_chain'` — no HTTP.
+
 ### `next_eligible_at` semantics
 
 | Value | Meaning |
@@ -106,7 +132,7 @@ Called inline by the worker after a successful `Completed` save:
 
 | Worker | Function | Writes |
 |---|---|---|
-| daily | `erc_8004.wallet_apply_daily_snapshot(p_wallet_id)` | `wallet_transactions`, `chain_nonces`; status → `Processed` |
+| daily | `erc_8004.wallet_apply_daily_snapshot(p_wallet_id)` | `wallet_daily_metrics` (flat); status → `Processed`. **Does not** update `wallet_transactions` (rollup pending) |
 | monthly | `erc_8004.wallet_apply_monthly_snapshot(p_wallet_id)` | `wallet_owner_details` (nonce/balance/type); status → `Processed` |
 | origin | `erc_8004.wallet_apply_owner_history_snapshot(p_wallet_id)` | `wallet_owner_details.first_transaction_at`; status → `Processed` |
 
@@ -406,10 +432,78 @@ WHERE calculated_at < NOW() - interval '15 days';
 
 **Full rediscovery** (ask before TRUNCATE): `wallet_lp_positions_discovery_reset.sql` then `workflow_dispatch` `wallet-lp-positions-discovery`.
 
+### Agent URI resolve (pending queues)
+
+Claim predicates match worker SQL (`is_*_processed = false`). Prefer monitoring these counts over raw table size:
+
+```sql
+-- Agents pending first ingest
+SELECT count(*) AS agents_pending
+FROM erc_8004.agents
+WHERE is_uri_processed = false
+  AND agent_uri_raw IS NOT NULL
+  AND agent_uri_raw <> '';
+
+-- On-chain feedbacks (DB materialize, no HTTP)
+SELECT count(*) AS on_chain_pending
+FROM erc_8004.registration_feedbacks
+WHERE is_feedback_processed = false
+  AND feedback_type = 'feedback_on_chain'
+  AND agent_id IS NOT NULL;
+
+-- External feedback URI / endpoint
+SELECT count(*) AS external_feedbacks_pending
+FROM erc_8004.registration_feedbacks
+WHERE is_feedback_processed = false
+  AND feedback_type IN ('feedback_uri', 'feedback_end_point')
+  AND agent_id IS NOT NULL;
+
+SELECT count(*) AS uri_documents, count(*) FILTER (WHERE status = 'valid') AS valid_docs
+FROM erc_8004.uri_documents;
+
+SELECT source, count(*) AS manifests,
+       count(*) FILTER (WHERE has_download_error IS TRUE) AS with_dl_error
+FROM erc_8004.agent_manifest
+GROUP BY 1
+ORDER BY manifests DESC;
+```
+
+### Agent URI reprocess (errors + off-chain refresh)
+
+```sql
+-- Download errors eligible (matches CLAIM_ERROR_MANIFESTS_SQL)
+SELECT count(*) AS errors_eligible
+FROM erc_8004.agent_manifest
+WHERE
+  (has_download_error = true AND reprocess_count IS NULL)
+  OR does_need_manual_reprocess = TRUE
+  OR (
+    has_download_error = true
+    AND reprocess_count IS NOT NULL
+    AND reprocess_count < 3
+    AND updated_at < NOW() - interval '3 days'
+  );
+
+-- Off-chain docs older than 15 days (HTTP/IPFS only; excludes synthetic on-chain)
+SELECT count(*) AS refresh_offchain_eligible
+FROM erc_8004.uri_documents
+WHERE status = 'valid'
+  AND fetched_at < NOW() - interval '15 days'
+  AND uri ~* '^(https?://|ipfs://)'
+  AND uri NOT LIKE 'internal_on_chain_id_%';
+
+SELECT COALESCE(reprocess_count, 0) AS n, count(*)
+FROM erc_8004.agent_manifest
+WHERE has_download_error IS TRUE
+GROUP BY 1
+ORDER BY 1;
+```
+
+Re-run: **Actions** → `agent-uri-resolve` or `agent-uri-reprocess` → **Run workflow**. Worker READMEs: [`agent_uri_resolve`](../workers/agent_uri_resolve/README.md), [`agent_uri_reprocess`](../workers/agent_uri_reprocess/README.md).
+
 ## Related docs
 
 - [ARCHITECTURE.md](./ARCHITECTURE.md) — GHA pipeline and state machine
-- [OPS.md](./OPS.md) — stuck wallets, logs, when to touch schema
-- [PROCESSES.md](./PROCESSES.md) — live catalog (#8 LP discovery)
-- Worker README: `workers/wallet_lp_positions_discovery/README.md`
+- [OPS.md](./OPS.md) — stuck wallets, URI ops, logs
+- [PROCESSES.md](./PROCESSES.md) — live catalog (#9–10 URI ingest)
 - Worker READMEs under `workers/*/README.md`
