@@ -76,6 +76,34 @@ updated AS (
 SELECT * FROM updated
 """
 
+CLAIM_FEEDBACKS_ON_CHAIN_SQL = """
+WITH candidates AS (
+  SELECT rf.id
+  FROM erc_8004.registration_feedbacks rf
+  WHERE rf.is_feedback_processed = false
+    AND rf.feedback_type = 'feedback_on_chain'
+    AND rf.agent_id IS NOT NULL
+  ORDER BY rf.id
+  LIMIT %(limit)s
+  FOR UPDATE OF rf SKIP LOCKED
+),
+updated AS (
+  UPDATE erc_8004.registration_feedbacks rf
+  SET is_feedback_processed = TRUE, last_updated_at = NOW()
+  FROM candidates c
+  WHERE rf.id = c.id
+  RETURNING
+    rf.id,
+    rf.agent_id,
+    rf.feedback_type,
+    rf.is_revoked,
+    rf.revoked_at,
+    rf.on_chain_created_at,
+    rf.registration_feedback_json
+)
+SELECT * FROM updated
+"""
+
 MARK_AGENT_DONE_SQL = """
 UPDATE erc_8004.agents
 SET is_uri_processed = TRUE, uri_processed_at = NOW()
@@ -244,6 +272,17 @@ class Database:
             return rows
 
         return self._run_with_db_retry("claim_feedbacks", _claim)
+
+    def claim_feedbacks_on_chain(self, limit: int) -> list[dict[str, Any]]:
+        def _claim() -> list[dict[str, Any]]:
+            assert self._conn is not None
+            with self._conn.cursor() as cur:
+                cur.execute(CLAIM_FEEDBACKS_ON_CHAIN_SQL, {"limit": limit})
+                rows = list(cur.fetchall())
+            self._conn.commit()
+            return rows
+
+        return self._run_with_db_retry("claim_feedbacks_on_chain", _claim)
 
     def lookup_document(self, uri: str) -> dict[str, Any] | None:
         def _lookup() -> dict[str, Any] | None:

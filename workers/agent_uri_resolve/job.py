@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import sys
@@ -232,6 +233,75 @@ async def process_feedback(
                 logger.exception("Failed to persist feedback error id=%s", feedback_id)
 
 
+def _on_chain_document(row: dict[str, Any]) -> Any:
+    doc = row.get("registration_feedback_json")
+    if doc is None:
+        raise ValueError("registration_feedback_json is empty")
+    if isinstance(doc, str):
+        doc = json.loads(doc) if doc.strip() else None
+    if not doc or doc == {}:
+        raise ValueError("registration_feedback_json is empty")
+    return doc
+
+
+def process_feedback_on_chain(db: Database, row: dict[str, Any]) -> None:
+    """Materialize feedback_on_chain into uri_documents + agent_manifest (no fetch)."""
+    feedback_id = int(row["id"])
+    agent_id = int(row["agent_id"])
+    provider = f"feedback_erc_8004_id_{feedback_id}"
+    synthetic_uri = f"internal_on_chain_id_{feedback_id}"
+    try:
+        document = _on_chain_document(row)
+        doc_id = db.upsert_document(
+            uri=synthetic_uri,
+            document=document,
+            source_gateway="on_chain",
+            cid=None,
+        )
+        db.upsert_manifest(
+            {
+                "agent_id": agent_id,
+                "provider": provider,
+                "uri_document_id": doc_id,
+                "source": "on_chain",
+                "is_revoke": row.get("is_revoked"),
+                "revoke_at": row.get("revoked_at"),
+                "feedback_created_at": row.get("on_chain_created_at"),
+                "processed_type": "feedback_on_chain",
+                "is_active": True,
+                "url_type": "on_chain",
+                "has_download_error": False,
+                "download_error_message": None,
+            }
+        )
+        logger.info("On-chain feedback id=%s ok=True", feedback_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("On-chain feedback id=%s failed: %s", feedback_id, exc)
+        try:
+            db.upsert_manifest(
+                {
+                    "agent_id": agent_id,
+                    "provider": provider,
+                    "uri_document_id": None,
+                    "source": "on_chain",
+                    "is_revoke": row.get("is_revoked"),
+                    "revoke_at": row.get("revoked_at"),
+                    "feedback_created_at": row.get("on_chain_created_at"),
+                    "processed_type": "feedback_on_chain",
+                    "is_active": False,
+                    "url_type": "on_chain_exception",
+                    "has_download_error": True,
+                    "download_error_message": (
+                        f"{exc} uri={truncate_uri_for_error(synthetic_uri)}"
+                    ),
+                }
+            )
+        except Exception:
+            logger.exception(
+                "Failed to persist on-chain feedback error id=%s", feedback_id
+            )
+
+
 async def run_job() -> int:
     load_dotenv_if_present()
     dsn = os.environ.get("SUPABASE_DB_URL")
@@ -258,8 +328,8 @@ async def run_job() -> int:
     )
 
     total_agents = 0
+    total_on_chain = 0
     total_feedbacks = 0
-    empty_rounds = 0
 
     try:
         async with httpx.AsyncClient() as http:
@@ -285,12 +355,28 @@ async def run_job() -> int:
                     continue
 
                 if agents:
-                    empty_rounds = 0
                     logger.info("Claimed agents batch size=%s", len(agents))
                     await asyncio.gather(
                         *[process_agent(db, resolver, row, sem) for row in agents]
                     )
                     total_agents += len(agents)
+                    continue
+
+                try:
+                    on_chain = db.claim_feedbacks_on_chain(claim_batch)
+                except Exception as exc:
+                    logger.warning(
+                        "Claim on-chain feedbacks failed; retry next loop: %s",
+                        exc,
+                    )
+                    await asyncio.sleep(CLAIM_RETRY_BASE_SECONDS)
+                    continue
+
+                if on_chain:
+                    logger.info("Claimed on-chain feedbacks batch size=%s", len(on_chain))
+                    for row in on_chain:
+                        process_feedback_on_chain(db, row)
+                    total_on_chain += len(on_chain)
                     continue
 
                 try:
@@ -301,7 +387,6 @@ async def run_job() -> int:
                     continue
 
                 if feedbacks:
-                    empty_rounds = 0
                     logger.info("Claimed feedbacks batch size=%s", len(feedbacks))
                     await asyncio.gather(
                         *[
@@ -312,8 +397,7 @@ async def run_job() -> int:
                     total_feedbacks += len(feedbacks)
                     continue
 
-                empty_rounds += 1
-                logger.info("No pending agents/feedbacks; exiting")
+                logger.info("No pending agents/on-chain/feedbacks; exiting")
                 break
 
     except Exception:
@@ -323,8 +407,9 @@ async def run_job() -> int:
         db.close()
 
     logger.info(
-        "Done agents=%s feedbacks=%s elapsed=%.1fs",
+        "Done agents=%s on_chain=%s feedbacks=%s elapsed=%.1fs",
         total_agents,
+        total_on_chain,
         total_feedbacks,
         time.monotonic() - started,
     )
