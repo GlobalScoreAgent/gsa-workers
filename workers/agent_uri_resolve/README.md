@@ -23,7 +23,7 @@ Loop priority per round: agents → on-chain → external feedbacks. Empty on al
 ## Schedule
 
 Twice daily UTC (`00:00`, `12:00`) + `workflow_dispatch`. Soft `MAX_RUNTIME_SECONDS=19800`.
-Error-retry / refresh cadence is reserved for a separate worker.
+Error-retry / off-chain refresh: sibling worker [`agent_uri_reprocess`](../agent_uri_reprocess/README.md) at `06:00` / `18:00` UTC.
 
 ## Env
 

@@ -1,0 +1,51 @@
+name: Agent URI reprocess
+
+on:
+  schedule:
+    # Complements agent-uri-resolve (00:00 / 12:00 UTC).
+    - cron: "0 6 * * *"
+    - cron: "0 18 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: agent-uri-reprocess
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        working-directory: workers/agent_uri_reprocess
+        run: uv sync
+
+      - name: Install Playwright Chromium
+        working-directory: workers/agent_uri_reprocess
+        run: uv run playwright install --with-deps chromium
+
+      - name: Run agent URI reprocess
+        working-directory: workers/agent_uri_reprocess
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          PINATA_GATEWAY: ${{ secrets.PINATA_GATEWAY }}
+          SCRAPE_DO_TOKEN: ${{ secrets.SCRAPE_DO_TOKEN }}
+          CLAIM_BATCH_SIZE: "20"
+          CONCURRENCY: "4"
+          MAX_RUNTIME_SECONDS: "19800"
+          WORKER_ID: "reprocess-a"
+        run: uv run python job.py

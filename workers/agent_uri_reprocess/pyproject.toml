@@ -1,0 +1,15 @@
+[project]
+name = "agent-uri-reprocess"
+version = "0.1.0"
+description = "Retry agent_manifest download errors and refresh off-chain uri_documents"
+requires-python = ">=3.12"
+dependencies = [
+    "httpx>=0.28",
+    "psycopg[binary]>=3.2",
+    "beautifulsoup4>=4.12",
+    "playwright>=1.49",
+    "playwright-stealth>=1.0.6",
+]
+
+[dependency-groups]
+dev = []
