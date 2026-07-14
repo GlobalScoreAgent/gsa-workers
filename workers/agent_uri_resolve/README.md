@@ -13,6 +13,10 @@ GHA worker that replaces Edge `agent-uri-batch-processor` / `feedback-uri-batch-
 Requires schema migrations:
 - `00000000000065_uri_documents_manifest_fk.sql`
 - `00000000000066_uri_documents_uri_hash_drop_manifest_dupes.sql`
+- `00000000000067_rf_pending_uri_resolve_index.sql` (partial index for feedback claims; agents use existing `idx_agents_pending_uri_processing`)
+
+Claim predicates match those partial indexes (`is_*_processed = false`, not `IS DISTINCT FROM TRUE`).
+
 
 ## Schedule
 

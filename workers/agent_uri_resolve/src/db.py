@@ -30,9 +30,9 @@ CLAIM_AGENTS_SQL = """
 WITH candidates AS (
   SELECT a.id
   FROM erc_8004.agents a
-  WHERE a.is_uri_processed IS DISTINCT FROM TRUE
+  WHERE a.is_uri_processed = false
     AND a.agent_uri_raw IS NOT NULL
-    AND btrim(a.agent_uri_raw) <> ''
+    AND a.agent_uri_raw <> ''
   ORDER BY a.id
   LIMIT %(limit)s
   FOR UPDATE SKIP LOCKED
@@ -51,7 +51,7 @@ CLAIM_FEEDBACKS_SQL = """
 WITH candidates AS (
   SELECT rf.id
   FROM erc_8004.registration_feedbacks rf
-  WHERE rf.is_feedback_processed IS DISTINCT FROM TRUE
+  WHERE rf.is_feedback_processed = false
     AND rf.feedback_type IN ('feedback_uri', 'feedback_end_point')
     AND rf.agent_id IS NOT NULL
   ORDER BY rf.id
