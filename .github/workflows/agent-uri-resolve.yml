@@ -2,11 +2,9 @@ name: Agent URI resolve
 
 on:
   schedule:
+    # Two runs/day; reprocess + refresh workers will own the other cadence slots.
     - cron: "0 0 * * *"
-    - cron: "30 5 * * *"
-    - cron: "0 11 * * *"
-    - cron: "30 16 * * *"
-    - cron: "0 22 * * *"
+    - cron: "0 12 * * *"
   workflow_dispatch:
 
 concurrency:

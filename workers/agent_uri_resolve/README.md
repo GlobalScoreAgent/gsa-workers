@@ -22,7 +22,8 @@ Loop priority per round: agents → on-chain → external feedbacks. Empty on al
 
 ## Schedule
 
-~every 5.5h UTC + `workflow_dispatch`. Soft `MAX_RUNTIME_SECONDS=19800`.
+Twice daily UTC (`00:00`, `12:00`) + `workflow_dispatch`. Soft `MAX_RUNTIME_SECONDS=19800`.
+Error-retry / refresh cadence is reserved for a separate worker.
 
 ## Env
 
