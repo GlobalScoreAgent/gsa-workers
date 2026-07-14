@@ -17,12 +17,13 @@ flowchart TB
     contracts[wallet_token_contracts_discovery]
     portfolio[wallet_token_portfolio_discovery]
     prices[token_prices_import]
+    lp[wallet_lp_positions_discovery]
   end
   subgraph refdata [Other_reference]
     cex[cex_addresses_import]
   end
   subgraph pending [Not_built_yet]
-    lp[wallet_lp_positions_discovery]
+    lpRefresh[wallet_lp_positions_refresh_15d]
   end
   daily --> wt[erc_8004.wallet_transactions]
   wt --> contracts
@@ -31,8 +32,10 @@ flowchart TB
   portfolio --> wtp[wallets.wallet_token_positions]
   prices --> wtp
   prices --> tpc[wallets.token_prices]
+  portfolio --> lp
+  lp --> wlp[wallets.wallet_lp_positions]
   cex --> cexT[wallets.cex_addresses]
-  lp -.-> wtp
+  lpRefresh -.-> wlp
 ```
 
 ## Live processes
@@ -46,6 +49,7 @@ flowchart TB
 | 5 | [`wallet_token_contracts_discovery`](../workers/wallet_token_contracts_discovery/README.md) | Claim (`wallet_transactions`) | 0/6/12/18 | `does_need_discovery_contracts` | `wallet_token_contracts_upsert` | `wallets.wallet_token_contracts` |
 | 6 | [`wallet_token_portfolio_discovery`](../workers/wallet_token_portfolio_discovery/README.md) | Claim (`wallet_transactions`) | 0/6/12/18 | `does_need_portfolio_discovery` | `wallet_token_positions_insert` | `wallets.wallet_token_positions` (wallet fungibles) |
 | 7 | [`token_prices_import`](../workers/token_prices_import/README.md) | Reference | 0/6/12/18 | unpriced ERC-20s (`has_price_error`) | `token_prices_upsert` + `apply_prices` + `mark_price_misses` | `token_prices` → positions |
+| 8 | [`wallet_lp_positions_discovery`](../workers/wallet_lp_positions_discovery/README.md) | Claim (`wallet_transactions`) | 0/6/12/18 | `does_need_lp_discovery` | `wallet_lp_positions_upsert` | `wallets.wallet_lp_positions` |
 
 Soft runtime budget for claim / enrich jobs: **`MAX_RUNTIME_SECONDS=19800`** (~5.5h). Empty queue → exit 0; next cron still fires.
 
@@ -69,17 +73,21 @@ Claims `wallet_transactions` where discovery is pending and Alchemy subdomain ex
 
 ### 6. Token portfolio discovery (fungible `wallet` positions)
 
-After contracts OK → Alchemy amounts + **DeFiLlama only** → INSERT positions (`native` + ERC-20). Sets `token_quality` / `has_price_error`. Does **not** discover LP / NFT concentration positions.
+After contracts OK → Alchemy amounts + **DeFiLlama only** → INSERT positions (`native` + ERC-20). Sets `token_quality` / `has_price_error`. Does **not** discover LP positions (see #8).
 
 ### 7. Token prices enrich
 
 Distinct unpriced ERC-20s → cache TTL → DexScreener → CoinGecko → upsert spot cache → apply priced hits → **mark Dex+CG misses** as known-unknown (`quality_reason=unknown_token_dex_coingecko_defillama`, `has_price_error=false`) so they leave the enrich queue.
 
+### 8. LP positions discovery
+
+After portfolio OK → step 1 UniV3/Pancake NFT managers + step 2 active `wallets.lp_pools` (Aerodrome classic) → amounts → DeFiLlama/`token_prices` → `wallet_lp_positions_upsert` (replace snapshot; stamps `calculated_at`). No WAMI.
+
 ## Pending / planned
 
 | Doc | Status |
 |---|---|
-| [PENDING_LP_POSITIONS.md](./PENDING_LP_POSITIONS.md) | **Not implemented** — UniV3-style LP NFT positions (Zerion-like complex positions) |
+| [PENDING_LP_POSITIONS.md](./PENDING_LP_POSITIONS.md) | **Initial discovery live**; 15-day refresh worker still pending |
 
 ## Secrets cheat sheet
 
@@ -87,7 +95,7 @@ Distinct unpriced ERC-20s → cache TTL → DexScreener → CoinGecko → upsert
 |---|---|
 | `SUPABASE_DB_URL` | All |
 | `ALCHEMY_KEY` | Balance/nonce claim workers (fallback RPC) |
-| `ALCHEMY_FREE_KEY` | Contracts + portfolio discovery |
+| `ALCHEMY_FREE_KEY` | Contracts + portfolio + LP discovery |
 | `DUNE_KEY` | CEX import |
 | `COINGECKO_KEY` | Token prices enrich |
 

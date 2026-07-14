@@ -20,7 +20,7 @@ Entry point for AI agents (and humans) changing GitHub Actions wallet workers.
 6. That worker’s `src/db.py` and `job.py` (code of truth)
 
 Ops / stuck wallets: [docs/OPS.md](./docs/OPS.md). Deprecations: [docs/DEPRECATION.md](./docs/DEPRECATION.md).  
-Pending LP positions (not built): [docs/PENDING_LP_POSITIONS.md](./docs/PENDING_LP_POSITIONS.md).
+LP discovery is live; 15-day refresh still pending: [docs/PENDING_LP_POSITIONS.md](./docs/PENDING_LP_POSITIONS.md).
 
 ## Hard rules
 
@@ -42,14 +42,15 @@ Pending LP positions (not built): [docs/PENDING_LP_POSITIONS.md](./docs/PENDING_
 | `token_prices_import` | `token-prices-import.yml` | `token_prices_upsert` + `apply_prices` + `mark_price_misses` | `wallets.token_prices` → positions |
 | `wallet_token_contracts_discovery` | `wallet-token-contracts-discovery.yml` | `wallets.wallet_token_contracts_upsert` | `wallets.wallet_token_contracts` |
 | `wallet_token_portfolio_discovery` | `wallet-token-portfolio-discovery.yml` | `wallets.wallet_token_positions_insert` | `wallets.wallet_token_positions` (fungible) |
+| `wallet_lp_positions_discovery` | `wallet-lp-positions-discovery.yml` | `wallets.wallet_lp_positions_upsert` | `wallets.wallet_lp_positions` (NFT + classic LP) |
 
-LP / complex DeFi positions: **not built** — see [docs/PENDING_LP_POSITIONS.md](./docs/PENDING_LP_POSITIONS.md).
+LP 15-day refresh worker: **not built** — see [docs/PENDING_LP_POSITIONS.md](./docs/PENDING_LP_POSITIONS.md).
 
 ## How to validate a change
 
 1. Local: `cd workers/<name>`, `uv sync`, `uv run python job.py` with `SUPABASE_DB_URL` (+ `ALCHEMY_KEY` / `ALCHEMY_FREE_KEY`, `DUNE_KEY`, or `COINGECKO_KEY` as needed).
 2. Or GitHub Actions → workflow → **Run workflow** (`workflow_dispatch`).
-3. Logs: look for `Claimed batch`, `Reconnecting to Postgres`, `Claim failed; will retry`, `Save/snapshot failed` (claim workers), Dune/CEX upsert messages, token-price enrich (`dex=`/`cg=`/`miss=`), or `Done wt_id=` (`wallet_token_contracts_discovery`).
+3. Logs: look for `Claimed batch`, `Reconnecting to Postgres`, `Claim failed; will retry`, `Save/snapshot failed` (claim workers), Dune/CEX upsert messages, token-price enrich (`dex=`/`cg=`/`miss=`), or `Done wt_id=` (contracts / portfolio / LP discovery).
 4. SQL: eligible counts and stuck `Completed` queries in [docs/SUPABASE.md](./docs/SUPABASE.md); CEX / token-prices / discovery monitoring in the same doc.
 
 ## When to touch which repo
@@ -57,5 +58,5 @@ LP / complex DeFi positions: **not built** — see [docs/PENDING_LP_POSITIONS.md
 | Change | Repo |
 |---|---|
 | Claim SQL, retries, job loop, RPC clients, GHA env | **gsa-workers** |
-| `wallet_apply_*_snapshot`, `wallets.cex_addresses_upsert`, `wallets.token_prices_upsert`, `wallet_token_positions_apply_prices`, `wallet_token_positions_mark_price_misses`, `wallet_token_contracts_upsert`, `wallet_token_positions_insert`, chain price subdomains, triggers, indexes, `next_eligible_at` / discovery flags | **gsa-supabase-schema** |
+| `wallet_apply_*_snapshot`, `wallets.cex_addresses_upsert`, `wallets.token_prices_upsert`, `wallet_token_positions_apply_prices`, `wallet_token_positions_mark_price_misses`, `wallet_token_contracts_upsert`, `wallet_token_positions_insert`, `wallet_lp_positions_upsert`, `lp_pools`, chain price subdomains, triggers, indexes, `next_eligible_at` / discovery flags | **gsa-supabase-schema** |
 | Deploy order | Schema first (if needed) → push worker → `workflow_dispatch` |

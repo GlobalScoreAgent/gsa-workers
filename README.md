@@ -2,7 +2,7 @@
 
 Unified Python batch workers for [Global Score Agent](https://www.globalscoreagent.com/), run via GitHub Actions against Supabase Postgres.
 
-**For AI agents:** start at [AGENTS.md](./AGENTS.md). Process catalog: [docs/PROCESSES.md](./docs/PROCESSES.md). Architecture / DB / ops: [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md), [docs/SUPABASE.md](./docs/SUPABASE.md), [docs/OPS.md](./docs/OPS.md). Pending LP work: [docs/PENDING_LP_POSITIONS.md](./docs/PENDING_LP_POSITIONS.md).
+**For AI agents:** start at [AGENTS.md](./AGENTS.md). Process catalog: [docs/PROCESSES.md](./docs/PROCESSES.md). Architecture / DB / ops: [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md), [docs/SUPABASE.md](./docs/SUPABASE.md), [docs/OPS.md](./docs/OPS.md). LP 15-day refresh still pending: [docs/PENDING_LP_POSITIONS.md](./docs/PENDING_LP_POSITIONS.md).
 
 ## Workers
 
@@ -15,8 +15,9 @@ Unified Python batch workers for [Global Score Agent](https://www.globalscoreage
 | [`token_prices_import`](./workers/token_prices_import/README.md) | 0, 6, 12, 18h | n/a (reference data) | Dex/CG → `token_prices` → apply / mark known-unknown misses |
 | [`wallet_token_contracts_discovery`](./workers/wallet_token_contracts_discovery/README.md) | 0, 6, 12, 18h | `wallet_transactions.does_need_discovery_contracts` + `chains.subdomain_alchemy` | Alchemy ERC-20 balances → `wallet_token_contracts_upsert` |
 | [`wallet_token_portfolio_discovery`](./workers/wallet_token_portfolio_discovery/README.md) | 0, 6, 12, 18h | portfolio discovery flag after contract discovery | Alchemy amounts + DeFiLlama → fungible `wallet_token_positions` |
+| [`wallet_lp_positions_discovery`](./workers/wallet_lp_positions_discovery/README.md) | 0, 6, 12, 18h | LP flag after portfolio discovery | UniV3 NFT + `lp_pools` classic → `wallet_lp_positions` |
 
-Pending (not built): [LP positions discovery](./docs/PENDING_LP_POSITIONS.md).
+Pending: [LP 15-day refresh](./docs/PENDING_LP_POSITIONS.md).
 
 ## Common pipeline (claim workers)
 
@@ -35,7 +36,7 @@ Reference-data: `cex_addresses_import` (Dune → upsert); `token_prices_import` 
 |---|---|---|
 | `SUPABASE_DB_URL` | Yes | Postgres pooler DSN |
 | `ALCHEMY_KEY` | Recommended | Alchemy fallback after public RPCs (claim workers) |
-| `ALCHEMY_FREE_KEY` | For token contracts / portfolio discovery | Alchemy Token API |
+| `ALCHEMY_FREE_KEY` | For token contracts / portfolio / LP discovery | Alchemy Token API + eth_call |
 | `DUNE_KEY` | For CEX import | Dune Analytics API key |
 | `COINGECKO_KEY` | For token-prices enrich | CoinGecko Demo/Pro API key |
 
@@ -50,6 +51,7 @@ Reference-data: `cex_addresses_import` (Dune → upsert); `token_prices_import` 
 | token prices | n/a | n/a | n/a | GHA timeout 360m |
 | token contracts discovery | 10 | 50 | 7200 | 19800 |
 | token portfolio discovery | 5 | 25 | 7200 | 19800 |
+| LP positions discovery | 5 | 25 | 7200 | 19800 |
 
 Daily also sets `WORKER_ID` to `worker-a` or `worker-b`. Origin/monthly set `SKIP_ELIGIBLE_COUNT=1`.
 
@@ -101,9 +103,12 @@ gsa-workers/
 │   ├── wallet_token_contracts_discovery/
 │   │   ├── job.py
 │   │   └── src/          # db, alchemy_tokens
-│   └── wallet_token_portfolio_discovery/
+│   ├── wallet_token_portfolio_discovery/
+│   │   ├── job.py
+│   │   └── src/          # db, portfolio_calc, networks
+│   └── wallet_lp_positions_discovery/
 │       ├── job.py
-│       └── src/          # db, portfolio_calc, networks
+│       └── src/          # db, nft_lp, classic_lp, pricing, univ3_math
 └── .github/workflows/
     ├── wallet-nonce-balance-daily.yml
     ├── owner-wallet-origin.yml
@@ -111,7 +116,8 @@ gsa-workers/
     ├── cex-addresses-import.yml
     ├── token-prices-import.yml
     ├── wallet-token-contracts-discovery.yml
-    └── wallet-token-portfolio-discovery.yml
+    ├── wallet-token-portfolio-discovery.yml
+    └── wallet-lp-positions-discovery.yml
 ```
 
 Schema / snapshot SQL: sibling repo **`gsa-supabase-schema`**.

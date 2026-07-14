@@ -2,7 +2,7 @@
 
 Workers connect with **direct Postgres** via `SUPABASE_DB_URL` (`psycopg`), not supabase-js or Edge Functions. Schema of truth for wallet claim jobs: `erc_8004`. Reference-data imports (CEX addresses, token prices) use schema `wallets`.
 
-Schema migrations and snapshot/upsert SQL live in the sibling repo **`gsa-supabase-schema`** (functions `wallet_apply_*_snapshot`, `wallets.cex_addresses_upsert`, `wallets.token_prices_upsert`, `wallet_token_positions_apply_prices`, `wallet_token_positions_mark_price_misses`, `wallet_token_contracts_upsert`, `wallet_token_positions_insert`, triggers, indexes). Code of truth for claim/save SQL in this repo: each worker’s `src/db.py`. Process catalog: [PROCESSES.md](./PROCESSES.md). Pending LP: [PENDING_LP_POSITIONS.md](./PENDING_LP_POSITIONS.md).
+Schema migrations and snapshot/upsert SQL live in the sibling repo **`gsa-supabase-schema`** (functions `wallet_apply_*_snapshot`, `wallets.cex_addresses_upsert`, `wallets.token_prices_upsert`, `wallet_token_positions_apply_prices`, `wallet_token_positions_mark_price_misses`, `wallet_token_contracts_upsert`, `wallet_token_positions_insert`, `wallet_lp_positions_upsert`, triggers, indexes). Code of truth for claim/save SQL in this repo: each worker’s `src/db.py`. Process catalog: [PROCESSES.md](./PROCESSES.md). LP refresh (15d) still pending: [PENDING_LP_POSITIONS.md](./PENDING_LP_POSITIONS.md).
 
 ## Connection
 
@@ -25,7 +25,9 @@ Schema migrations and snapshot/upsert SQL live in the sibling repo **`gsa-supaba
 | `wallets.cex_addresses` | CEX address reference list (Dune import) |
 | `wallets.token_prices` | Spot USD cache PK `(chain_id, contract)`; Dex/CG enrich |
 | `wallets.wallet_token_contracts` | ERC-20 contracts with balance > 0 per wallet+chain (discovery) |
-| `wallets.wallet_token_positions` | Fungible positions (native=`'native'` + ERC-20); initial INSERT discovery. LP NFTs are **not** here yet — [PENDING_LP_POSITIONS.md](./PENDING_LP_POSITIONS.md) |
+| `wallets.wallet_token_positions` | Fungible positions (native=`'native'` + ERC-20); initial INSERT discovery |
+| `wallets.lp_pools` | Classic LP scan targets (`active` toggle); seeded Aerodrome V1 on Base |
+| `wallets.wallet_lp_positions` | LP snapshots (UniV3 NFT + classic); `calculated_at` for future 15d refresh |
 
 ## Per-worker column map
 
@@ -63,6 +65,18 @@ Eligibility: flag pending **and** `chains.subdomain_alchemy` non-empty. New `wal
 | `portfolio_discovery_message_error` | Error text |
 
 Trigger `trg_wallet_transactions_portfolio_flag_bu` sets portfolio pending when contract discovery completes successfully.
+
+### LP positions discovery (`wallet_transactions`)
+
+| Column | Role |
+|---|---|
+| `does_need_lp_discovery` | Pending after portfolio discovery done |
+| `lp_discovery_claimed_at` | Claim lock / last attempt |
+| `lp_discovery_claimed_by` | `wallet_lp_positions_discovery/gha:{WORKER_ID}` |
+| `has_lp_discovery_error` | Last attempt failed |
+| `lp_discovery_message_error` | Error text |
+
+Trigger `trg_wallet_transactions_lp_flag_bu` sets LP pending when portfolio discovery completes successfully.
 
 ### `next_eligible_at` semantics
 
@@ -108,6 +122,7 @@ Canonical SQL / migrations: `gsa-supabase-schema/supabase/migrations/` and `supa
 | token prices | `token_prices_upsert` + `apply_prices` + `mark_price_misses` | Spot cache; apply hits; mark Dex/CG misses as known-unknown |
 | token contracts discovery | `wallets.wallet_token_contracts_upsert(p_wallet_id, p_chain_id, p_rows jsonb)` | `wallets.wallet_token_contracts` (insert/update only; no delete) |
 | token portfolio discovery | `wallets.wallet_token_positions_insert(p_wallet_id, p_chain_id, p_rows jsonb)` | `wallets.wallet_token_positions` (INSERT … ON CONFLICT DO NOTHING) |
+| LP positions discovery | `wallets.wallet_lp_positions_upsert(p_wallet_id, p_chain_id, p_rows jsonb)` | `wallets.wallet_lp_positions` (DELETE+INSERT replace per wallet+chain; stamps `calculated_at`) |
 
 CEX `p_rows` is a JSON array of Dune row objects (`blockchain`, `address`, `cex_name`, `distinct_name`). Empty array raises. Script: `gsa-supabase-schema/supabase/scripts/wallets_cex_addresses_upsert.sql`.
 
@@ -116,6 +131,8 @@ Token prices enrich upserts `{chain_id, contract_address, symbol?, price_usd?, s
 Discovery `p_rows` is a JSON array of `{contract_address, source?}`. Empty array is a no-op (does not delete). Script: `gsa-supabase-schema/supabase/scripts/wallet_token_contracts_upsert_no_delete.sql`.
 
 Portfolio positions `p_rows` include `contract_address` (`'native'` or `0x…`), amounts, `price_usd`, `has_price_error`, `token_quality` (`priced`|`unpriced`|`spam`), `quality_reason`, etc. Initial prices from DeFiLlama; Dex/CG fill via `token_prices_import`. Script: `gsa-supabase-schema/supabase/scripts/wallet_token_portfolio_discovery.sql`. Quality columns: `gsa-supabase-schema/supabase/scripts/wallet_token_positions_quality.sql`. Reset / re-queue: `wallet_token_portfolio_discovery_reset.sql` (TRUNCATE + re-flag; required because insert is DO NOTHING).
+
+LP positions `p_rows` include `position_kind` (`nft`|`classic_lp`|`classic_staked`), pool/NFT keys, amounts, USD, `group_id`. Classic targets: `wallets.lp_pools`. Script: `wallet_lp_positions_discovery.sql`. Reset: `wallet_lp_positions_discovery_reset.sql` (ask before running).
 
 ## Triggers (schema repo)
 
@@ -126,6 +143,7 @@ When `is_valid_*` becomes true, DB triggers set the matching `next_eligible_at` 
 - `trg_wallet_history_next_eligible_at`
 - `trg_wallet_transactions_discovery_flag_bi` (sets `does_need_discovery_contracts` on insert from `chains.subdomain_alchemy`)
 - `trg_wallet_transactions_portfolio_flag_bu` (sets `does_need_portfolio_discovery` when contract discovery completes)
+- `trg_wallet_transactions_lp_flag_bu` (sets `does_need_lp_discovery` when portfolio discovery completes)
 
 ## Claim pattern
 
@@ -331,6 +349,31 @@ ORDER BY 1;
 ```
 
 **Full rediscovery** (after pricing/quality code changes): deploy schema + worker, then run `gsa-supabase-schema/supabase/scripts/wallet_token_portfolio_discovery_reset.sql`, then `workflow_dispatch` `wallet-token-portfolio-discovery`.
+
+### LP positions discovery
+
+```sql
+SELECT
+  count(*) FILTER (WHERE does_need_lp_discovery IS DISTINCT FROM FALSE) AS pending,
+  count(*) FILTER (WHERE has_lp_discovery_error IS TRUE) AS errors
+FROM erc_8004.wallet_transactions;
+
+SELECT position_kind, protocol, count(*)
+FROM wallets.wallet_lp_positions
+GROUP BY 1, 2
+ORDER BY count(*) DESC;
+
+SELECT count(*) AS active_pools
+FROM wallets.lp_pools
+WHERE active IS TRUE;
+
+-- Stale snapshots (inputs for future 15d refresh worker)
+SELECT count(DISTINCT (wallet_id, chain_id)) AS stale_wallet_chains
+FROM wallets.wallet_lp_positions
+WHERE calculated_at < NOW() - interval '15 days';
+```
+
+**Full rediscovery** (ask before TRUNCATE): `wallet_lp_positions_discovery_reset.sql` then `workflow_dispatch` `wallet-lp-positions-discovery`.
 
 ## Related docs
 
