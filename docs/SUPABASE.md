@@ -132,7 +132,22 @@ Discovery `p_rows` is a JSON array of `{contract_address, source?}`. Empty array
 
 Portfolio positions `p_rows` include `contract_address` (`'native'` or `0x…`), amounts, `price_usd`, `has_price_error`, `token_quality` (`priced`|`unpriced`|`spam`), `quality_reason`, etc. Initial prices from DeFiLlama; Dex/CG fill via `token_prices_import`. Script: `gsa-supabase-schema/supabase/scripts/wallet_token_portfolio_discovery.sql`. Quality columns: `gsa-supabase-schema/supabase/scripts/wallet_token_positions_quality.sql`. Reset / re-queue: `wallet_token_portfolio_discovery_reset.sql` (TRUNCATE + re-flag; required because insert is DO NOTHING).
 
-LP positions `p_rows` include `position_kind` (`nft`|`classic_lp`|`classic_staked`), pool/NFT keys, amounts, USD, `group_id`. Classic targets: `wallets.lp_pools`. Script: `wallet_lp_positions_discovery.sql`. Reset: `wallet_lp_positions_discovery_reset.sql` (ask before running).
+LP positions `p_rows` include `position_kind` (`nft`|`classic_lp`|`classic_staked`), pool/NFT keys, amounts, USD, `group_id`. Classic targets: `wallets.lp_pools`. Classic PK sentinels: `nft_manager_address=''`, `token_id=-1`. Scripts: `wallet_lp_positions_discovery.sql`, `wallet_lp_positions_pk_fk.sql`. Reset: `wallet_lp_positions_discovery_reset.sql` (ask before running). Schema docs: `gsa-supabase-schema/supabase/docs/wallet-lp-positions-discovery.md`.
+
+### Progress vs LP row count
+
+Most claimed wallets finish with **zero** LP rows (no NFT / no classic balance, or chain without extractor coverage). Prefer monitoring **attempted / pending / errors**, not only `count(*)` on `wallet_lp_positions`:
+
+```sql
+SELECT
+  count(*) FILTER (WHERE does_need_lp_discovery IS DISTINCT FROM FALSE) AS pending,
+  count(*) FILTER (WHERE does_need_lp_discovery IS FALSE
+                   AND COALESCE(has_lp_discovery_error, FALSE) IS NOT TRUE) AS done_ok,
+  count(*) FILTER (WHERE has_lp_discovery_error IS TRUE) AS errors,
+  count(*) FILTER (WHERE lp_discovery_claimed_at IS NOT NULL
+                   AND does_need_lp_discovery IS DISTINCT FROM FALSE) AS in_flight
+FROM erc_8004.wallet_transactions;
+```
 
 ## Triggers (schema repo)
 
@@ -355,6 +370,8 @@ ORDER BY 1;
 ```sql
 SELECT
   count(*) FILTER (WHERE does_need_lp_discovery IS DISTINCT FROM FALSE) AS pending,
+  count(*) FILTER (WHERE does_need_lp_discovery IS FALSE
+                   AND COALESCE(has_lp_discovery_error, FALSE) IS NOT TRUE) AS done_ok,
   count(*) FILTER (WHERE has_lp_discovery_error IS TRUE) AS errors
 FROM erc_8004.wallet_transactions;
 
@@ -362,6 +379,20 @@ SELECT position_kind, protocol, count(*)
 FROM wallets.wallet_lp_positions
 GROUP BY 1, 2
 ORDER BY count(*) DESC;
+
+-- Done volume by chain (many chains have no LP extractor → 0 rows is normal)
+SELECT wt.chain_id, c.name,
+       count(*) AS wallets_done,
+       count(*) FILTER (WHERE EXISTS (
+         SELECT 1 FROM wallets.wallet_lp_positions p
+         WHERE p.wallet_id = wt.wallet_id AND p.chain_id = wt.chain_id
+       )) AS wallets_with_lp
+FROM erc_8004.wallet_transactions wt
+JOIN erc_8004.chains c ON c.id = wt.chain_id
+WHERE wt.does_need_lp_discovery IS FALSE
+  AND COALESCE(wt.has_lp_discovery_error, FALSE) IS NOT TRUE
+GROUP BY 1, 2
+ORDER BY wallets_done DESC;
 
 SELECT count(*) AS active_pools
 FROM wallets.lp_pools
@@ -379,4 +410,6 @@ WHERE calculated_at < NOW() - interval '15 days';
 
 - [ARCHITECTURE.md](./ARCHITECTURE.md) — GHA pipeline and state machine
 - [OPS.md](./OPS.md) — stuck wallets, logs, when to touch schema
+- [PROCESSES.md](./PROCESSES.md) — live catalog (#8 LP discovery)
+- Worker README: `workers/wallet_lp_positions_discovery/README.md`
 - Worker READMEs under `workers/*/README.md`

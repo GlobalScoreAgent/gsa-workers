@@ -103,6 +103,8 @@ Claims **`erc_8004.wallet_transactions`** rows (not `wallets`). Pipeline:
 2. Alchemy `alchemy_getTokenBalances(address, "erc20")` (paginate); keep balance > 0.
 3. `wallets.wallet_token_contracts_upsert(wallet_id, chain_id, rows)` then set flag `FALSE`.
 
+Design / business rationale (ERC-20 inventory, Alchemy Free, Llama → Dex → CG): [TOKEN_CONTRACTS_DISCOVERY_ALCHEMY.md](./TOKEN_CONTRACTS_DISCOVERY_ALCHEMY.md).
+
 ```mermaid
 flowchart LR
   claimWt[Claim_wallet_transactions]
@@ -151,15 +153,15 @@ flowchart LR
 
 ## LP positions discovery
 
-Claim on `wallet_transactions` after portfolio success:
+**Live** claim worker on `wallet_transactions` after portfolio success ([README](../workers/wallet_lp_positions_discovery/README.md)):
 
-1. Claim + soft lock (`lp_discovery_claimed_at`).
-2. Step 1: UniV3 / Pancake NFT managers → amounts via `slot0`.
+1. Claim + soft lock (`lp_discovery_claimed_at` / `claimed_by`).
+2. Step 1: UniV3 / Pancake NFT managers → amounts via pool `slot0` (chains with NFPM in `networks.py`).
 3. Step 2: Active `wallets.lp_pools` → classic LP + gauge balances.
-4. Price (DeFiLlama → `token_prices`) → `wallet_lp_positions_upsert` (replace; `calculated_at`).
-5. Mark flag done.
+4. Price (DeFiLlama → `token_prices`) → `wallet_lp_positions_upsert` (replace per wallet+chain; stamps `calculated_at`; PK sentinels for classic).
+5. Mark flag done (`FALSE` even on error). Empty positions (`inserted=0`) are the common case.
 
-15-day refresh worker still pending: [PENDING_LP_POSITIONS.md](./PENDING_LP_POSITIONS.md).
+Chains without NFT/classic coverage still drain the queue with empty upserts. 15-day refresh worker still pending: [PENDING_LP_POSITIONS.md](./PENDING_LP_POSITIONS.md).
 
 ## Time budgets
 
@@ -196,13 +198,14 @@ workers/<name>/
     ├── origin.py       # binary-search first activity (origin only)
     ├── dune.py         # Dune HTTP client (cex import)
     ├── dexscreener.py / coingecko.py  # token_prices_import
+    ├── nft_lp.py / classic_lp.py / pricing.py / univ3_math.py  # LP discovery
     ├── rpc.py
     ├── alchemy.py
-    ├── networks.py     # 8-chain public RPC list
+    ├── networks.py     # 8-chain public RPC list (or LP NFPM map)
     └── address.py
 ```
 
-Origin also has `scripts/check_pending.py` and `scripts/compare_smoke.py`.
+Origin also has `scripts/check_pending.py` and `scripts/compare_smoke.py`. `wallet_lp_positions_discovery` uses Alchemy `eth_call` + Multicall3 (httpx), not the daily balance JSON snapshot path.
 
 ## CI env defaults (workflows)
 

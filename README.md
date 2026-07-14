@@ -2,7 +2,7 @@
 
 Unified Python batch workers for [Global Score Agent](https://www.globalscoreagent.com/), run via GitHub Actions against Supabase Postgres.
 
-**For AI agents:** start at [AGENTS.md](./AGENTS.md). Process catalog: [docs/PROCESSES.md](./docs/PROCESSES.md). Architecture / DB / ops: [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md), [docs/SUPABASE.md](./docs/SUPABASE.md), [docs/OPS.md](./docs/OPS.md). LP 15-day refresh still pending: [docs/PENDING_LP_POSITIONS.md](./docs/PENDING_LP_POSITIONS.md).
+**For AI agents:** start at [AGENTS.md](./AGENTS.md). Process catalog: [docs/PROCESSES.md](./docs/PROCESSES.md) (includes live **LP positions discovery** #8). Architecture / DB / ops: [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md), [docs/SUPABASE.md](./docs/SUPABASE.md), [docs/OPS.md](./docs/OPS.md). Only LP **15-day refresh** remains pending: [docs/PENDING_LP_POSITIONS.md](./docs/PENDING_LP_POSITIONS.md).
 
 ## Workers
 
@@ -75,7 +75,8 @@ gsa-workers/
 ├── AGENTS.md
 ├── README.md
 ├── docs/
-│   ├── PROCESSES.md          # all live pipelines + diagram
+│   ├── PROCESSES.md
+│   ├── TOKEN_CONTRACTS_DISCOVERY_ALCHEMY.md
 │   ├── PENDING_LP_POSITIONS.md
 │   ├── ARCHITECTURE.md
 │   ├── SUPABASE.md

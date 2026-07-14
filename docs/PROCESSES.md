@@ -69,7 +69,7 @@ Dune fetch → fail on empty → `cex_addresses_upsert`. No claim loop.
 
 ### 5. Token contracts discovery
 
-Claims `wallet_transactions` where discovery is pending and Alchemy subdomain exists → `alchemy_getTokenBalances` → upsert contracts → mark flag done (even on error, with error columns).
+Claims `wallet_transactions` where discovery is pending and Alchemy subdomain exists → `alchemy_getTokenBalances` → upsert contracts → mark flag done (even on error, with error columns). Business rationale (why ERC-20 inventory, Alchemy Free volume, price fallbacks): [TOKEN_CONTRACTS_DISCOVERY_ALCHEMY.md](./TOKEN_CONTRACTS_DISCOVERY_ALCHEMY.md).
 
 ### 6. Token portfolio discovery (fungible `wallet` positions)
 
@@ -81,13 +81,31 @@ Distinct unpriced ERC-20s → cache TTL → DexScreener → CoinGecko → upsert
 
 ### 8. LP positions discovery
 
-After portfolio OK → step 1 UniV3/Pancake NFT managers + step 2 active `wallets.lp_pools` (Aerodrome classic) → amounts → DeFiLlama/`token_prices` → `wallet_lp_positions_upsert` (replace snapshot; stamps `calculated_at`). No WAMI.
+**Live.** Claims `wallet_transactions` after portfolio discovery succeeds.
+
+```
+claim → NFT (UniV3/Pancake) + classic (lp_pools) → price → wallet_lp_positions_upsert → mark done
+```
+
+| Item | Detail |
+|---|---|
+| Flag | `does_need_lp_discovery` (+ claim / error columns) |
+| Destination | `wallets.wallet_lp_positions` (PK + FKs; `calculated_at`) |
+| Classic registry | `wallets.lp_pools` (`active`); Aerodrome Base seeded |
+| Empty wallet | Completes OK with `inserted=0` (most wallets) |
+| Pricing | DeFiLlama first, then `wallets.token_prices` |
+| WAMI | Not computed in worker |
+| Workflow | `wallet-lp-positions-discovery.yml` |
+
+Covered extractors: Ethereum / Base / Arbitrum UniV3 NFT; BNB Pancake V3 NFT; Base Aerodrome classic via `lp_pools`. Other Alchemy chains are still claimed and finish empty until coverage is added.
+
+Worker README: [`wallet_lp_positions_discovery`](../workers/wallet_lp_positions_discovery/README.md). 15-day refresh still pending: [PENDING_LP_POSITIONS.md](./PENDING_LP_POSITIONS.md).
 
 ## Pending / planned
 
 | Doc | Status |
 |---|---|
-| [PENDING_LP_POSITIONS.md](./PENDING_LP_POSITIONS.md) | **Initial discovery live**; 15-day refresh worker still pending |
+| [PENDING_LP_POSITIONS.md](./PENDING_LP_POSITIONS.md) | Discovery **live**; only **15-day refresh** worker remains |
 
 ## Secrets cheat sheet
 

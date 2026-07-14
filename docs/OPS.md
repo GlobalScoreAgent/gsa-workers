@@ -126,7 +126,8 @@ Deploy order when both change: **schema → worker → workflow_dispatch**.
 ## Related
 
 - [PROCESSES.md](./PROCESSES.md) — live pipeline catalog
-- [PENDING_LP_POSITIONS.md](./PENDING_LP_POSITIONS.md) — LP discovery (not built)
+- [PENDING_LP_POSITIONS.md](./PENDING_LP_POSITIONS.md) — LP 15-day refresh (discovery already live)
 - [SUPABASE.md](./SUPABASE.md) — monitoring and backfill SQL
 - [ARCHITECTURE.md](./ARCHITECTURE.md) — pipeline and budgets
 - [DEPRECATION.md](./DEPRECATION.md) — do not re-enable old crons
+- Worker: [`wallet_lp_positions_discovery`](../workers/wallet_lp_positions_discovery/README.md)
