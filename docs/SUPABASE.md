@@ -27,7 +27,7 @@ Schema migrations and snapshot/upsert SQL live in the sibling repo **`gsa-supaba
 | `wallets.wallet_token_contracts` | ERC-20 contracts with balance > 0 per wallet+chain (discovery) |
 | `wallets.wallet_token_positions` | Fungible positions (native=`'native'` + ERC-20); initial INSERT discovery |
 | `wallets.lp_pools` | Classic LP scan targets (`active` toggle); seeded Aerodrome V1 on Base |
-| `wallets.wallet_lp_positions` | LP snapshots (UniV3 NFT + classic); `calculated_at` for future 15d refresh |
+| `wallets.wallet_lp_positions` | LP snapshots (UniV3 NFT + classic); PK `(wallet_id, chain_id, position_kind, nft_manager, token_id, pool)`; FKs to `wallets`/`chains`; `calculated_at` for future 15d refresh |
 
 ## Per-worker column map
 
