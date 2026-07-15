@@ -1,6 +1,6 @@
 # Supabase / Postgres interaction
 
-Workers connect with **direct Postgres** via `SUPABASE_DB_URL` (`psycopg`), not supabase-js or Edge Functions. Schema of truth for wallet claim jobs: `erc_8004`. Reference-data imports (CEX addresses, token prices) use schema `wallets`. URI ingest uses `erc_8004.uri_documents` + `erc_8004.agent_manifest`.
+Workers connect with **direct Postgres** via `SUPABASE_DB_URL` (`psycopg`), not supabase-js or Edge Functions. Schema of truth for wallet claim jobs: `erc_8004`. Reference-data imports (CEX addresses, token prices) use schema `wallets`. URI ingest uses `erc_8004.uri_documents` + `erc_8004.agent_manifest`. AI agent classifier uses `web_dashboard.agents` + schema `llm` + `web_dashboard.agent_ai_categories`.
 
 Schema migrations and snapshot/upsert SQL live in the sibling repo **`gsa-supabase-schema`** (functions `wallet_apply_*_snapshot`, CEX / token_prices / discovery upserts, URI indexes + helpers, triggers). Code of truth for claim/save SQL in this repo: each worker’s `src/db.py`. Process catalog: [PROCESSES.md](./PROCESSES.md). LP refresh (15d) still pending: [PENDING_LP_POSITIONS.md](./PENDING_LP_POSITIONS.md).
 
@@ -19,8 +19,8 @@ Schema migrations and snapshot/upsert SQL live in the sibling repo **`gsa-supaba
 |---|---|
 | `erc_8004.wallets` | Claim queue, JSON payloads, status, `next_eligible_at` |
 | `erc_8004.chains` | Active chains + `subdomain_alchemy` for Alchemy fallback |
-| `erc_8004.wallet_daily_metrics` | Daily flat nonce/balance per wallet×chain×date (written by daily snapshot) |
-| `erc_8004.wallet_transactions` | Read model: current nonce/balance + 30d history + category (rollup TBD) |
+| `erc_8004.wallet_daily_metrics` | Daily flat nonce/balance per wallet×chain×date (written by daily snapshot). `snapshot_date` = Postgres `CURRENT_DATE` (DB timezone, typically UTC). |
+| `erc_8004.wallet_transactions` | Read model: current nonce/balance + 30d history + category. **Not** updated by daily snapshot until rollup exists; still used as claim queue for token/LP discovery. |
 | `erc_8004.chain_nonces` | Per-chain daily nonce totals (not written by current daily snapshot) |
 | `erc_8004.wallet_owner_details` | Monthly + origin snapshots: owner metrics / first tx |
 | `wallets.cex_addresses` | CEX address reference list (Dune import) |
@@ -33,6 +33,9 @@ Schema migrations and snapshot/upsert SQL live in the sibling repo **`gsa-supaba
 | `erc_8004.agent_manifest` | Envelope per agent/feedback (`uri_document_id` FK); `source`, revoke fields, `has_download_error`, `reprocess_count`, `is_processed` — **no** `data`/`url` columns |
 | `erc_8004.agents` | Queue via `is_uri_processed` + `agent_uri_raw` |
 | `erc_8004.registration_feedbacks` | Queue via `is_feedback_processed` (`feedback_on_chain` / URI / endpoint); `is_uri_processed` unused for this pipeline |
+| `web_dashboard.agents` | Dashboard agent rows; AI classifier queue + results |
+| `web_dashboard.agent_ai_categories` | Active taxonomy for AI classification |
+| `llm.process` / `llm.llm_provider` / `llm.models` / `llm.procees_llm_providers` / `llm.models_requests` | LLM config + daily request counters |
 
 ## Per-worker column map
 
@@ -103,6 +106,24 @@ Trigger `trg_wallet_transactions_lp_flag_bu` sets LP pending when portfolio disc
 Partial indexes (schema migrations `00065`–`00069`): `idx_agents_pending_uri_processing`, `idx_rf_pending_uri_resolve`, `idx_rf_pending_on_chain`, `idx_am_pending_reprocess`, `idx_ud_pending_refresh_offchain`. Claim predicates use `= false` (not `IS DISTINCT FROM TRUE`) so indexes hit.
 
 Synthetic on-chain URI: `internal_on_chain_id_{feedback_id}`, `source='on_chain'` — no HTTP.
+
+### AI agent classifier (`web_dashboard.agents` + `llm`)
+
+| Column / object | Role |
+|---|---|
+| `does_need_ai_category_process` | `TRUE` = pending (set by another process; default true on new cols) |
+| `ai_category_primary` / `ai_category_secondary` (json) | Classification result |
+| `ai_category_confidence` / `ai_category_reasoning` / `ai_category_purpose` | Model output fields |
+| `llm_model_id` | FK → `llm.models.id` used for this run |
+| `ai_category_process_calculated_at` | Success or error timestamp |
+| `has_ai_category_process_error` / `ai_category_process_error_message` | Error path (flag still cleared to `FALSE`) |
+| `llm.llm_provider.secret` | GitHub/env secret **name** (e.g. `GROQ`) |
+| `llm.llm_provider.base_url` | OpenAI-compat API root (e.g. Groq `https://api.groq.com/openai/v1`) |
+| `llm.models.request_per_day` / `request_per_minute` | Rate limits |
+| `llm.models_requests` | Daily counter PK uniqueness `(model_id, date)` |
+| `llm.procees_llm_providers` | Links `process_code='agent-classifier'` → providers |
+
+Partial index: `idx_agents_pending_ai_category` (`WHERE does_need_ai_category_process IS TRUE`).
 
 ### `next_eligible_at` semantics
 
@@ -500,6 +521,36 @@ ORDER BY 1;
 ```
 
 Re-run: **Actions** → `agent-uri-resolve` or `agent-uri-reprocess` → **Run workflow**. Worker READMEs: [`agent_uri_resolve`](../workers/agent_uri_resolve/README.md), [`agent_uri_reprocess`](../workers/agent_uri_reprocess/README.md).
+
+### AI agent classifier
+
+```sql
+SELECT
+  count(*) FILTER (WHERE does_need_ai_category_process IS TRUE) AS pending,
+  count(*) FILTER (WHERE has_ai_category_process_error IS TRUE) AS errors,
+  count(*) FILTER (WHERE ai_category_primary IS NOT NULL) AS classified
+FROM web_dashboard.agents;
+
+SELECT category_name
+FROM web_dashboard.agent_ai_categories
+WHERE is_active IS TRUE
+ORDER BY id;
+
+SELECT m.name, m.slug, mr.date, mr.request_total, m.request_per_day
+FROM llm.models_requests mr
+JOIN llm.models m ON m.id = mr.model_id
+WHERE mr.date = CURRENT_DATE
+ORDER BY m.id;
+
+-- Re-queue errors
+-- UPDATE web_dashboard.agents
+-- SET does_need_ai_category_process = TRUE,
+--     has_ai_category_process_error = NULL,
+--     ai_category_process_error_message = NULL
+-- WHERE has_ai_category_process_error IS TRUE;
+```
+
+Re-run: **Actions** → `ai-agent-classifier` → **Run workflow**. README: [`ai_agent_classifier`](../workers/ai_agent_classifier/README.md).
 
 ## Related docs
 

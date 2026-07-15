@@ -1,0 +1,300 @@
+"""Supabase Postgres access for ai_agent_classifier job."""
+
+from __future__ import annotations
+
+import logging
+import time
+from collections.abc import Callable
+from typing import Any, TypeVar
+
+import psycopg
+from psycopg.rows import dict_row
+from psycopg.types.json import Json
+
+logger = logging.getLogger("ai_agent_classifier")
+
+PROCESS_CODE = "agent-classifier"
+
+CLAIM_AGENTS_SQL = """
+WITH candidates AS (
+  SELECT a.id
+  FROM web_dashboard.agents a
+  WHERE a.does_need_ai_category_process IS TRUE
+  ORDER BY a.id
+  LIMIT %(limit)s
+  FOR UPDATE OF a SKIP LOCKED
+)
+SELECT
+  a.id,
+  a.name,
+  a.description,
+  a.skills,
+  a.tags,
+  a.capabilites,
+  a.services,
+  a.oasf_skills,
+  a.oasf_domains,
+  a.web
+FROM web_dashboard.agents a
+JOIN candidates c ON c.id = a.id
+"""
+
+LOAD_CATEGORIES_SQL = """
+SELECT category_name
+FROM web_dashboard.agent_ai_categories
+WHERE is_active IS TRUE
+ORDER BY id
+"""
+
+LOAD_MODELS_SQL = """
+SELECT
+  m.id AS model_id,
+  m.name AS model_name,
+  m.slug AS model_slug,
+  m.request_per_day,
+  m.request_per_minute,
+  m.has_limits,
+  p.id AS provider_id,
+  p.name AS provider_name,
+  p.secret AS provider_secret,
+  p.base_url,
+  p.temperature,
+  p.max_completion_tokens,
+  p.response_format,
+  COALESCE(mr.request_total, 0) AS request_total_today
+FROM llm.process proc
+JOIN llm.procees_llm_providers plp ON plp.process_id = proc.id
+JOIN llm.llm_provider p ON p.id = plp.llm_provider_id
+JOIN llm.models m ON m.llm_provider_id = p.id
+LEFT JOIN llm.models_requests mr
+  ON mr.model_id = m.id
+ AND mr.date = CURRENT_DATE
+WHERE proc.process_code = %(process_code)s
+  AND p.is_active IS TRUE
+  AND m.is_active IS TRUE
+ORDER BY m.id
+"""
+
+INCREMENT_REQUEST_SQL = """
+INSERT INTO llm.models_requests (model_id, date, request_total)
+VALUES (%(model_id)s, CURRENT_DATE, 1)
+ON CONFLICT (model_id, date)
+DO UPDATE SET request_total = llm.models_requests.request_total + 1
+RETURNING request_total
+"""
+
+MARK_SUCCESS_SQL = """
+UPDATE web_dashboard.agents
+SET
+  ai_category_primary = %(primary_category)s,
+  ai_category_secondary = %(secondary_categories)s,
+  ai_category_confidence = %(confidence)s,
+  ai_category_reasoning = %(reasoning)s,
+  ai_category_purpose = %(agent_purpose)s,
+  llm_model_id = %(llm_model_id)s,
+  ai_category_process_calculated_at = NOW(),
+  does_need_ai_category_process = FALSE,
+  has_ai_category_process_error = FALSE,
+  ai_category_process_error_message = NULL
+WHERE id = %(agent_id)s
+"""
+
+MARK_ERROR_SQL = """
+UPDATE web_dashboard.agents
+SET
+  does_need_ai_category_process = FALSE,
+  has_ai_category_process_error = TRUE,
+  ai_category_process_error_message = %(error_message)s,
+  ai_category_process_calculated_at = NOW(),
+  llm_model_id = %(llm_model_id)s
+WHERE id = %(agent_id)s
+"""
+
+CLAIM_MAX_ATTEMPTS = 3
+CLAIM_RETRY_BASE_SECONDS = 2.0
+ERROR_MESSAGE_MAX_LEN = 2000
+RETRYABLE_DB_EXCEPTIONS = (psycopg.OperationalError, psycopg.InterfaceError)
+_NO_RECONNECT_EXCEPTIONS = (
+    psycopg.errors.QueryCanceled,
+    psycopg.errors.DeadlockDetected,
+)
+
+T = TypeVar("T")
+
+
+class Database:
+    def __init__(self, dsn: str):
+        self._dsn = dsn
+        self._conn: psycopg.Connection | None = None
+
+    def connect(self) -> None:
+        self._conn = psycopg.connect(self._dsn, row_factory=dict_row)
+        with self._conn.cursor() as cur:
+            cur.execute("SET statement_timeout = '300s'")
+
+    def close(self) -> None:
+        if self._conn is not None:
+            try:
+                self._conn.close()
+            except Exception:
+                pass
+            self._conn = None
+
+    def _reconnect(self) -> None:
+        logger.warning("Reconnecting to Postgres after connection failure")
+        self.close()
+        self.connect()
+
+    def ensure_connected(self) -> None:
+        if self._conn is None or self._conn.closed:
+            self._reconnect()
+
+    def _safe_rollback(self) -> None:
+        if self._conn is None or self._conn.closed:
+            return
+        try:
+            self._conn.rollback()
+        except Exception:
+            pass
+
+    def _run_with_db_retry(self, operation: str, fn: Callable[[], T]) -> T:
+        last_exc: Exception | None = None
+        for attempt in range(1, CLAIM_MAX_ATTEMPTS + 1):
+            try:
+                self.ensure_connected()
+                return fn()
+            except RETRYABLE_DB_EXCEPTIONS as exc:
+                last_exc = exc
+                self._safe_rollback()
+                if attempt >= CLAIM_MAX_ATTEMPTS:
+                    break
+                delay = CLAIM_RETRY_BASE_SECONDS * attempt
+                if isinstance(exc, _NO_RECONNECT_EXCEPTIONS):
+                    logger.warning(
+                        "%s attempt %s/%s retryable DB error (%s); retrying in %.1fs",
+                        operation,
+                        attempt,
+                        CLAIM_MAX_ATTEMPTS,
+                        exc.__class__.__name__,
+                        delay,
+                    )
+                    time.sleep(delay)
+                else:
+                    logger.warning(
+                        "%s attempt %s/%s connection error (%s); reconnecting in %.1fs",
+                        operation,
+                        attempt,
+                        CLAIM_MAX_ATTEMPTS,
+                        exc,
+                        delay,
+                    )
+                    time.sleep(delay)
+                    self._reconnect()
+            except Exception:
+                self._safe_rollback()
+                raise
+
+        assert last_exc is not None
+        raise last_exc
+
+    def claim_agents(self, limit: int) -> list[dict[str, Any]]:
+        def _claim() -> list[dict[str, Any]]:
+            assert self._conn is not None
+            with self._conn.cursor() as cur:
+                cur.execute(CLAIM_AGENTS_SQL, {"limit": limit})
+                rows = list(cur.fetchall())
+            self._conn.commit()
+            return rows
+
+        return self._run_with_db_retry("claim", _claim)
+
+    def load_active_categories(self) -> list[str]:
+        def _load() -> list[str]:
+            assert self._conn is not None
+            with self._conn.cursor() as cur:
+                cur.execute(LOAD_CATEGORIES_SQL)
+                rows = list(cur.fetchall())
+            self._conn.commit()
+            return [str(r["category_name"]) for r in rows]
+
+        return self._run_with_db_retry("load_categories", _load)
+
+    def load_process_models(self) -> list[dict[str, Any]]:
+        def _load() -> list[dict[str, Any]]:
+            assert self._conn is not None
+            with self._conn.cursor() as cur:
+                cur.execute(LOAD_MODELS_SQL, {"process_code": PROCESS_CODE})
+                rows = list(cur.fetchall())
+            self._conn.commit()
+            return rows
+
+        return self._run_with_db_retry("load_models", _load)
+
+    def increment_model_request(self, model_id: int) -> int:
+        def _inc() -> int:
+            assert self._conn is not None
+            with self._conn.cursor() as cur:
+                cur.execute(INCREMENT_REQUEST_SQL, {"model_id": model_id})
+                row = cur.fetchone()
+            self._conn.commit()
+            if row is None:
+                return 0
+            return int(row["request_total"])
+
+        return self._run_with_db_retry("increment_request", _inc)
+
+    def mark_success(
+        self,
+        *,
+        agent_id: int,
+        llm_model_id: int,
+        primary_category: str,
+        secondary_categories: list[str],
+        confidence: float | None,
+        reasoning: str | None,
+        agent_purpose: str | None,
+    ) -> None:
+        def _mark() -> None:
+            assert self._conn is not None
+            with self._conn.cursor() as cur:
+                cur.execute(
+                    MARK_SUCCESS_SQL,
+                    {
+                        "agent_id": agent_id,
+                        "llm_model_id": llm_model_id,
+                        "primary_category": primary_category,
+                        "secondary_categories": Json(secondary_categories),
+                        "confidence": confidence,
+                        "reasoning": reasoning,
+                        "agent_purpose": agent_purpose,
+                    },
+                )
+            self._conn.commit()
+
+        self._run_with_db_retry("mark_success", _mark)
+
+    def mark_error(
+        self,
+        *,
+        agent_id: int,
+        error_message: str,
+        llm_model_id: int | None = None,
+    ) -> None:
+        msg = (error_message or "unknown error").strip()
+        if len(msg) > ERROR_MESSAGE_MAX_LEN:
+            msg = msg[: ERROR_MESSAGE_MAX_LEN - 3] + "..."
+
+        def _mark() -> None:
+            assert self._conn is not None
+            with self._conn.cursor() as cur:
+                cur.execute(
+                    MARK_ERROR_SQL,
+                    {
+                        "agent_id": agent_id,
+                        "error_message": msg,
+                        "llm_model_id": llm_model_id,
+                    },
+                )
+            self._conn.commit()
+
+        self._run_with_db_retry("mark_error", _mark)

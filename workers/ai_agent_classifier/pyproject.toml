@@ -1,0 +1,12 @@
+[project]
+name = "ai-agent-classifier"
+version = "0.1.0"
+description = "Classify web_dashboard.agents into AI service categories via OpenAI-compatible LLMs"
+requires-python = ">=3.12"
+dependencies = [
+    "httpx>=0.28",
+    "psycopg[binary]>=3.2",
+]
+
+[dependency-groups]
+dev = []

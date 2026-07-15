@@ -1,0 +1,46 @@
+name: AI Agent Classifier
+
+on:
+  schedule:
+    - cron: "0 0 * * *"
+    - cron: "0 6 * * *"
+    - cron: "0 12 * * *"
+    - cron: "0 18 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: ai-agent-classifier
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        working-directory: workers/ai_agent_classifier
+        run: uv sync
+
+      - name: Run AI agent classifier
+        working-directory: workers/ai_agent_classifier
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          GROQ: ${{ secrets.GROQ }}
+          MAX_RUNTIME_SECONDS: 19800
+          CONCURRENCY: 1
+          CLAIM_BATCH_SIZE: 20
+        run: uv run python job.py

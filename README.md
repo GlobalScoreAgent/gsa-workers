@@ -2,13 +2,13 @@
 
 Unified Python batch workers for [Global Score Agent](https://www.globalscoreagent.com/), run via GitHub Actions against Supabase Postgres.
 
-**For AI agents:** start at [AGENTS.md](./AGENTS.md). Process catalog: [docs/PROCESSES.md](./docs/PROCESSES.md) (includes live **LP positions discovery** #8). Architecture / DB / ops: [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md), [docs/SUPABASE.md](./docs/SUPABASE.md), [docs/OPS.md](./docs/OPS.md). Only LP **15-day refresh** remains pending: [docs/PENDING_LP_POSITIONS.md](./docs/PENDING_LP_POSITIONS.md).
+**For AI agents:** start at [AGENTS.md](./AGENTS.md). Process catalog: [docs/PROCESSES.md](./docs/PROCESSES.md) (wallet pipelines + **URI resolve/reprocess** #9–10). Architecture / DB / ops: [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md), [docs/SUPABASE.md](./docs/SUPABASE.md), [docs/OPS.md](./docs/OPS.md). LP **15-day refresh** still pending: [docs/PENDING_LP_POSITIONS.md](./docs/PENDING_LP_POSITIONS.md).
 
 ## Workers
 
 | Worker | Schedule (UTC) | Eligibility | Description |
 |---|---|---|---|
-| [`wallet_nonce_balance_daily`](./workers/wallet_nonce_balance_daily/README.md) | 0, 6, 12, 18h (matrix `worker-a`/`worker-b`) | `is_valid_..._daily` + `import_nonce_and_balance_daily_next_eligible_at` | Balance + nonce → daily JSON → `wallet_apply_daily_snapshot` |
+| [`wallet_nonce_balance_daily`](./workers/wallet_nonce_balance_daily/README.md) | 0, 6, 12, 18h (matrix `worker-a`/`worker-b`) | `is_valid_..._daily` + `import_nonce_and_balance_daily_next_eligible_at` | Balance + nonce → daily JSON → `wallet_apply_daily_snapshot` → `wallet_daily_metrics` |
 | [`owner_wallet_origin`](./workers/owner_wallet_origin/README.md) | 0, 6, 12, 18h | monthly `is_valid` + `import_wallet_history_next_eligible_at` | First on-chain activity → history JSON → `wallet_apply_owner_history_snapshot` |
 | [`owner_wallet_nonce_balance_monthly`](./workers/owner_wallet_nonce_balance_monthly/README.md) | 0, 6, 12, 18h | `is_valid_..._monthly` + `import_nonce_and_balance_monthly_next_eligible_at` | Balance + nonce (30d) → monthly JSON → `wallet_apply_monthly_snapshot` |
 | [`cex_addresses_import`](./workers/cex_addresses_import/README.md) | 1st & 16th 00:00 (~every 15 days) | n/a (reference data) | Dune CEX list → `wallets.cex_addresses_upsert` |
@@ -16,8 +16,11 @@ Unified Python batch workers for [Global Score Agent](https://www.globalscoreage
 | [`wallet_token_contracts_discovery`](./workers/wallet_token_contracts_discovery/README.md) | 0, 6, 12, 18h | `wallet_transactions.does_need_discovery_contracts` + `chains.subdomain_alchemy` | Alchemy ERC-20 balances → `wallet_token_contracts_upsert` |
 | [`wallet_token_portfolio_discovery`](./workers/wallet_token_portfolio_discovery/README.md) | 0, 6, 12, 18h | portfolio discovery flag after contract discovery | Alchemy amounts + DeFiLlama → fungible `wallet_token_positions` |
 | [`wallet_lp_positions_discovery`](./workers/wallet_lp_positions_discovery/README.md) | 0, 6, 12, 18h | LP flag after portfolio discovery | UniV3 NFT + `lp_pools` classic → `wallet_lp_positions` |
+| [`agent_uri_resolve`](./workers/agent_uri_resolve/README.md) | 00:00, 12:00 | agents / `feedback_on_chain` / external feedbacks pending | Resolve/materialize → `uri_documents` + `agent_manifest` |
+| [`agent_uri_reprocess`](./workers/agent_uri_reprocess/README.md) | 06:00, 18:00 | download errors (max 3) + off-chain docs &gt;15d | Retry errors; refresh HTTP/IPFS; `is_processed` only if document changed |
+| [`ai_agent_classifier`](./workers/ai_agent_classifier/README.md) | 0, 6, 12, 18h | `web_dashboard.agents.does_need_ai_category_process` | LLM categories → `ai_category_*` (+ `llm.models_requests` rate limits) |
 
-Pending: [LP 15-day refresh](./docs/PENDING_LP_POSITIONS.md).
+Pending: [LP 15-day refresh](./docs/PENDING_LP_POSITIONS.md). Manifest **consume** (entity SPs) not built yet.
 
 ## Common pipeline (claim workers)
 
@@ -39,6 +42,9 @@ Reference-data: `cex_addresses_import` (Dune → upsert); `token_prices_import` 
 | `ALCHEMY_FREE_KEY` | For token contracts / portfolio / LP discovery | Alchemy Token API + eth_call |
 | `DUNE_KEY` | For CEX import | Dune Analytics API key |
 | `COINGECKO_KEY` | For token-prices enrich | CoinGecko Demo/Pro API key |
+| `PINATA_GATEWAY` | Optional (URI workers) | Paid IPFS gateway token (last resort) |
+| `SCRAPE_DO_TOKEN` | Optional (URI workers) | Scrape.do token (last HTTP fallback) |
+| `GROQ` | For AI agent classifier | Groq API key (`llm.llm_provider.secret`) |
 
 ## CI defaults (workflows)
 
@@ -52,6 +58,9 @@ Reference-data: `cex_addresses_import` (Dune → upsert); `token_prices_import` 
 | token contracts discovery | 10 | 50 | 7200 | 19800 |
 | token portfolio discovery | 5 | 25 | 7200 | 19800 |
 | LP positions discovery | 5 | 25 | 7200 | 19800 |
+| agent URI resolve | 4 | 20 | n/a | 19800 |
+| agent URI reprocess | 4 | 20 | n/a | 19800 |
+| AI agent classifier | 1 | 20 | n/a | 19800 |
 
 Daily also sets `WORKER_ID` to `worker-a` or `worker-b`. Origin/monthly set `SKIP_ELIGIBLE_COUNT=1`.
 
@@ -107,9 +116,18 @@ gsa-workers/
 │   ├── wallet_token_portfolio_discovery/
 │   │   ├── job.py
 │   │   └── src/          # db, portfolio_calc, networks
-│   └── wallet_lp_positions_discovery/
-│       ├── job.py
-│       └── src/          # db, nft_lp, classic_lp, pricing, univ3_math
+│   ├── wallet_lp_positions_discovery/
+│   │   ├── job.py
+│   │   └── src/          # db, nft_lp, classic_lp, pricing, univ3_math
+│   ├── ai_agent_classifier/
+│   │   ├── job.py
+│   │   └── src/          # db, llm_client, prompt
+│   ├── agent_uri_resolve/
+│   │   ├── job.py
+│   │   └── src/          # db, resolve, handlers, scrape (Playwright)
+│   └── agent_uri_reprocess/
+│       ├── job.py        # imports resolve stack from sibling via sys.path
+│       └── src/          # db (errors + refresh claims)
 └── .github/workflows/
     ├── wallet-nonce-balance-daily.yml
     ├── owner-wallet-origin.yml
@@ -118,7 +136,9 @@ gsa-workers/
     ├── token-prices-import.yml
     ├── wallet-token-contracts-discovery.yml
     ├── wallet-token-portfolio-discovery.yml
-    └── wallet-lp-positions-discovery.yml
+    ├── wallet-lp-positions-discovery.yml
+    ├── agent-uri-resolve.yml
+    └── agent-uri-reprocess.yml
 ```
 
 Schema / snapshot SQL: sibling repo **`gsa-supabase-schema`**.

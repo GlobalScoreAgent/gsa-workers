@@ -1,6 +1,6 @@
 # Architecture
 
-Python batch workers run on **GitHub Actions**, talk to **Supabase Postgres** over a pooler DSN, and finish each wallet with an **inline SQL snapshot** RPC. There is no Cloudflare Worker or Edge Function in the hot path.
+Python batch workers run on **GitHub Actions**, talk to **Supabase Postgres** over a pooler DSN. Wallet jobs finish with an **inline SQL snapshot / upsert** RPC; **URI ingest** writes `uri_documents` + `agent_manifest` directly. There is no Cloudflare Worker or Edge Function in the hot path.
 
 ## System diagram
 
@@ -19,7 +19,7 @@ flowchart LR
   subgraph db [Supabase_Postgres]
     wallets[erc_8004.wallets]
     rpcFn["wallet_apply_*_snapshot"]
-    details[wallet_transactions_or_owner_details]
+    details[wallet_daily_metrics_or_owner_details]
   end
   cron --> job
   job --> claim
@@ -35,12 +35,14 @@ flowchart LR
 
 ## Common pipeline
 
-Every worker loop iteration:
+Every wallet claim worker loop iteration:
 
 1. **Claim** — `FOR UPDATE SKIP LOCKED` on eligible rows; status `Pending`; bump `next_eligible_at` by `CLAIM_STALE_SECONDS` (default 2h).
 2. **RPC** — parallel HTTP (public RPCs → Alchemy) for each claimed wallet.
 3. **Save** — batch `UPDATE` JSON + `Completed` or `Error` + schedule next eligibility.
 4. **Snapshot** — for each `Completed` id, call `erc_8004.wallet_apply_*_snapshot(wallet_id)` → destination tables + status `Processed`.
+
+**Daily destination (paso 1):** `wallet_apply_daily_snapshot` upserts `erc_8004.wallet_daily_metrics` (`wallet_id`, `chain_id`, `snapshot_date`, `nonce`, `balance`). `snapshot_date` is Postgres `CURRENT_DATE` (DB timezone, typically **UTC**), not the GHA runner local calendar. It does **not** write `wallet_transactions` or `chain_nonces` (rollup later). Discovery workers still claim on `wallet_transactions` using existing rows.
 
 If claim or save/snapshot fails after DB retries, the job **logs and continues** the loop until `MAX_RUNTIME_SECONDS` (wallets left `Pending` are reclaimed after the stale window).
 
@@ -77,16 +79,21 @@ stateDiagram-v2
 | `wallet_token_contracts_discovery` | `wallet-token-contracts-discovery.yml` | `wallet-token-contracts-discovery` | 1 runner |
 | `wallet_token_portfolio_discovery` | `wallet-token-portfolio-discovery.yml` | `wallet-token-portfolio-discovery` | 1 runner |
 | `wallet_lp_positions_discovery` | `wallet-lp-positions-discovery.yml` | `wallet-lp-positions-discovery` | 1 runner |
+| `agent_uri_resolve` | `agent-uri-resolve.yml` | `agent-uri-resolve` | 1 runner (00:00 / 12:00) |
+| `agent_uri_reprocess` | `agent-uri-reprocess.yml` | `agent-uri-reprocess` | 1 runner (06:00 / 18:00) |
+| `ai_agent_classifier` | `ai-agent-classifier.yml` | `ai-agent-classifier` | 1 runner (0/6/12/18) |
 
-Claim workers schedule: `0 0,6,12,18 * * *` UTC + `workflow_dispatch`.  
-CEX import schedule: `0 0 1,16 * *` UTC + `workflow_dispatch` (1st and 16th of each month ≈ every 15 days, same cadence as the former walcert CEX import cron).  
-Token prices import schedule: `0 0,6,12,18 * * *` UTC + `workflow_dispatch` (DexScreener → CoinGecko enrich; same cadence as claim workers).
+Claim wallet workers schedule: `0 0,6,12,18 * * *` UTC + `workflow_dispatch`.  
+CEX import schedule: `0 0 1,16 * *` UTC + `workflow_dispatch` (1st and 16th of each month ≈ every 15 days).  
+Token prices import schedule: `0 0,6,12,18 * * *` UTC + `workflow_dispatch`.  
+URI resolve: `0 0,12 * * *`; URI reprocess: `0 6,18 * * *` (split cadence by design).  
+AI classifier: `0 0,6,12,18 * * *` UTC + `workflow_dispatch`.
 
 ### What each worker does
 
 | Worker | Input flag | Output |
 |---|---|---|
-| daily | `is_valid_import_current_nonce_and_balance_daily` | Balance/nonce JSON → `wallet_transactions` + `chain_nonces` |
+| daily | `is_valid_import_current_nonce_and_balance_daily` | Balance/nonce JSON → `wallet_daily_metrics` (flat); `Processed` |
 | monthly | `is_valid_import_current_nonce_and_balance_monthly` | Balance/nonce JSON → `wallet_owner_details` (current metrics) |
 | origin | same monthly flag | First-activity history JSON → `wallet_owner_details.first_transaction_at` |
 | cex import | n/a | Dune rows → `wallets.cex_addresses` via `cex_addresses_upsert` |
@@ -94,6 +101,9 @@ Token prices import schedule: `0 0,6,12,18 * * *` UTC + `workflow_dispatch` (Dex
 | token contracts discovery | `wallet_transactions.does_need_discovery_contracts` + `chains.subdomain_alchemy` | Alchemy ERC-20 balances → `wallets.wallet_token_contracts` via `wallet_token_contracts_upsert` |
 | token portfolio discovery | `does_need_portfolio_discovery` after contract discovery | Alchemy amounts + DeFiLlama → fungible `wallet_token_positions_insert` |
 | LP positions discovery | `does_need_lp_discovery` after portfolio discovery | NFT + `lp_pools` → `wallet_lp_positions_upsert` |
+| agent URI resolve | agents / on-chain / external feedbacks pending | Resolve/materialize → `uri_documents` + `agent_manifest` |
+| agent URI reprocess | download errors (max 3) + off-chain docs &gt;15d | Retry + refresh; `is_processed` only if document changed |
+| AI agent classifier | `does_need_ai_category_process` | LLM → `ai_category_*` on `web_dashboard.agents`; rotate `llm.models` by daily cap |
 
 ## Token contracts discovery
 
@@ -163,6 +173,52 @@ flowchart LR
 
 Chains without NFT/classic coverage still drain the queue with empty upserts. 15-day refresh worker still pending: [PENDING_LP_POSITIONS.md](./PENDING_LP_POSITIONS.md).
 
+## URI ingest (resolve + reprocess)
+
+No wallet claim / snapshot RPC. Workers write **`erc_8004.uri_documents`** (canonical JSON by `uri_hash`) and **`erc_8004.agent_manifest`** (FK `uri_document_id` + envelope: `source`, revoke fields, `has_download_error`, `reprocess_count`). Columns `agent_manifest.data` / `url` are **dropped**.
+
+```mermaid
+flowchart LR
+  subgraph resolveJob [agent_uri_resolve]
+    a[claim_agents]
+    o[claim_on_chain]
+    e[claim_external_feedbacks]
+    fetch[resolve_or_materialize]
+  end
+  subgraph reprocessJob [agent_uri_reprocess]
+    err[claim_download_errors]
+    ref[claim_offchain_gt_15d]
+  end
+  a --> fetch
+  o --> fetch
+  e --> fetch
+  fetch --> ud[uri_documents]
+  fetch --> am[agent_manifest]
+  err --> fetch2[force_refresh]
+  ref --> fetch2
+  fetch2 --> ud
+  fetch2 --> am
+```
+
+| Worker | Role |
+|---|---|
+| [`agent_uri_resolve`](../workers/agent_uri_resolve/README.md) | First ingest: agents → on-chain feedbacks → external URI/endpoint; nested/DID; Pinata/Scrape.do scrapers |
+| [`agent_uri_reprocess`](../workers/agent_uri_reprocess/README.md) | Retry download errors (max 3); refresh HTTP/IPFS docs &gt;15d; reset `is_processed` only if document changed |
+
+Hex / on-chain synthetic docs are **not** TTL-refreshed — subgraph import requeues via flags into resolve. Manifest **entity consume** is still deferred.
+
+## AI agent classifier
+
+**Live** claim worker on `web_dashboard.agents` ([README](../workers/ai_agent_classifier/README.md)):
+
+1. Load taxonomy from `agent_ai_categories` (`is_active`).
+2. Load providers/models for `llm.process.process_code='agent-classifier'`.
+3. Claim pending agents (`FOR UPDATE SKIP LOCKED`); single GHA concurrency group.
+4. Pick model with remaining `request_per_day` capacity; call OpenAI-compatible `{base_url}/chat/completions`.
+5. Increment `llm.models_requests`; persist classification or error columns; clear queue flag.
+
+Secrets: env name = `llm.llm_provider.secret` (Groq → `GROQ`). Gemini/Cerebras later = new provider rows + secrets (same client).
+
 ## Time budgets
 
 | Limit | Value |
@@ -199,13 +255,14 @@ workers/<name>/
     ├── dune.py         # Dune HTTP client (cex import)
     ├── dexscreener.py / coingecko.py  # token_prices_import
     ├── nft_lp.py / classic_lp.py / pricing.py / univ3_math.py  # LP discovery
+    ├── resolve.py / handlers / scrape   # URI resolve (reprocess imports via sys.path)
     ├── rpc.py
     ├── alchemy.py
     ├── networks.py     # 8-chain public RPC list (or LP NFPM map)
     └── address.py
 ```
 
-Origin also has `scripts/check_pending.py` and `scripts/compare_smoke.py`. `wallet_lp_positions_discovery` uses Alchemy `eth_call` + Multicall3 (httpx), not the daily balance JSON snapshot path.
+Origin also has `scripts/check_pending.py` and `scripts/compare_smoke.py`. `wallet_lp_positions_discovery` uses Alchemy `eth_call` + Multicall3 (httpx), not the daily balance JSON snapshot path. `agent_uri_reprocess` does not duplicate resolve/handlers — it adds claim SQL for errors/refresh and imports the sibling resolve package.
 
 ## CI env defaults (workflows)
 
@@ -219,13 +276,17 @@ Origin also has `scripts/check_pending.py` and `scripts/compare_smoke.py`. `wall
 | token contracts discovery | 10 | 50 | 7200 |
 | token portfolio discovery | 5 | 25 | 7200 |
 | LP positions discovery | 5 | 25 | 7200 |
+| agent URI resolve | 4 | 20 | n/a |
+| agent URI reprocess | 4 | 20 | n/a |
+| AI agent classifier | 1 | 20 | n/a |
 
-Secrets: `SUPABASE_DB_URL` (required), `ALCHEMY_KEY` (balance/nonce claim workers), `ALCHEMY_FREE_KEY` (contracts / portfolio / LP discovery), `DUNE_KEY` (cex), `COINGECKO_KEY` (token prices). Daily sets `WORKER_ID` from the matrix.
+Secrets: `SUPABASE_DB_URL` (required), `ALCHEMY_KEY` (balance/nonce), `ALCHEMY_FREE_KEY` (contracts / portfolio / LP), `DUNE_KEY` (cex), `COINGECKO_KEY` (token prices), `PINATA_GATEWAY` / `SCRAPE_DO_TOKEN` (URI workers, optional), `GROQ` (AI classifier). Daily sets `WORKER_ID` from the matrix.
 
 ## Related docs
 
 - [PROCESSES.md](./PROCESSES.md) — process catalog
 - [PENDING_LP_POSITIONS.md](./PENDING_LP_POSITIONS.md) — LP 15-day refresh (pending)
-- [SUPABASE.md](./SUPABASE.md) — columns, RPCs, monitoring SQL
-- [OPS.md](./OPS.md) — operations / stuck states
+- [SUPABASE.md](./SUPABASE.md) — columns, RPCs, monitoring SQL (wallets + URI)
+- [OPS.md](./OPS.md) — operations / stuck states / URI runbook
 - [AGENTS.md](../AGENTS.md) — agent entry point
+- Worker READMEs: `agent_uri_resolve`, `agent_uri_reprocess`
