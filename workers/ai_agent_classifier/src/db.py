@@ -46,6 +46,12 @@ WHERE is_active IS TRUE
 ORDER BY id
 """
 
+LOAD_SYSTEM_PROMPT_SQL = """
+SELECT system_prompt
+FROM llm.process
+WHERE process_code = %(process_code)s
+"""
+
 LOAD_MODELS_SQL = """
 SELECT
   m.id AS model_id,
@@ -218,6 +224,23 @@ class Database:
             return [str(r["category_name"]) for r in rows]
 
         return self._run_with_db_retry("load_categories", _load)
+
+    def load_system_prompt(self) -> str | None:
+        def _load() -> str | None:
+            assert self._conn is not None
+            with self._conn.cursor() as cur:
+                cur.execute(LOAD_SYSTEM_PROMPT_SQL, {"process_code": PROCESS_CODE})
+                row = cur.fetchone()
+            self._conn.commit()
+            if row is None:
+                return None
+            raw = row.get("system_prompt")
+            if raw is None:
+                return None
+            text = str(raw).strip()
+            return text or None
+
+        return self._run_with_db_retry("load_system_prompt", _load)
 
     def load_process_models(self) -> list[dict[str, Any]]:
         def _load() -> list[dict[str, Any]]:

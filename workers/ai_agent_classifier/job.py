@@ -19,7 +19,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 from db import CLAIM_RETRY_BASE_SECONDS, Database
 from llm_client import chat_completion
 from prompt import (
-    SYSTEM_PROMPT,
     build_user_prompt,
     parse_classification_json,
     validate_classification,
@@ -100,8 +99,9 @@ async def run_job() -> int:
 
     try:
         categories = db.load_active_categories()
+        system_prompt = db.load_system_prompt()
     except Exception as exc:
-        logger.error("Failed to load categories: %s", exc)
+        logger.error("Failed to load categories/system_prompt: %s", exc)
         db.close()
         return 1
 
@@ -110,10 +110,19 @@ async def run_job() -> int:
         db.close()
         return 1
 
+    if not system_prompt:
+        logger.error(
+            "Missing llm.process.system_prompt for process_code=agent-classifier"
+        )
+        db.close()
+        return 1
+
     allowed = set(categories)
     logger.info(
-        "Started categories=%s claim_batch_size=%s concurrency=%s max_runtime=%ss",
+        "Started categories=%s system_prompt_chars=%s claim_batch_size=%s "
+        "concurrency=%s max_runtime=%ss",
         len(categories),
+        len(system_prompt),
         claim_batch_size,
         concurrency,
         max_runtime_seconds,
@@ -229,7 +238,7 @@ async def run_job() -> int:
                                     base_url=str(model["base_url"]),
                                     api_key=api_key,
                                     model_slug=str(model["model_slug"]),
-                                    system_prompt=SYSTEM_PROMPT,
+                                    system_prompt=system_prompt,
                                     user_prompt=user_prompt,
                                     temperature=(
                                         None

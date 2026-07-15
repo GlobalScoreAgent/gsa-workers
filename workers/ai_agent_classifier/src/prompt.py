@@ -1,35 +1,12 @@
-"""Prompt templates and response validation for agent AI classification."""
+"""User prompt builder and response validation for agent AI classification.
+
+System prompt is loaded from llm.process.system_prompt (not hardcoded here).
+"""
 
 from __future__ import annotations
 
 import json
 from typing import Any
-
-SYSTEM_PROMPT = """You are an expert in categorizing autonomous agents from the ERC-8004 and Global Score Agent ecosystem.
-
-Your task is to analyze an agent's information and assign it service categories.
-
-STRICT RULES:
-- Only use categories from the list provided in the user message.
-- Never invent new categories.
-- If no category fits well, use "Other / Niche".
-- Be precise and conservative.
-- Always respond with valid JSON only. No extra text before or after the JSON.
-
-OUTPUT FORMAT (always return this exact JSON structure):
-
-{
-  "primary_category": "Exact category name from the list",
-  "secondary_categories": ["category1", "category2"],
-  "confidence": 0.85,
-  "reasoning": "Brief and objective explanation of the classification",
-  "agent_purpose": "Short description (1-2 sentences) of what this agent actually does, based on the provided information"
-}
-
-IMPORTANT:
-- The "agent_purpose" field must ALWAYS be included.
-- All output must be in English.
-"""
 
 
 def _field_to_text(value: Any) -> str:

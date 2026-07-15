@@ -15,13 +15,14 @@ Another process sets the flag to `TRUE`. This worker sets it `FALSE` on success 
 ## Pipeline
 
 1. Load active categories from `web_dashboard.agent_ai_categories`
-2. Load active providers/models for `llm.process.process_code = 'agent-classifier'`
-3. Claim agents with `FOR UPDATE SKIP LOCKED` (no soft-lock columns)
-4. Pick a model with remaining daily capacity (`models_requests` vs `request_per_day`)
-5. Call `{base_url}/chat/completions` with provider params (`temperature`, `max_completion_tokens`, `response_format`)
-6. Upsert `llm.models_requests` (`request_total += 1` for `CURRENT_DATE`)
-7. On success: write `ai_category_*`, `llm_model_id`, clear error cols, flag `FALSE`
-8. On failure: `has_ai_category_process_error=TRUE`, `ai_category_process_error_message`, flag `FALSE`
+2. Load `llm.process.system_prompt` for `process_code = 'agent-classifier'` (editable in DB)
+3. Load active providers/models for that process
+4. Claim agents with `FOR UPDATE SKIP LOCKED` (no soft-lock columns)
+5. Pick a model with remaining daily capacity (`models_requests` vs `request_per_day`)
+6. Call `{base_url}/chat/completions` with provider params (`temperature`, `max_completion_tokens`, `response_format`)
+7. Upsert `llm.models_requests` (`request_total += 1` for `CURRENT_DATE`)
+8. On success: write `ai_category_*`, `llm_model_id`, clear error cols, flag `FALSE`
+9. On failure: `has_ai_category_process_error=TRUE`, `ai_category_process_error_message`, flag `FALSE`
 
 Exit `0` when: queue empty, all models hit daily limit, or `MAX_RUNTIME_SECONDS` reached.
 
