@@ -215,7 +215,8 @@ Hex / on-chain synthetic docs are **not** TTL-refreshed — subgraph import requ
 2. Load providers/models for `llm.process.process_code='agent-classifier'`.
 3. Claim pending agents (`FOR UPDATE SKIP LOCKED`); single GHA concurrency group.
 4. Exact-match fingerprint (`ai_category_input_hash`); copy from an existing donor when inputs match; otherwise pick model and call OpenAI-compatible `{base_url}/chat/completions`.
-5. Increment `llm.models_requests` only on LLM calls; persist classification (incl. hash) or error columns; clear queue flag.
+5. Categories include quality buckets `Invalid Metadata` / `Insufficient Metadata` and `Trading Bots` (product clones like Ave/Debot) vs semantic `Trading`.
+6. Increment `llm.models_requests` only on LLM calls; persist classification (incl. hash) or error columns; clear queue flag.
 
 Secrets: env name = `llm.llm_provider.secret` (Groq → `GROQ`). Gemini/Cerebras later = new provider rows + secrets (same client).
 

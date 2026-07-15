@@ -25,6 +25,8 @@ Another process sets the flag to `TRUE`. This worker sets it `FALSE` on success 
 9. On success: write `ai_category_*`, `ai_category_input_hash`, `llm_model_id`, clear error cols, flag `FALSE`
 10. On failure: `has_ai_category_process_error=TRUE`, `ai_category_process_error_message`, flag `FALSE`
 
+Allowlist includes quality categories `Invalid Metadata` / `Insufficient Metadata` and `Trading Bots` (Ave/Debot-style clones) vs distinct `Trading`. Prompt rules live in `llm.process.system_prompt`.
+
 Exit `0` when: queue empty, all models hit daily request/token limits, or `MAX_RUNTIME_SECONDS` reached.
 
 Rate limits: sliding-window hardcaps use `request_per_minute` and `tokens_per_minute`. Daily caps use `request_per_day` and `tokents_per_day` (column name as in DB). HTTP 429 TPM is retried; 429 TPD skips that model for the rest of the run.

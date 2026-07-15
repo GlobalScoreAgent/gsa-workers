@@ -561,6 +561,19 @@ ORDER BY m.id;
 --     has_ai_category_process_error = NULL,
 --     ai_category_process_error_message = NULL
 -- WHERE has_ai_category_process_error IS TRUE;
+
+-- After changing classifier system prompt / taxonomy: wipe results + hashes and requeue
+-- (script: gsa-supabase-schema/supabase/scripts/reset_ai_category_for_prompt_refresh.sql)
+-- Clears ai_category_*, ai_category_input_hash, llm_model_id, calculated_at, errors;
+-- sets does_need_ai_category_process = TRUE so copies do not reuse stale classifications.
+
+-- Scoped requeue after Trading Bots / Invalid Metadata taxonomy refresh:
+-- gsa-supabase-schema/supabase/scripts/requeue_ai_category_trading_niche_taxonomy.sql
+-- Resets Trading + Other/Niche + null-primary error rows (clears hash).
+
+-- New active categories (also): Invalid Metadata, Insufficient Metadata, Trading Bots
+-- Prompt rules: llm.process.system_prompt (process_code=agent-classifier)
+-- Scripts: agent_ai_categories_metadata_trading_bots.sql, llm_agent_classifier_system_prompt.sql
 ```
 
 Re-run: **Actions** → `ai-agent-classifier` → **Run workflow**. README: [`ai_agent_classifier`](../workers/ai_agent_classifier/README.md).
