@@ -35,7 +35,14 @@ logger = logging.getLogger("ai_agent_classifier")
 Outcome = Literal["ok", "error", "capacity"]
 LLM_429_MAX_ATTEMPTS = 3
 _RETRY_AFTER_MS_RE = re.compile(r"try again in\s+(\d+(?:\.\d+)?)\s*ms", re.IGNORECASE)
-_RETRY_AFTER_S_RE = re.compile(r"try again in\s+(\d+(?:\.\d+)?)\s*s(?:ec(?:onds?)?)?", re.IGNORECASE)
+_RETRY_AFTER_S_RE = re.compile(
+    r"try again in\s+(\d+(?:\.\d+)?)\s*s(?:ec(?:onds?)?)?",
+    re.IGNORECASE,
+)
+_RETRY_AFTER_M_RE = re.compile(
+    r"try again in\s+(\d+)m\s*(\d+(?:\.\d+)?)s",
+    re.IGNORECASE,
+)
 
 
 def env_int(name: str, default: int, minimum: int = 1, maximum: int | None = None) -> int:
@@ -51,17 +58,50 @@ def env_int(name: str, default: int, minimum: int = 1, maximum: int | None = Non
     return value
 
 
-def model_has_capacity(model: dict[str, Any]) -> bool:
+def estimate_tokens(
+    system_prompt: str,
+    user_prompt: str,
+    max_completion_tokens: int | None,
+) -> int:
+    prompt_chars = len(system_prompt) + len(user_prompt)
+    prompt_est = max(prompt_chars // 4, 1)
+    completion_est = max(int(max_completion_tokens or 0), 0)
+    return prompt_est + completion_est
+
+
+def model_has_capacity(
+    model: dict[str, Any],
+    *,
+    estimate: int = 0,
+    exhausted_ids: set[int] | None = None,
+) -> bool:
+    model_id = int(model["model_id"])
+    if exhausted_ids and model_id in exhausted_ids:
+        return False
     if not bool(model.get("has_limits")):
         return True
-    used = int(model.get("request_total_today") or 0)
-    limit = int(model.get("request_per_day") or 0)
-    return used < limit
+    used_req = int(model.get("request_total_today") or 0)
+    limit_req = int(model.get("request_per_day") or 0)
+    if used_req >= limit_req:
+        return False
+    tpd = model.get("tokents_per_day")
+    if tpd is not None:
+        used_tok = int(model.get("token_total_today") or 0)
+        if used_tok >= int(tpd):
+            return False
+        if estimate > 0 and (used_tok + estimate) > int(tpd):
+            return False
+    return True
 
 
-def pick_model(models: list[dict[str, Any]]) -> dict[str, Any] | None:
+def pick_model(
+    models: list[dict[str, Any]],
+    *,
+    estimate: int = 0,
+    exhausted_ids: set[int] | None = None,
+) -> dict[str, Any] | None:
     for model in models:
-        if model_has_capacity(model):
+        if model_has_capacity(model, estimate=estimate, exhausted_ids=exhausted_ids):
             return model
     return None
 
@@ -104,12 +144,83 @@ class RateLimiter:
             await asyncio.sleep(max(sleep_for, 0.05))
 
 
+class TokenMinuteLimiter:
+    """Hardcap sliding window of token usage per model (TPM)."""
+
+    WINDOW_SECONDS = 60.0
+
+    def __init__(self) -> None:
+        self._windows: dict[int, deque[tuple[float, int]]] = defaultdict(deque)
+        self._lock = asyncio.Lock()
+
+    async def wait(
+        self,
+        model_id: int,
+        tokens_per_minute: int | None,
+        estimate: int,
+    ) -> None:
+        if tokens_per_minute is None:
+            return
+        tpm = int(tokens_per_minute)
+        if tpm <= 0:
+            return
+        est = max(int(estimate), 1)
+        while True:
+            async with self._lock:
+                now = time.monotonic()
+                window = self._windows[model_id]
+                while window and (now - window[0][0]) >= self.WINDOW_SECONDS:
+                    window.popleft()
+                used = sum(t for _, t in window)
+                if used + est <= tpm:
+                    # Reserve estimate; settled later with record().
+                    window.append((now, est))
+                    return
+                sleep_for = self.WINDOW_SECONDS - (now - window[0][0]) + 0.01
+                logger.info(
+                    "TPM hardcap model_id=%s tpm=%s used=%s est=%s; sleeping %.2fs",
+                    model_id,
+                    tpm,
+                    used,
+                    est,
+                    sleep_for,
+                )
+            await asyncio.sleep(max(sleep_for, 0.05))
+
+    async def record(self, model_id: int, actual_tokens: int, reserved_estimate: int) -> None:
+        """Replace last reserved estimate entry with actual usage when possible."""
+        async with self._lock:
+            window = self._windows[model_id]
+            if not window:
+                window.append((time.monotonic(), max(actual_tokens, 0)))
+                return
+            # Prefer adjusting the most recent reservation matching estimate.
+            ts, prev = window[-1]
+            if prev == reserved_estimate:
+                window[-1] = (ts, max(actual_tokens, 0))
+            else:
+                window.append((time.monotonic(), max(actual_tokens, 0)))
+
+
 def _is_http_429(exc: BaseException) -> bool:
     return "HTTP 429" in str(exc)
 
 
+def _is_tpd_429(exc: BaseException) -> bool:
+    text = str(exc).lower()
+    return "tokens per day" in text or "(tpd)" in text or "token per day" in text
+
+
+def _is_tpm_429(exc: BaseException) -> bool:
+    text = str(exc).lower()
+    return "tokens per minute" in text or "(tpm)" in text or "token per minute" in text
+
+
 def _retry_after_seconds(exc: BaseException, attempt: int) -> float:
     text = str(exc)
+    m_m = _RETRY_AFTER_M_RE.search(text)
+    if m_m:
+        return max(float(m_m.group(1)) * 60.0 + float(m_m.group(2)), 0.05)
     m_ms = _RETRY_AFTER_MS_RE.search(text)
     if m_ms:
         return max(float(m_ms.group(1)) / 1000.0, 0.05)
@@ -119,6 +230,14 @@ def _retry_after_seconds(exc: BaseException, attempt: int) -> float:
     return float(2 ** (attempt - 1))
 
 
+class DailyTokenExhausted(Exception):
+    """Model hit provider TPD; skip for this run."""
+
+    def __init__(self, model_id: int, message: str):
+        super().__init__(message)
+        self.model_id = model_id
+
+
 async def call_llm_with_retries(
     http_client: httpx.AsyncClient,
     *,
@@ -126,16 +245,22 @@ async def call_llm_with_retries(
     api_key: str,
     system_prompt: str,
     user_prompt: str,
+    estimate: int,
     rate_limiter: RateLimiter,
-    bump_model_total,
+    token_minute_limiter: TokenMinuteLimiter,
+    bump_model_usage,
 ) -> str:
     model_id = int(model["model_id"])
     rpm = int(model["request_per_minute"] or 1)
+    tpm = model.get("tokens_per_minute")
+    tpm_i = int(tpm) if tpm is not None else None
     last_exc: Exception | None = None
+
     for attempt in range(1, LLM_429_MAX_ATTEMPTS + 1):
         await rate_limiter.wait(model_id, rpm)
+        await token_minute_limiter.wait(model_id, tpm_i, estimate)
         try:
-            raw = await chat_completion(
+            raw, total_tokens = await chat_completion(
                 http_client,
                 base_url=str(model["base_url"]),
                 api_key=api_key,
@@ -158,13 +283,37 @@ async def call_llm_with_retries(
                     else str(model["response_format"])
                 ),
             )
-            await bump_model_total(model_id)
+            await token_minute_limiter.record(model_id, total_tokens, estimate)
+            await bump_model_usage(model_id, total_tokens)
             return raw
         except Exception as exc:
-            await bump_model_total(model_id)
+            await bump_model_usage(model_id, 0)
             last_exc = exc
-            if _is_http_429(exc) and attempt < LLM_429_MAX_ATTEMPTS:
+            if _is_http_429(exc) and _is_tpd_429(exc):
+                logger.warning(
+                    "LLM TPD 429 model_id=%s; marking exhausted for this run",
+                    model_id,
+                )
+                raise DailyTokenExhausted(model_id, str(exc)) from exc
+            if (
+                _is_http_429(exc)
+                and _is_tpm_429(exc)
+                and attempt < LLM_429_MAX_ATTEMPTS
+            ):
                 delay = _retry_after_seconds(exc, attempt)
+                # Cap TPM retries; avoid multi-minute sleeps from misclassified errors.
+                delay = min(delay, 15.0)
+                logger.warning(
+                    "LLM TPM 429 model_id=%s attempt=%s/%s; sleeping %.2fs",
+                    model_id,
+                    attempt,
+                    LLM_429_MAX_ATTEMPTS,
+                    delay,
+                )
+                await asyncio.sleep(delay)
+                continue
+            if _is_http_429(exc) and attempt < LLM_429_MAX_ATTEMPTS:
+                delay = min(_retry_after_seconds(exc, attempt), 15.0)
                 logger.warning(
                     "LLM HTTP 429 model_id=%s attempt=%s/%s; sleeping %.2fs",
                     model_id,
@@ -230,7 +379,9 @@ async def run_job() -> int:
     sem = asyncio.Semaphore(concurrency)
     db_lock = asyncio.Lock()
     rate_limiter = RateLimiter()
+    token_minute_limiter = TokenMinuteLimiter()
     models_cache: list[dict[str, Any]] = []
+    exhausted_tpd: set[int] = set()
     http_limits = httpx.Limits(max_connections=20, max_keepalive_connections=10)
 
     async def refresh_models() -> list[dict[str, Any]]:
@@ -239,12 +390,16 @@ async def run_job() -> int:
             models_cache = db.load_process_models()
         return models_cache
 
-    async def bump_model_total(model_id: int) -> None:
+    async def bump_model_usage(model_id: int, tokens: int) -> None:
         async with db_lock:
-            total = db.increment_model_request(model_id)
+            totals = db.increment_model_request(model_id, tokens=tokens)
             for i, m in enumerate(models_cache):
                 if int(m["model_id"]) == model_id:
-                    models_cache[i] = {**m, "request_total_today": total}
+                    models_cache[i] = {
+                        **m,
+                        "request_total_today": totals["request_total"],
+                        "token_total_today": totals["token_total"],
+                    }
                     break
 
     try:
@@ -273,9 +428,11 @@ async def run_job() -> int:
                     break
 
                 await refresh_models()
-                if pick_model(models_cache) is None:
+                if (
+                    pick_model(models_cache, exhausted_ids=exhausted_tpd) is None
+                ):
                     logger.info(
-                        "All models at daily request_per_day limit. Exiting (exit 0)."
+                        "All models at daily request/token limits. Exiting (exit 0)."
                     )
                     break
 
@@ -306,9 +463,38 @@ async def run_job() -> int:
                     async with sem:
                         model: dict[str, Any] | None = None
                         try:
+                            user_prompt = build_user_prompt(
+                                categories=categories,
+                                agent=agent,
+                            )
                             async with db_lock:
                                 current = db.load_process_models()
-                                model = pick_model(current)
+                                # Temporary pick without estimate, then re-estimate
+                                # with chosen model's max_completion_tokens.
+                                model = pick_model(
+                                    current,
+                                    exhausted_ids=exhausted_tpd,
+                                )
+                                if model is not None:
+                                    est = estimate_tokens(
+                                        system_prompt,
+                                        user_prompt,
+                                        (
+                                            None
+                                            if model.get("max_completion_tokens") is None
+                                            else int(model["max_completion_tokens"])
+                                        ),
+                                    )
+                                    if not model_has_capacity(
+                                        model,
+                                        estimate=est,
+                                        exhausted_ids=exhausted_tpd,
+                                    ):
+                                        model = pick_model(
+                                            current,
+                                            estimate=est,
+                                            exhausted_ids=exhausted_tpd,
+                                        )
 
                             if model is None:
                                 logger.info(
@@ -317,19 +503,26 @@ async def run_job() -> int:
                                 )
                                 return "capacity"
 
-                            api_key = resolve_api_key(str(model["provider_secret"]))
-                            user_prompt = build_user_prompt(
-                                categories=categories,
-                                agent=agent,
+                            est = estimate_tokens(
+                                system_prompt,
+                                user_prompt,
+                                (
+                                    None
+                                    if model.get("max_completion_tokens") is None
+                                    else int(model["max_completion_tokens"])
+                                ),
                             )
+                            api_key = resolve_api_key(str(model["provider_secret"]))
                             raw = await call_llm_with_retries(
                                 http_client,
                                 model=model,
                                 api_key=api_key,
                                 system_prompt=system_prompt,
                                 user_prompt=user_prompt,
+                                estimate=est,
                                 rate_limiter=rate_limiter,
-                                bump_model_total=bump_model_total,
+                                token_minute_limiter=token_minute_limiter,
+                                bump_model_usage=bump_model_usage,
                             )
 
                             parsed = parse_classification_json(raw)
@@ -356,6 +549,15 @@ async def run_job() -> int:
                                 validated["primary_category"],
                             )
                             return "ok"
+                        except DailyTokenExhausted as exc:
+                            exhausted_tpd.add(int(exc.model_id))
+                            logger.info(
+                                "Agent id=%s deferred; model_id=%s TPD exhausted",
+                                agent_id,
+                                exc.model_id,
+                            )
+                            # Leave queue flag TRUE: do not mark_error.
+                            return "capacity"
                         except Exception as exc:
                             err_text = f"{exc.__class__.__name__}: {exc}"
                             logger.warning("Agent id=%s failed: %s", agent_id, err_text)
@@ -390,12 +592,14 @@ async def run_job() -> int:
                     else:
                         capacity_hit = True
 
-                if capacity_hit:
+                if capacity_hit and (
+                    pick_model(models_cache, exhausted_ids=exhausted_tpd) is None
+                ):
                     logger.info("Daily model capacity exhausted mid-batch. Exiting.")
                     break
 
                 await refresh_models()
-                if pick_model(models_cache) is None:
+                if pick_model(models_cache, exhausted_ids=exhausted_tpd) is None:
                     logger.info("Daily model capacity exhausted after batch. Exiting.")
                     break
 

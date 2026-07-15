@@ -18,15 +18,15 @@ Another process sets the flag to `TRUE`. This worker sets it `FALSE` on success 
 2. Load `llm.process.system_prompt` for `process_code = 'agent-classifier'` (editable in DB)
 3. Load active providers/models for that process
 4. Claim agents with `FOR UPDATE SKIP LOCKED` (no soft-lock columns)
-5. Pick a model with remaining daily capacity (`models_requests` vs `request_per_day`)
+5. Pick a model with remaining daily capacity (`request_total` / `token_total` vs day caps)
 6. Call `{base_url}/chat/completions` with provider params (`temperature`, `max_completion_tokens`, `response_format`)
-7. Upsert `llm.models_requests` (`request_total += 1` for `CURRENT_DATE`)
+7. Upsert `llm.models_requests` (`request_total += 1`, `token_total += usage.total_tokens`)
 8. On success: write `ai_category_*`, `llm_model_id`, clear error cols, flag `FALSE`
 9. On failure: `has_ai_category_process_error=TRUE`, `ai_category_process_error_message`, flag `FALSE`
 
-Exit `0` when: queue empty, all models hit daily limit, or `MAX_RUNTIME_SECONDS` reached.
+Exit `0` when: queue empty, all models hit daily request/token limits, or `MAX_RUNTIME_SECONDS` reached.
 
-Rate limit: sliding-window hardcap uses `llm.models.request_per_minute` (max N calls / rolling 60s per model). HTTP 429 is retried up to 3 times with provider backoff.
+Rate limits: sliding-window hardcaps use `request_per_minute` and `tokens_per_minute`. Daily caps use `request_per_day` and `tokents_per_day` (column name as in DB). HTTP 429 TPM is retried; 429 TPD skips that model for the rest of the run.
 
 API keys come from GitHub Secrets / env vars named by `llm.llm_provider.secret` (today: `GROQ`). Endpoint from `llm.llm_provider.base_url`.
 
@@ -49,7 +49,8 @@ SELECT
   count(*) FILTER (WHERE ai_category_primary IS NOT NULL) AS classified
 FROM web_dashboard.agents;
 
-SELECT m.name, mr.date, mr.request_total, m.request_per_day
+SELECT m.name, mr.date, mr.request_total, mr.token_total,
+       m.request_per_day, m.tokents_per_day
 FROM llm.models_requests mr
 JOIN llm.models m ON m.id = mr.model_id
 WHERE mr.date = CURRENT_DATE

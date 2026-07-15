@@ -39,7 +39,8 @@ async def chat_completion(
     max_completion_tokens: int | None,
     response_format: str | None,
     timeout_seconds: float = 60.0,
-) -> str:
+) -> tuple[str, int]:
+    """Return (content, total_tokens). total_tokens is 0 if usage missing."""
     url = f"{_normalize_base_url(base_url)}/chat/completions"
     body: dict[str, Any] = {
         "model": model_slug,
@@ -72,4 +73,13 @@ async def chat_completion(
         raise RuntimeError(f"Unexpected LLM response shape: {data!r}") from exc
     if content is None or not str(content).strip():
         raise RuntimeError("LLM returned empty content")
-    return str(content)
+
+    total_tokens = 0
+    usage = data.get("usage")
+    if isinstance(usage, dict) and usage.get("total_tokens") is not None:
+        try:
+            total_tokens = int(usage["total_tokens"])
+        except (TypeError, ValueError):
+            total_tokens = 0
+
+    return str(content), max(total_tokens, 0)

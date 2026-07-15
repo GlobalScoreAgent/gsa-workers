@@ -120,8 +120,9 @@ Synthetic on-chain URI: `internal_on_chain_id_{feedback_id}`, `source='on_chain'
 | `llm.llm_provider.secret` | GitHub/env secret **name** (e.g. `GROQ`) |
 | `llm.llm_provider.base_url` | OpenAI-compat API root (e.g. Groq `https://api.groq.com/openai/v1`) |
 | `llm.process.system_prompt` | Classifier system prompt (loaded by worker; edit in DB to refine) |
-| `llm.models.request_per_day` / `request_per_minute` | Rate limits |
-| `llm.models_requests` | Daily counter PK uniqueness `(model_id, date)` |
+| `llm.models.request_per_day` / `request_per_minute` | Rate limits (requests) |
+| `llm.models.tokens_per_minute` / `tokents_per_day` | Rate limits (tokens; note `tokents_per_day` spelling) |
+| `llm.models_requests` | Daily counters PK uniqueness `(model_id, date)`; `request_total` + `token_total` |
 | `llm.procees_llm_providers` | Links `process_code='agent-classifier'` → providers |
 
 Partial index: `idx_agents_pending_ai_category` (`WHERE does_need_ai_category_process IS TRUE`).

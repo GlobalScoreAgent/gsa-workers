@@ -59,6 +59,8 @@ SELECT
   m.slug AS model_slug,
   m.request_per_day,
   m.request_per_minute,
+  m.tokens_per_minute,
+  m.tokents_per_day,
   m.has_limits,
   p.id AS provider_id,
   p.name AS provider_name,
@@ -67,7 +69,8 @@ SELECT
   p.temperature,
   p.max_completion_tokens,
   p.response_format,
-  COALESCE(mr.request_total, 0) AS request_total_today
+  COALESCE(mr.request_total, 0) AS request_total_today,
+  COALESCE(mr.token_total, 0) AS token_total_today
 FROM llm.process proc
 JOIN llm.procees_llm_providers plp ON plp.process_id = proc.id
 JOIN llm.llm_provider p ON p.id = plp.llm_provider_id
@@ -82,11 +85,13 @@ ORDER BY m.id
 """
 
 INCREMENT_REQUEST_SQL = """
-INSERT INTO llm.models_requests (model_id, date, request_total)
-VALUES (%(model_id)s, CURRENT_DATE, 1)
+INSERT INTO llm.models_requests (model_id, date, request_total, token_total)
+VALUES (%(model_id)s, CURRENT_DATE, 1, %(tokens)s)
 ON CONFLICT (model_id, date)
-DO UPDATE SET request_total = llm.models_requests.request_total + 1
-RETURNING request_total
+DO UPDATE SET
+  request_total = llm.models_requests.request_total + 1,
+  token_total = COALESCE(llm.models_requests.token_total, 0) + EXCLUDED.token_total
+RETURNING request_total, token_total
 """
 
 MARK_SUCCESS_SQL = """
@@ -253,16 +258,22 @@ class Database:
 
         return self._run_with_db_retry("load_models", _load)
 
-    def increment_model_request(self, model_id: int) -> int:
-        def _inc() -> int:
+    def increment_model_request(self, model_id: int, tokens: int = 0) -> dict[str, int]:
+        def _inc() -> dict[str, int]:
             assert self._conn is not None
             with self._conn.cursor() as cur:
-                cur.execute(INCREMENT_REQUEST_SQL, {"model_id": model_id})
+                cur.execute(
+                    INCREMENT_REQUEST_SQL,
+                    {"model_id": model_id, "tokens": max(int(tokens), 0)},
+                )
                 row = cur.fetchone()
             self._conn.commit()
             if row is None:
-                return 0
-            return int(row["request_total"])
+                return {"request_total": 0, "token_total": 0}
+            return {
+                "request_total": int(row["request_total"] or 0),
+                "token_total": int(row["token_total"] or 0),
+            }
 
         return self._run_with_db_retry("increment_request", _inc)
 
