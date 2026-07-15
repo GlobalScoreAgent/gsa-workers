@@ -20,7 +20,7 @@ Another process sets the flag to `TRUE`. This worker sets it `FALSE` on success 
 4. Claim agents with `FOR UPDATE SKIP LOCKED` (no soft-lock columns)
 5. Fingerprint prompt inputs (`ai_category_input_hash`); if another agent already classified the same inputs, **copy** categories and skip the LLM
 6. Else pick a model with remaining daily capacity (`request_total` / `token_total` vs day caps)
-7. Call `{base_url}/chat/completions` with provider params (`temperature`, `max_completion_tokens`, `response_format`)
+7. Call `{base_url}/chat/completions` with provider params (`temperature`, `max_completion_tokens`, `response_format`); if `llm.models.does_need_thinking_off_parameter` then also `reasoning_effort=none` + `clear_thinking=false`
 8. Upsert `llm.models_requests` (`request_total += 1`, `token_total += usage.total_tokens`) — not incremented on copy
 9. On success: write `ai_category_*`, `ai_category_input_hash`, `llm_model_id`, clear error cols, flag `FALSE`
 10. On failure: `has_ai_category_process_error=TRUE`, `ai_category_process_error_message`, flag `FALSE`

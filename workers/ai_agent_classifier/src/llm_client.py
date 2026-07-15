@@ -38,6 +38,7 @@ async def chat_completion(
     temperature: float | None,
     max_completion_tokens: int | None,
     response_format: str | None,
+    thinking_off: bool = False,
     timeout_seconds: float = 60.0,
 ) -> tuple[str, int]:
     """Return (content, total_tokens). total_tokens is 0 if usage missing."""
@@ -56,6 +57,9 @@ async def chat_completion(
     fmt = _parse_response_format(response_format)
     if fmt is not None:
         body["response_format"] = fmt
+    if thinking_off:
+        body["reasoning_effort"] = "none"
+        body["clear_thinking"] = False
 
     headers = {
         "Authorization": f"Bearer {api_key}",

@@ -283,6 +283,7 @@ async def call_llm_with_retries(
                     if model.get("response_format") is None
                     else str(model["response_format"])
                 ),
+                thinking_off=bool(model.get("does_need_thinking_off_parameter")),
             )
             await token_minute_limiter.record(model_id, total_tokens, estimate)
             await bump_model_usage(model_id, total_tokens)

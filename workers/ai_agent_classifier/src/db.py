@@ -62,6 +62,7 @@ SELECT
   m.tokens_per_minute,
   m.tokents_per_day,
   m.has_limits,
+  m.does_need_thinking_off_parameter,
   p.id AS provider_id,
   p.name AS provider_name,
   p.secret AS provider_secret,
