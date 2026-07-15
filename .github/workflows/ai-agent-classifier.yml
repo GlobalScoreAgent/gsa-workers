@@ -40,6 +40,7 @@ jobs:
         env:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
           GROQ: ${{ secrets.GROQ }}
+          CEREBRAS: ${{ secrets.CEREBRAS }}
           MAX_RUNTIME_SECONDS: 19800
           CONCURRENCY: 1
           CLAIM_BATCH_SIZE: 20
