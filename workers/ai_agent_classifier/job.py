@@ -6,9 +6,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import sys
 import time
 import traceback
+from collections import defaultdict, deque
 from pathlib import Path
 from typing import Any, Literal
 
@@ -31,6 +33,9 @@ logging.basicConfig(
 logger = logging.getLogger("ai_agent_classifier")
 
 Outcome = Literal["ok", "error", "capacity"]
+LLM_429_MAX_ATTEMPTS = 3
+_RETRY_AFTER_MS_RE = re.compile(r"try again in\s+(\d+(?:\.\d+)?)\s*ms", re.IGNORECASE)
+_RETRY_AFTER_S_RE = re.compile(r"try again in\s+(\d+(?:\.\d+)?)\s*s(?:ec(?:onds?)?)?", re.IGNORECASE)
 
 
 def env_int(name: str, default: int, minimum: int = 1, maximum: int | None = None) -> int:
@@ -69,19 +74,109 @@ def resolve_api_key(secret_name: str) -> str:
 
 
 class RateLimiter:
+    """Hardcap: at most request_per_minute calls per model in any rolling 60s window."""
+
+    WINDOW_SECONDS = 60.0
+
     def __init__(self) -> None:
-        self._last_call_at: dict[int, float] = {}
+        self._windows: dict[int, deque[float]] = defaultdict(deque)
+        self._lock = asyncio.Lock()
 
     async def wait(self, model_id: int, request_per_minute: int) -> None:
         rpm = max(1, int(request_per_minute or 1))
-        min_interval = 60.0 / float(rpm)
-        now = time.monotonic()
-        last = self._last_call_at.get(model_id)
-        if last is not None:
-            elapsed = now - last
-            if elapsed < min_interval:
-                await asyncio.sleep(min_interval - elapsed)
-        self._last_call_at[model_id] = time.monotonic()
+        while True:
+            async with self._lock:
+                now = time.monotonic()
+                window = self._windows[model_id]
+                while window and (now - window[0]) >= self.WINDOW_SECONDS:
+                    window.popleft()
+                if len(window) < rpm:
+                    window.append(now)
+                    return
+                sleep_for = self.WINDOW_SECONDS - (now - window[0]) + 0.01
+                logger.info(
+                    "RPM hardcap model_id=%s rpm=%s in_window=%s; sleeping %.2fs",
+                    model_id,
+                    rpm,
+                    len(window),
+                    sleep_for,
+                )
+            await asyncio.sleep(max(sleep_for, 0.05))
+
+
+def _is_http_429(exc: BaseException) -> bool:
+    return "HTTP 429" in str(exc)
+
+
+def _retry_after_seconds(exc: BaseException, attempt: int) -> float:
+    text = str(exc)
+    m_ms = _RETRY_AFTER_MS_RE.search(text)
+    if m_ms:
+        return max(float(m_ms.group(1)) / 1000.0, 0.05)
+    m_s = _RETRY_AFTER_S_RE.search(text)
+    if m_s:
+        return max(float(m_s.group(1)), 0.05)
+    return float(2 ** (attempt - 1))
+
+
+async def call_llm_with_retries(
+    http_client: httpx.AsyncClient,
+    *,
+    model: dict[str, Any],
+    api_key: str,
+    system_prompt: str,
+    user_prompt: str,
+    rate_limiter: RateLimiter,
+    bump_model_total,
+) -> str:
+    model_id = int(model["model_id"])
+    rpm = int(model["request_per_minute"] or 1)
+    last_exc: Exception | None = None
+    for attempt in range(1, LLM_429_MAX_ATTEMPTS + 1):
+        await rate_limiter.wait(model_id, rpm)
+        try:
+            raw = await chat_completion(
+                http_client,
+                base_url=str(model["base_url"]),
+                api_key=api_key,
+                model_slug=str(model["model_slug"]),
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                temperature=(
+                    None
+                    if model.get("temperature") is None
+                    else float(model["temperature"])
+                ),
+                max_completion_tokens=(
+                    None
+                    if model.get("max_completion_tokens") is None
+                    else int(model["max_completion_tokens"])
+                ),
+                response_format=(
+                    None
+                    if model.get("response_format") is None
+                    else str(model["response_format"])
+                ),
+            )
+            await bump_model_total(model_id)
+            return raw
+        except Exception as exc:
+            await bump_model_total(model_id)
+            last_exc = exc
+            if _is_http_429(exc) and attempt < LLM_429_MAX_ATTEMPTS:
+                delay = _retry_after_seconds(exc, attempt)
+                logger.warning(
+                    "LLM HTTP 429 model_id=%s attempt=%s/%s; sleeping %.2fs",
+                    model_id,
+                    attempt,
+                    LLM_429_MAX_ATTEMPTS,
+                    delay,
+                )
+                await asyncio.sleep(delay)
+                continue
+            raise
+    assert last_exc is not None
+    raise last_exc
 
 
 async def run_job() -> int:
@@ -223,44 +318,19 @@ async def run_job() -> int:
                                 return "capacity"
 
                             api_key = resolve_api_key(str(model["provider_secret"]))
-                            await rate_limiter.wait(
-                                int(model["model_id"]),
-                                int(model["request_per_minute"] or 1),
-                            )
-
                             user_prompt = build_user_prompt(
                                 categories=categories,
                                 agent=agent,
                             )
-                            try:
-                                raw = await chat_completion(
-                                    http_client,
-                                    base_url=str(model["base_url"]),
-                                    api_key=api_key,
-                                    model_slug=str(model["model_slug"]),
-                                    system_prompt=system_prompt,
-                                    user_prompt=user_prompt,
-                                    temperature=(
-                                        None
-                                        if model.get("temperature") is None
-                                        else float(model["temperature"])
-                                    ),
-                                    max_completion_tokens=(
-                                        None
-                                        if model.get("max_completion_tokens") is None
-                                        else int(model["max_completion_tokens"])
-                                    ),
-                                    response_format=(
-                                        None
-                                        if model.get("response_format") is None
-                                        else str(model["response_format"])
-                                    ),
-                                )
-                            except Exception as http_exc:
-                                await bump_model_total(int(model["model_id"]))
-                                raise http_exc
-
-                            await bump_model_total(int(model["model_id"]))
+                            raw = await call_llm_with_retries(
+                                http_client,
+                                model=model,
+                                api_key=api_key,
+                                system_prompt=system_prompt,
+                                user_prompt=user_prompt,
+                                rate_limiter=rate_limiter,
+                                bump_model_total=bump_model_total,
+                            )
 
                             parsed = parse_classification_json(raw)
                             validated = validate_classification(

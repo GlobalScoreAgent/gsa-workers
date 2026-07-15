@@ -26,6 +26,8 @@ Another process sets the flag to `TRUE`. This worker sets it `FALSE` on success 
 
 Exit `0` when: queue empty, all models hit daily limit, or `MAX_RUNTIME_SECONDS` reached.
 
+Rate limit: sliding-window hardcap uses `llm.models.request_per_minute` (max N calls / rolling 60s per model). HTTP 429 is retried up to 3 times with provider backoff.
+
 API keys come from GitHub Secrets / env vars named by `llm.llm_provider.secret` (today: `GROQ`). Endpoint from `llm.llm_provider.base_url`.
 
 ## Environment
