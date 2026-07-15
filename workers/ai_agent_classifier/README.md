@@ -18,11 +18,12 @@ Another process sets the flag to `TRUE`. This worker sets it `FALSE` on success 
 2. Load `llm.process.system_prompt` for `process_code = 'agent-classifier'` (editable in DB)
 3. Load active providers/models for that process
 4. Claim agents with `FOR UPDATE SKIP LOCKED` (no soft-lock columns)
-5. Pick a model with remaining daily capacity (`request_total` / `token_total` vs day caps)
-6. Call `{base_url}/chat/completions` with provider params (`temperature`, `max_completion_tokens`, `response_format`)
-7. Upsert `llm.models_requests` (`request_total += 1`, `token_total += usage.total_tokens`)
-8. On success: write `ai_category_*`, `llm_model_id`, clear error cols, flag `FALSE`
-9. On failure: `has_ai_category_process_error=TRUE`, `ai_category_process_error_message`, flag `FALSE`
+5. Fingerprint prompt inputs (`ai_category_input_hash`); if another agent already classified the same inputs, **copy** categories and skip the LLM
+6. Else pick a model with remaining daily capacity (`request_total` / `token_total` vs day caps)
+7. Call `{base_url}/chat/completions` with provider params (`temperature`, `max_completion_tokens`, `response_format`)
+8. Upsert `llm.models_requests` (`request_total += 1`, `token_total += usage.total_tokens`) — not incremented on copy
+9. On success: write `ai_category_*`, `ai_category_input_hash`, `llm_model_id`, clear error cols, flag `FALSE`
+10. On failure: `has_ai_category_process_error=TRUE`, `ai_category_process_error_message`, flag `FALSE`
 
 Exit `0` when: queue empty, all models hit daily request/token limits, or `MAX_RUNTIME_SECONDS` reached.
 
@@ -63,6 +64,12 @@ ORDER BY m.id;
 cd workers/ai_agent_classifier
 uv sync
 uv run python job.py
+```
+
+After deploying `ai_category_input_hash`, backfill classified donors once:
+
+```bash
+uv run python backfill_input_hash.py
 ```
 
 ## Workflow

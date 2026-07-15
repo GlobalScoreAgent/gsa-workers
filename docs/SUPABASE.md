@@ -117,6 +117,7 @@ Synthetic on-chain URI: `internal_on_chain_id_{feedback_id}`, `source='on_chain'
 | `llm_model_id` | FK → `llm.models.id` used for this run |
 | `ai_category_process_calculated_at` | Success or error timestamp |
 | `has_ai_category_process_error` / `ai_category_process_error_message` | Error path (flag still cleared to `FALSE`) |
+| `ai_category_input_hash` | MD5 of exact prompt inputs; used to copy classification and skip LLM |
 | `llm.llm_provider.secret` | GitHub/env secret **name** (e.g. `GROQ`) |
 | `llm.llm_provider.base_url` | OpenAI-compat API root (e.g. Groq `https://api.groq.com/openai/v1`) |
 | `llm.process.system_prompt` | Classifier system prompt (loaded by worker; edit in DB to refine) |
@@ -126,6 +127,16 @@ Synthetic on-chain URI: `internal_on_chain_id_{feedback_id}`, `source='on_chain'
 | `llm.procees_llm_providers` | Links `process_code='agent-classifier'` → providers |
 
 Partial index: `idx_agents_pending_ai_category` (`WHERE does_need_ai_category_process IS TRUE`).
+Partial donor index: `idx_agents_ai_category_input_hash_donors` (`ai_category_input_hash` where classified OK).
+
+Backfill hashes after column deploy (same fingerprint as worker):
+
+```bash
+cd workers/ai_agent_classifier
+uv run python backfill_input_hash.py
+```
+
+Script / migration capture: `agents_ai_category_input_hash.sql`.
 
 ### `next_eligible_at` semantics
 

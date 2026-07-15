@@ -94,6 +94,24 @@ DO UPDATE SET
 RETURNING request_total, token_total
 """
 
+FIND_DONOR_SQL = """
+SELECT
+  a.id,
+  a.ai_category_primary,
+  a.ai_category_secondary,
+  a.ai_category_confidence,
+  a.ai_category_reasoning,
+  a.ai_category_purpose,
+  a.llm_model_id
+FROM web_dashboard.agents a
+WHERE a.ai_category_input_hash = %(input_hash)s
+  AND a.id <> %(agent_id)s
+  AND a.ai_category_primary IS NOT NULL
+  AND COALESCE(a.has_ai_category_process_error, false) IS NOT TRUE
+ORDER BY a.ai_category_process_calculated_at DESC NULLS LAST, a.id
+LIMIT 1
+"""
+
 MARK_SUCCESS_SQL = """
 UPDATE web_dashboard.agents
 SET
@@ -103,6 +121,7 @@ SET
   ai_category_reasoning = %(reasoning)s,
   ai_category_purpose = %(agent_purpose)s,
   llm_model_id = %(llm_model_id)s,
+  ai_category_input_hash = %(input_hash)s,
   ai_category_process_calculated_at = NOW(),
   does_need_ai_category_process = FALSE,
   has_ai_category_process_error = FALSE,
@@ -119,6 +138,33 @@ SET
   ai_category_process_calculated_at = NOW(),
   llm_model_id = %(llm_model_id)s
 WHERE id = %(agent_id)s
+"""
+
+FETCH_MISSING_HASH_SQL = """
+SELECT
+  a.id,
+  a.name,
+  a.description,
+  a.skills,
+  a.tags,
+  a.capabilites,
+  a.services,
+  a.oasf_skills,
+  a.oasf_domains,
+  a.web
+FROM web_dashboard.agents a
+WHERE a.ai_category_primary IS NOT NULL
+  AND COALESCE(a.has_ai_category_process_error, false) IS NOT TRUE
+  AND a.ai_category_input_hash IS NULL
+ORDER BY a.id
+LIMIT %(limit)s
+"""
+
+SET_INPUT_HASH_SQL = """
+UPDATE web_dashboard.agents
+SET ai_category_input_hash = %(input_hash)s
+WHERE id = %(agent_id)s
+  AND ai_category_input_hash IS NULL
 """
 
 CLAIM_MAX_ATTEMPTS = 3
@@ -277,17 +323,41 @@ class Database:
 
         return self._run_with_db_retry("increment_request", _inc)
 
+    def find_classification_donor(
+        self,
+        *,
+        agent_id: int,
+        input_hash: str,
+    ) -> dict[str, Any] | None:
+        def _find() -> dict[str, Any] | None:
+            assert self._conn is not None
+            with self._conn.cursor() as cur:
+                cur.execute(
+                    FIND_DONOR_SQL,
+                    {"agent_id": agent_id, "input_hash": input_hash},
+                )
+                row = cur.fetchone()
+            self._conn.commit()
+            return row
+
+        return self._run_with_db_retry("find_donor", _find)
+
     def mark_success(
         self,
         *,
         agent_id: int,
-        llm_model_id: int,
+        llm_model_id: int | None,
         primary_category: str,
-        secondary_categories: list[str],
+        secondary_categories: list[str] | Any,
         confidence: float | None,
         reasoning: str | None,
         agent_purpose: str | None,
+        input_hash: str,
     ) -> None:
+        secondary = secondary_categories
+        if not isinstance(secondary, Json):
+            secondary = Json(secondary_categories)
+
         def _mark() -> None:
             assert self._conn is not None
             with self._conn.cursor() as cur:
@@ -297,15 +367,39 @@ class Database:
                         "agent_id": agent_id,
                         "llm_model_id": llm_model_id,
                         "primary_category": primary_category,
-                        "secondary_categories": Json(secondary_categories),
+                        "secondary_categories": secondary,
                         "confidence": confidence,
                         "reasoning": reasoning,
                         "agent_purpose": agent_purpose,
+                        "input_hash": input_hash,
                     },
                 )
             self._conn.commit()
 
         self._run_with_db_retry("mark_success", _mark)
+
+    def fetch_agents_missing_input_hash(self, limit: int) -> list[dict[str, Any]]:
+        def _fetch() -> list[dict[str, Any]]:
+            assert self._conn is not None
+            with self._conn.cursor() as cur:
+                cur.execute(FETCH_MISSING_HASH_SQL, {"limit": limit})
+                rows = list(cur.fetchall())
+            self._conn.commit()
+            return rows
+
+        return self._run_with_db_retry("fetch_missing_hash", _fetch)
+
+    def set_ai_category_input_hash(self, *, agent_id: int, input_hash: str) -> None:
+        def _set() -> None:
+            assert self._conn is not None
+            with self._conn.cursor() as cur:
+                cur.execute(
+                    SET_INPUT_HASH_SQL,
+                    {"agent_id": agent_id, "input_hash": input_hash},
+                )
+            self._conn.commit()
+
+        self._run_with_db_retry("set_input_hash", _set)
 
     def mark_error(
         self,

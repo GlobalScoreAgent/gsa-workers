@@ -19,6 +19,7 @@ import httpx
 sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 
 from db import CLAIM_RETRY_BASE_SECONDS, Database
+from fingerprint import agent_input_hash
 from llm_client import chat_completion
 from prompt import (
     build_user_prompt,
@@ -428,13 +429,13 @@ async def run_job() -> int:
                     break
 
                 await refresh_models()
-                if (
-                    pick_model(models_cache, exhausted_ids=exhausted_tpd) is None
-                ):
+                models_available = (
+                    pick_model(models_cache, exhausted_ids=exhausted_tpd) is not None
+                )
+                if not models_available:
                     logger.info(
-                        "All models at daily request/token limits. Exiting (exit 0)."
+                        "No LLM model capacity; continuing for exact-match copies only"
                     )
-                    break
 
                 async with db_lock:
                     try:
@@ -463,6 +464,49 @@ async def run_job() -> int:
                     async with sem:
                         model: dict[str, Any] | None = None
                         try:
+                            input_hash = agent_input_hash(agent)
+                            async with db_lock:
+                                donor = db.find_classification_donor(
+                                    agent_id=agent_id,
+                                    input_hash=input_hash,
+                                )
+                                if donor is not None:
+                                    secondary = donor.get("ai_category_secondary")
+                                    if secondary is None:
+                                        secondary = []
+                                    db.mark_success(
+                                        agent_id=agent_id,
+                                        llm_model_id=(
+                                            None
+                                            if donor.get("llm_model_id") is None
+                                            else int(donor["llm_model_id"])
+                                        ),
+                                        primary_category=str(
+                                            donor["ai_category_primary"]
+                                        ),
+                                        secondary_categories=secondary,
+                                        confidence=(
+                                            None
+                                            if donor.get("ai_category_confidence")
+                                            is None
+                                            else float(
+                                                donor["ai_category_confidence"]
+                                            )
+                                        ),
+                                        reasoning=donor.get("ai_category_reasoning"),
+                                        agent_purpose=donor.get(
+                                            "ai_category_purpose"
+                                        ),
+                                        input_hash=input_hash,
+                                    )
+                                    logger.info(
+                                        "Copied agent_id=%s from=%s primary=%s",
+                                        agent_id,
+                                        donor["id"],
+                                        donor["ai_category_primary"],
+                                    )
+                                    return "ok"
+
                             user_prompt = build_user_prompt(
                                 categories=categories,
                                 agent=agent,
@@ -541,6 +585,7 @@ async def run_job() -> int:
                                     confidence=validated["confidence"],
                                     reasoning=validated["reasoning"],
                                     agent_purpose=validated["agent_purpose"],
+                                    input_hash=input_hash,
                                 )
                             logger.info(
                                 "Done agent_id=%s model_id=%s primary=%s",
@@ -582,25 +627,26 @@ async def run_job() -> int:
 
                 outcomes = await asyncio.gather(*(handle_agent(row) for row in rows))
                 capacity_hit = False
+                batch_ok = 0
                 for outcome in outcomes:
                     if outcome == "ok":
                         processed += 1
                         completed += 1
+                        batch_ok += 1
                     elif outcome == "error":
                         processed += 1
                         errors += 1
                     else:
                         capacity_hit = True
 
-                if capacity_hit and (
-                    pick_model(models_cache, exhausted_ids=exhausted_tpd) is None
-                ):
-                    logger.info("Daily model capacity exhausted mid-batch. Exiting.")
-                    break
-
                 await refresh_models()
-                if pick_model(models_cache, exhausted_ids=exhausted_tpd) is None:
-                    logger.info("Daily model capacity exhausted after batch. Exiting.")
+                models_available = (
+                    pick_model(models_cache, exhausted_ids=exhausted_tpd) is not None
+                )
+                if not models_available and batch_ok == 0 and capacity_hit:
+                    logger.info(
+                        "No LLM capacity and no exact-match copies in batch. Exiting."
+                    )
                     break
 
     except Exception:

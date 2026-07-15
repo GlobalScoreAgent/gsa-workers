@@ -67,7 +67,7 @@ flowchart TB
 | 8 | [`wallet_lp_positions_discovery`](../workers/wallet_lp_positions_discovery/README.md) | Claim (`wallet_transactions`) | 0/6/12/18 | `does_need_lp_discovery` | `wallet_lp_positions_upsert` | `wallets.wallet_lp_positions` |
 | 9 | [`agent_uri_resolve`](../workers/agent_uri_resolve/README.md) | Claim (agents / feedbacks) | 00:00, 12:00 | `is_uri_processed` / `is_feedback_processed` | direct SQL | `uri_documents` + `agent_manifest` |
 | 10 | [`agent_uri_reprocess`](../workers/agent_uri_reprocess/README.md) | Claim (manifest errors + docs) | 06:00, 18:00 | download errors / off-chain &gt;15d | direct SQL | retry + refresh `uri_documents` |
-| 11 | [`ai_agent_classifier`](../workers/ai_agent_classifier/README.md) | Claim (`web_dashboard.agents`) | 0/6/12/18 | `does_need_ai_category_process` | direct SQL + LLM | `ai_category_*` on agents |
+| 11 | [`ai_agent_classifier`](../workers/ai_agent_classifier/README.md) | Claim (`web_dashboard.agents`) | 0/6/12/18 | `does_need_ai_category_process` | exact-hash copy or LLM | `ai_category_*` + `ai_category_input_hash` |
 
 Soft runtime budget for claim / enrich jobs: **`MAX_RUNTIME_SECONDS=19800`** (~5.5h). Empty queue → exit 0; next cron still fires.
 
