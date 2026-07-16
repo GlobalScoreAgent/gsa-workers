@@ -16,14 +16,15 @@ Another process sets the flag to `TRUE`. This worker sets it `FALSE` on success 
 
 1. Load active categories from `web_dashboard.agent_ai_categories`
 2. Load `llm.process.system_prompt` for `process_code = 'agent-classifier'` (editable in DB)
-3. Load active providers/models for that process
-4. Claim agents with `FOR UPDATE SKIP LOCKED` (no soft-lock columns)
-5. Fingerprint prompt inputs (`ai_category_input_hash`); if another agent already classified the same inputs, **copy** categories and skip the LLM
-6. Else pick a model with remaining daily capacity (`request_total` / `token_total` vs day caps)
-7. Call `{base_url}/chat/completions` with provider params (`temperature`, `max_completion_tokens`, `response_format`); if `llm.models.does_need_thinking_off_parameter` then also `reasoning_effort=none` + `clear_thinking=false`
-8. Upsert `llm.models_requests` (`request_total += 1`, `token_total += usage.total_tokens`) — not incremented on copy
-9. On success: write `ai_category_*`, `ai_category_input_hash`, `llm_model_id`, clear error cols, flag `FALSE`
-10. On failure: `has_ai_category_process_error=TRUE`, `ai_category_process_error_message`, flag `FALSE`
+3. Requeue prior errors (`has_ai_category_process_error`) back onto the claim queue
+4. Load active providers/models for that process
+5. Claim agents with `FOR UPDATE SKIP LOCKED` (no soft-lock columns)
+6. Fingerprint prompt inputs (`ai_category_input_hash`); if another agent already classified the same inputs, **copy** categories and skip the LLM
+7. Else pick a model with remaining daily capacity (`request_total` / `token_total` vs day caps)
+8. Call `{base_url}/chat/completions` with provider params (`temperature`, `max_completion_tokens`, `response_format`); if `llm.models.does_need_thinking_off_parameter` then also `reasoning_effort=none` + `clear_thinking=false`
+9. Upsert `llm.models_requests` (`request_total += 1`, `token_total += usage.total_tokens`) — not incremented on copy
+10. On success: write `ai_category_*`, `ai_category_input_hash`, `llm_model_id`, clear error cols, flag `FALSE`
+11. On failure: `has_ai_category_process_error=TRUE`, `ai_category_process_error_message`, flag `FALSE`
 
 Allowlist includes quality categories `Invalid Metadata` / `Insufficient Metadata` and `Trading Bots` (Ave/Debot-style clones) vs distinct `Trading`. Prompt rules live in `llm.process.system_prompt`.
 

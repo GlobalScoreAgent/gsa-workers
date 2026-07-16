@@ -555,7 +555,7 @@ JOIN llm.models m ON m.id = mr.model_id
 WHERE mr.date = CURRENT_DATE
 ORDER BY m.id;
 
--- Re-queue errors
+-- Re-queue errors (also done automatically at classifier job start)
 -- UPDATE web_dashboard.agents
 -- SET does_need_ai_category_process = TRUE,
 --     has_ai_category_process_error = NULL,
@@ -570,6 +570,9 @@ ORDER BY m.id;
 -- Scoped requeue after Trading Bots / Invalid Metadata taxonomy refresh:
 -- gsa-supabase-schema/supabase/scripts/requeue_ai_category_trading_niche_taxonomy.sql
 -- Resets Trading + Other/Niche + null-primary error rows (clears hash).
+
+-- Scoped requeue for hodlclaw/openclaw templates → Trading Bots:
+-- gsa-supabase-schema/supabase/scripts/requeue_ai_category_hodlclaw_trading_bots.sql
 
 -- New active categories (also): Invalid Metadata, Insufficient Metadata, Trading Bots
 -- Prompt rules: llm.process.system_prompt (process_code=agent-classifier)

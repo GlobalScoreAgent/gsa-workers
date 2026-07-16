@@ -141,6 +141,16 @@ SET
 WHERE id = %(agent_id)s
 """
 
+REQUEUE_ERRORS_SQL = """
+UPDATE web_dashboard.agents
+SET
+  does_need_ai_category_process = TRUE,
+  has_ai_category_process_error = NULL,
+  ai_category_process_error_message = NULL
+WHERE has_ai_category_process_error IS TRUE
+RETURNING id
+"""
+
 FETCH_MISSING_HASH_SQL = """
 SELECT
   a.id,
@@ -427,3 +437,16 @@ class Database:
             self._conn.commit()
 
         self._run_with_db_retry("mark_error", _mark)
+
+    def requeue_errors(self) -> int:
+        """Re-open agents left in error so the next claim loop can retry them."""
+
+        def _requeue() -> int:
+            assert self._conn is not None
+            with self._conn.cursor() as cur:
+                cur.execute(REQUEUE_ERRORS_SQL)
+                rows = list(cur.fetchall())
+            self._conn.commit()
+            return len(rows)
+
+        return self._run_with_db_retry("requeue_errors", _requeue)

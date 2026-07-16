@@ -156,7 +156,7 @@ claim FOR UPDATE → pick llm.models with daily capacity → OpenAI-compat chat 
 | Categories | `web_dashboard.agent_ai_categories` (`is_active`) |
 | Rate limit | `llm.models_requests` per model+date; rotate when `request_per_day` hit; exit 0 if all exhausted |
 | API key | env named by `llm.llm_provider.secret` (Groq: `GROQ`); `base_url` on provider |
-| Errors | flag `FALSE` + `has_ai_category_process_error` / `ai_category_process_error_message` |
+| Errors | flag `FALSE` + `has_ai_category_process_error` / `ai_category_process_error_message`; **requeued automatically at next job start** |
 | Workflow | `ai-agent-classifier.yml` |
 
 Worker README: [`ai_agent_classifier`](../workers/ai_agent_classifier/README.md).

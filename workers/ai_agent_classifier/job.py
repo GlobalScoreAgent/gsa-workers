@@ -364,11 +364,18 @@ async def run_job() -> int:
         return 1
 
     allowed = set(categories)
+    try:
+        requeued = db.requeue_errors()
+    except Exception as exc:
+        logger.error("Failed to requeue prior errors: %s", exc)
+        db.close()
+        return 1
     logger.info(
-        "Started categories=%s system_prompt_chars=%s claim_batch_size=%s "
-        "concurrency=%s max_runtime=%ss",
+        "Started categories=%s system_prompt_chars=%s requeued_errors=%s "
+        "claim_batch_size=%s concurrency=%s max_runtime=%ss",
         len(categories),
         len(system_prompt),
+        requeued,
         claim_batch_size,
         concurrency,
         max_runtime_seconds,
