@@ -21,7 +21,8 @@ Entry point for AI agents (and humans) changing GitHub Actions batch workers.
 
 Ops / stuck wallets: [docs/OPS.md](./docs/OPS.md). Deprecations: [docs/DEPRECATION.md](./docs/DEPRECATION.md).  
 LP discovery is live; 15-day refresh still pending: [docs/PENDING_LP_POSITIONS.md](./docs/PENDING_LP_POSITIONS.md).  
-Token contracts + Alchemy Free design: [docs/TOKEN_CONTRACTS_DISCOVERY_ALCHEMY.md](./docs/TOKEN_CONTRACTS_DISCOVERY_ALCHEMY.md).
+Token contracts + Alchemy Free design: [docs/TOKEN_CONTRACTS_DISCOVERY_ALCHEMY.md](./docs/TOKEN_CONTRACTS_DISCOVERY_ALCHEMY.md).  
+Token activity scan (public getLogs, live): [workers/wallet_token_activity_scan/README.md](./workers/wallet_token_activity_scan/README.md). Design notes: [docs/PENDING_TOKEN_ACTIVITY_RPC.md](./docs/PENDING_TOKEN_ACTIVITY_RPC.md).
 
 ## Hard rules
 
@@ -44,6 +45,7 @@ Token contracts + Alchemy Free design: [docs/TOKEN_CONTRACTS_DISCOVERY_ALCHEMY.m
 | `wallet_token_contracts_discovery` | `wallet-token-contracts-discovery.yml` | `wallets.wallet_token_contracts_upsert` | `wallets.wallet_token_contracts` |
 | `wallet_token_portfolio_discovery` | `wallet-token-portfolio-discovery.yml` | `wallets.wallet_token_positions_insert` | `wallets.wallet_token_positions` (fungible) |
 | `wallet_lp_positions_discovery` | `wallet-lp-positions-discovery.yml` | `wallets.wallet_lp_positions_upsert` | `wallets.wallet_lp_positions` (NFT + classic LP) |
+| `wallet_token_activity_scan` | `wallet-token-activity-scan.yml` (matrix chain×shard) | `wallet_token_contracts_upsert` + `wallet_nft_contracts_upsert` + `wallet_token_transfers_upsert` | ERC-20 contracts + NFT collections + transfers (public getLogs) |
 | `agent_uri_resolve` | `agent-uri-resolve.yml` | direct SQL upsert | `uri_documents` + `agent_manifest` (ingest) |
 | `agent_uri_reprocess` | `agent-uri-reprocess.yml` | direct SQL upsert | error retry + off-chain `uri_documents` refresh |
 | `ai_agent_classifier` | `ai-agent-classifier.yml` | direct SQL | `web_dashboard.agents` AI category fields (`llm` config) |

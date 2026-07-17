@@ -29,6 +29,8 @@ Schema migrations and snapshot/upsert SQL live in the sibling repo **`gsa-supaba
 | `wallets.wallet_token_positions` | Fungible positions (native=`'native'` + ERC-20); initial INSERT discovery |
 | `wallets.lp_pools` | Classic LP scan targets (`active` toggle); seeded Aerodrome V1 on Base |
 | `wallets.wallet_lp_positions` | LP snapshots (UniV3 NFT + classic); PK `(wallet_id, chain_id, position_kind, nft_manager, token_id, pool)`; FKs to `wallets`/`chains`; `calculated_at` for future 15d refresh |
+| `wallets.wallet_nft_contracts` | NFT collections touched by activity scan (`erc721`/`erc1155`) |
+| `wallets.wallet_token_transfers` | Wallet-centric ERC-20/721(/1155) transfer rows from activity scan |
 | `erc_8004.uri_documents` | Canonical resolved JSON by `uri_hash = md5(uri)` (UNIQUE); TTL `expires_at` (~15d write); `fetched_at` / `document` / `status` |
 | `erc_8004.agent_manifest` | Envelope per agent/feedback (`uri_document_id` FK); `source`, revoke fields, `has_download_error`, `reprocess_count`, `is_processed` — **no** `data`/`url` columns |
 | `erc_8004.agents` | Queue via `is_uri_processed` + `agent_uri_raw` |
@@ -85,6 +87,29 @@ Trigger `trg_wallet_transactions_portfolio_flag_bu` sets portfolio pending when 
 | `lp_discovery_message_error` | Error text |
 
 Trigger `trg_wallet_transactions_lp_flag_bu` sets LP pending when portfolio discovery completes successfully.
+
+### Token activity scan (`wallet_transactions` + public RPC)
+
+| Column | Role |
+|---|---|
+| `token_activity_next_eligible_at` | Claim clock (`NULL` = not queued; `<= NOW()` = due). New inserts get `-infinity` via BI; existing need seed script |
+| `token_activity_last_scanned_block` | Inclusive cursor for incremental getLogs |
+| `token_activity_scanned_at` / `claimed_at` / `claimed_by` | Audit |
+| `has_token_activity_error` / `token_activity_message_error` | Last failure (requeue in 1h) |
+| `chains.token_activity_runner_count` | GHA shard count (1–16) |
+
+Eligibility also requires `agent_wallet_tx.is_valid` + agent `validation_realness_status='valid'`. Index: `idx_wallet_transactions_token_activity_due`.
+
+```sql
+SELECT
+  count(*) FILTER (WHERE token_activity_next_eligible_at IS NOT NULL
+                   AND token_activity_next_eligible_at <= NOW()) AS due,
+  count(*) FILTER (WHERE token_activity_next_eligible_at IS NULL) AS not_queued,
+  count(*) FILTER (WHERE has_token_activity_error IS TRUE) AS errors
+FROM erc_8004.wallet_transactions;
+```
+
+Seed (ask first): `gsa-supabase-schema/supabase/scripts/wallet_token_activity_scan_seed_queue.sql`.
 
 ### URI ingest (`uri_documents` / `agent_manifest`)
 
@@ -183,6 +208,7 @@ Canonical SQL / migrations: `gsa-supabase-schema/supabase/migrations/` and `supa
 | token contracts discovery | `wallets.wallet_token_contracts_upsert(p_wallet_id, p_chain_id, p_rows jsonb)` | `wallets.wallet_token_contracts` (insert/update only; no delete) |
 | token portfolio discovery | `wallets.wallet_token_positions_insert(p_wallet_id, p_chain_id, p_rows jsonb)` | `wallets.wallet_token_positions` (INSERT … ON CONFLICT DO NOTHING) |
 | LP positions discovery | `wallets.wallet_lp_positions_upsert(p_wallet_id, p_chain_id, p_rows jsonb)` | `wallets.wallet_lp_positions` (DELETE+INSERT replace per wallet+chain; stamps `calculated_at`) |
+| token activity scan | `wallet_token_contracts_upsert` + `wallet_nft_contracts_upsert` + `wallet_token_transfers_upsert` | ERC-20 contracts (`source=rpc_logs_activity`); NFT collections; transfer rows |
 
 CEX `p_rows` is a JSON array of Dune row objects (`blockchain`, `address`, `cex_name`, `distinct_name`). Empty array raises. Script: `gsa-supabase-schema/supabase/scripts/wallets_cex_addresses_upsert.sql`.
 

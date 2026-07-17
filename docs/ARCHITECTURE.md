@@ -79,6 +79,7 @@ stateDiagram-v2
 | `wallet_token_contracts_discovery` | `wallet-token-contracts-discovery.yml` | `wallet-token-contracts-discovery` | 1 runner |
 | `wallet_token_portfolio_discovery` | `wallet-token-portfolio-discovery.yml` | `wallet-token-portfolio-discovery` | 1 runner |
 | `wallet_lp_positions_discovery` | `wallet-lp-positions-discovery.yml` | `wallet-lp-positions-discovery` | 1 runner |
+| `wallet_token_activity_scan` | `wallet-token-activity-scan.yml` | per `chain-shard` | Dynamic matrix from `chains.token_activity_runner_count` |
 | `agent_uri_resolve` | `agent-uri-resolve.yml` | `agent-uri-resolve` | 1 runner (00:00 / 12:00) |
 | `agent_uri_reprocess` | `agent-uri-reprocess.yml` | `agent-uri-reprocess` | 1 runner (06:00 / 18:00) |
 | `ai_agent_classifier` | `ai-agent-classifier.yml` | `ai-agent-classifier` | 1 runner (0/6/12/18) |
@@ -101,6 +102,7 @@ AI classifier: `0 0,6,12,18 * * *` UTC + `workflow_dispatch`.
 | token contracts discovery | `wallet_transactions.does_need_discovery_contracts` + `chains.subdomain_alchemy` | Alchemy ERC-20 balances → `wallets.wallet_token_contracts` via `wallet_token_contracts_upsert` |
 | token portfolio discovery | `does_need_portfolio_discovery` after contract discovery | Alchemy amounts + DeFiLlama → fungible `wallet_token_positions_insert` |
 | LP positions discovery | `does_need_lp_discovery` after portfolio discovery | NFT + `lp_pools` → `wallet_lp_positions_upsert` |
+| token activity scan | `token_activity_next_eligible_at` + valid agents; shard by `wallet_id` | Public getLogs Transfer → contracts + nft_contracts + transfers |
 | agent URI resolve | agents / on-chain / external feedbacks pending | Resolve/materialize → `uri_documents` + `agent_manifest` |
 | agent URI reprocess | download errors (max 3) + off-chain docs &gt;15d | Retry + refresh; `is_processed` only if document changed |
 | AI agent classifier | `does_need_ai_category_process` | LLM → `ai_category_*` on `web_dashboard.agents`; rotate `llm.models` by daily cap |
