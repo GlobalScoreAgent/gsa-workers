@@ -12,7 +12,7 @@ from rpc import (
     address_to_topic,
     hex_to_int,
     int_to_hex,
-    is_result_too_large,
+    is_logs_query_too_heavy,
     topic_to_address,
 )
 
@@ -122,13 +122,19 @@ async def scan_wallet_batch(
                 address_topics=topics_addrs,
             )
         except RpcError as exc:
-            if is_result_too_large(exc) and chunk > chunk_min:
-                chunk = max(chunk_min, chunk // 2)
+            if is_logs_query_too_heavy(exc) and chunk > chunk_min:
+                msg = str(exc).lower()
+                if "max range: 800" in msg or "-32047" in msg:
+                    # Cloudflare (and similar) hard-cap; drop straight to 800.
+                    chunk = max(chunk_min, min(800, chunk // 2 if chunk <= 800 else 800))
+                else:
+                    chunk = max(chunk_min, chunk // 2)
                 logger.warning(
-                    "getLogs too large [%s,%s]; shrink chunk -> %s",
+                    "getLogs range/response too heavy [%s,%s]; shrink chunk -> %s (%s)",
                     cursor,
                     end,
                     chunk,
+                    exc,
                 )
                 continue
             raise

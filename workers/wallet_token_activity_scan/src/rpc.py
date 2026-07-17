@@ -62,6 +62,7 @@ def is_rate_limit_error(exc: BaseException) -> bool:
 
 
 def is_result_too_large(exc: BaseException) -> bool:
+    """Payload/result size limits (too many logs)."""
     text = str(exc).lower()
     return any(
         s in text
@@ -70,11 +71,32 @@ def is_result_too_large(exc: BaseException) -> bool:
             "response is too big",
             "response too large",
             "log response size exceeded",
-            "timeout",
             "-32005",
-            "-32602",
         )
     )
+
+
+def is_block_range_too_large(exc: BaseException) -> bool:
+    """Provider rejects fromBlock-toBlock span (e.g. Cloudflare max 800)."""
+    text = str(exc).lower()
+    return any(
+        s in text
+        for s in (
+            "range too large",
+            "max range",
+            "block range is too large",
+            "exceeds the range",
+            "query exceeds max block",
+            "fromblock'-'toblock'",
+            "fromblock\":\"toblock",
+            "-32047",
+        )
+    )
+
+
+def is_logs_query_too_heavy(exc: BaseException) -> bool:
+    """Caller should shrink eth_getLogs block chunk (do not rotate forever)."""
+    return is_result_too_large(exc) or is_block_range_too_large(exc)
 
 
 class RpcClient:
@@ -134,29 +156,36 @@ class RpcClient:
                     },
                     timeout=self._timeout,
                 )
+                body_text = response.text
                 if response.status_code == 429:
                     raise RpcError(f"HTTP 429 from {url}", retryable=True)
-                response.raise_for_status()
+                if response.status_code >= 400:
+                    # Some providers put range/limit details in the HTTP body.
+                    if is_logs_query_too_heavy(RpcError(body_text)):
+                        raise RpcError(body_text, retryable=False)
+                    response.raise_for_status()
                 payload = response.json()
                 if not isinstance(payload, dict):
                     raise RpcError("RPC response is not a JSON object")
                 if payload.get("error"):
                     err = payload["error"]
                     msg = str(err)
-                    raise RpcError(
-                        msg,
-                        retryable=is_rate_limit_error(msg) or is_result_too_large(msg),
-                    )
+                    # Chunk/range limits must bubble to the scanner (shrink), not rotate.
+                    if is_logs_query_too_heavy(RpcError(msg)):
+                        raise RpcError(msg, retryable=False)
+                    raise RpcError(msg, retryable=is_rate_limit_error(msg))
                 if "result" not in payload:
                     raise RpcError("RPC response missing result")
                 return payload["result"]
             except (httpx.HTTPError, RpcError, ValueError) as exc:
+                if is_logs_query_too_heavy(exc):
+                    raise RpcError(str(exc), retryable=False) from exc
                 last_exc = exc if isinstance(exc, Exception) else RpcError(str(exc))
                 retryable = isinstance(exc, RpcError) and exc.retryable
                 retryable = retryable or is_rate_limit_error(exc) or isinstance(
                     exc, (httpx.TimeoutException, httpx.TransportError)
                 )
-                if attempt >= self._max_retries:
+                if not retryable or attempt >= self._max_retries:
                     break
                 delay = self._retry_base * (2 ** (attempt - 1))
                 delay = min(delay, 8.0)
@@ -168,7 +197,7 @@ class RpcClient:
                     self._max_retries,
                     exc,
                     delay,
-                    retryable or True,
+                    True,
                 )
                 await asyncio.sleep(delay)
                 self._rotate()

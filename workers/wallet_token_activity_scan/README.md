@@ -75,3 +75,7 @@ ORDER BY c.id;
 ## Out of scope (v1)
 
 ERC-1155 events, native/external transfers, Alchemy Transfers / getTokenBalances.
+
+## Notes
+
+On provider errors like Cloudflare `-32047` / `range too large`, the scanner shrinks the block chunk (down to 800 when advertised) instead of rotating RPCs forever.
