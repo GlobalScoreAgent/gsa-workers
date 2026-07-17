@@ -178,26 +178,23 @@ class RpcClient:
                     raise RpcError("RPC response missing result")
                 return payload["result"]
             except (httpx.HTTPError, RpcError, ValueError) as exc:
+                # Chunk/range limits: bubble immediately so the scanner can shrink.
                 if is_logs_query_too_heavy(exc):
                     raise RpcError(str(exc), retryable=False) from exc
                 last_exc = exc if isinstance(exc, Exception) else RpcError(str(exc))
-                retryable = isinstance(exc, RpcError) and exc.retryable
-                retryable = retryable or is_rate_limit_error(exc) or isinstance(
-                    exc, (httpx.TimeoutException, httpx.TransportError)
-                )
-                if not retryable or attempt >= self._max_retries:
+                # Public RPCs: rotate on 403/429/5xx/timeouts (sticky until failure).
+                if attempt >= self._max_retries:
                     break
                 delay = self._retry_base * (2 ** (attempt - 1))
                 delay = min(delay, 8.0)
                 logger.warning(
-                    "RPC %s via %s failed attempt %s/%s (%s); sleep %.1fs rotate=%s",
+                    "RPC %s via %s failed attempt %s/%s (%s); sleep %.1fs rotate=True",
                     method,
                     url,
                     attempt,
                     self._max_retries,
                     exc,
                     delay,
-                    True,
                 )
                 await asyncio.sleep(delay)
                 self._rotate()
