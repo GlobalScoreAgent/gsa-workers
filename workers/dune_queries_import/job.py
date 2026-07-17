@@ -22,7 +22,30 @@ from dune import (
     DuneError,
     fetch_latest_rows,
 )
-from tasks import TASKS
+from tasks import TASKS, DuneTask
+
+
+def env_task_filter() -> set[str] | None:
+    raw = os.environ.get("DUNE_TASKS")
+    if raw is None or raw.strip() == "":
+        return None
+    names = {part.strip() for part in raw.split(",") if part.strip()}
+    if not names:
+        return None
+    known = {task.name for task in TASKS}
+    unknown = names - known
+    if unknown:
+        raise ValueError(
+            f"DUNE_TASKS has unknown names {sorted(unknown)}; known={sorted(known)}"
+        )
+    return names
+
+
+def selected_tasks() -> tuple[DuneTask, ...]:
+    selected = env_task_filter()
+    if selected is None:
+        return TASKS
+    return tuple(task for task in TASKS if task.name in selected)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -87,18 +110,24 @@ def main() -> int:
         page_delay = env_float("DUNE_PAGE_DELAY_SECONDS", DEFAULT_PAGE_DELAY_SECONDS)
         task_delay = env_float("DUNE_TASK_DELAY_SECONDS", DEFAULT_TASK_DELAY_SECONDS)
         chunk_size = env_int("UPSERT_CHUNK_SIZE", DEFAULT_UPSERT_CHUNK_SIZE)
+        tasks = selected_tasks()
     except ValueError as exc:
         logger.error("%s", exc)
         return 1
 
+    if not tasks:
+        logger.error("No tasks selected")
+        return 1
+
     logger.info(
         "Starting Dune queries import (%s tasks, page_size=%s, page_delay=%.1fs, "
-        "task_delay=%.1fs, chunk_size=%s)",
-        len(TASKS),
+        "task_delay=%.1fs, chunk_size=%s, tasks=%s)",
+        len(tasks),
         page_size,
         page_delay,
         task_delay,
         chunk_size,
+        ",".join(task.name for task in tasks),
     )
 
     db = Database(dsn)
@@ -107,7 +136,7 @@ def main() -> int:
     try:
         db.connect()
         with httpx.Client(timeout=HTTP_TIMEOUT_SECONDS) as http:
-            for index, task in enumerate(TASKS):
+            for index, task in enumerate(tasks):
                 if index > 0 and task_delay > 0:
                     logger.info(
                         "Waiting %.1fs before next task (rate-limit pacing)",
@@ -118,7 +147,7 @@ def main() -> int:
                 logger.info(
                     "=== Task %s/%s: %s (query_id=%s) ===",
                     index + 1,
-                    len(TASKS),
+                    len(tasks),
                     task.name,
                     task.query_id,
                 )
@@ -168,7 +197,7 @@ def main() -> int:
         )
         return 1
 
-    logger.info("All %s tasks succeeded in %.1fs", len(TASKS), elapsed)
+    logger.info("All %s tasks succeeded in %.1fs", len(tasks), elapsed)
     return 0
 
 

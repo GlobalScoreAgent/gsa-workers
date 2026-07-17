@@ -4,6 +4,11 @@ on:
   schedule:
     - cron: "0 0 1,16 * *"
   workflow_dispatch:
+    inputs:
+      dune_tasks:
+        description: "Comma-separated tasks (cex,mixers,bridges,ofac_sanction). Empty = all."
+        required: false
+        default: ""
 
 concurrency:
   group: dune-queries-import
@@ -41,4 +46,5 @@ jobs:
           DUNE_PAGE_DELAY_SECONDS: "2"
           DUNE_TASK_DELAY_SECONDS: "3"
           UPSERT_CHUNK_SIZE: "5000"
+          DUNE_TASKS: ${{ inputs.dune_tasks }}
         run: uv run python job.py
