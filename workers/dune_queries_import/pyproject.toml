@@ -1,7 +1,7 @@
 [project]
-name = "cex-addresses-import"
+name = "dune-queries-import"
 version = "0.1.0"
-description = "Import CEX addresses from Dune into wallets.cex_addresses for GSA"
+description = "Import Dune reference queries (CEX, mixers, bridges, OFAC) into wallets schema for GSA"
 requires-python = ">=3.12"
 dependencies = [
     "httpx>=0.28",

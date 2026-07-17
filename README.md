@@ -11,7 +11,7 @@ Unified Python batch workers for [Global Score Agent](https://www.globalscoreage
 | [`wallet_nonce_balance_daily`](./workers/wallet_nonce_balance_daily/README.md) | 0, 6, 12, 18h (matrix `worker-a`/`worker-b`) | `is_valid_..._daily` + `import_nonce_and_balance_daily_next_eligible_at` | Balance + nonce → daily JSON → `wallet_apply_daily_snapshot` → `wallet_daily_metrics` |
 | [`owner_wallet_origin`](./workers/owner_wallet_origin/README.md) | 0, 6, 12, 18h | monthly `is_valid` + `import_wallet_history_next_eligible_at` | First on-chain activity → history JSON → `wallet_apply_owner_history_snapshot` |
 | [`owner_wallet_nonce_balance_monthly`](./workers/owner_wallet_nonce_balance_monthly/README.md) | 0, 6, 12, 18h | `is_valid_..._monthly` + `import_nonce_and_balance_monthly_next_eligible_at` | Balance + nonce (30d) → monthly JSON → `wallet_apply_monthly_snapshot` |
-| [`cex_addresses_import`](./workers/cex_addresses_import/README.md) | 1st & 16th 00:00 (~every 15 days) | n/a (reference data) | Dune CEX list → `wallets.cex_addresses_upsert` |
+| [`dune_queries_import`](./workers/dune_queries_import/README.md) | 1st & 16th 00:00 (~every 15 days) | n/a (reference data) | 4 Dune queries → cex/mixer/bridge/ofac upserts |
 | [`token_prices_import`](./workers/token_prices_import/README.md) | 0, 6, 12, 18h | n/a (reference data) | Dex/CG → `token_prices` → apply / mark known-unknown misses |
 | [`wallet_token_contracts_discovery`](./workers/wallet_token_contracts_discovery/README.md) | 0, 6, 12, 18h | `wallet_transactions.does_need_discovery_contracts` + `chains.subdomain_alchemy` | Alchemy ERC-20 balances → `wallet_token_contracts_upsert` |
 | [`wallet_token_portfolio_discovery`](./workers/wallet_token_portfolio_discovery/README.md) | 0, 6, 12, 18h | portfolio discovery flag after contract discovery | Alchemy amounts + DeFiLlama → fungible `wallet_token_positions` |
@@ -31,7 +31,7 @@ claim (Pending, next_eligible_at += CLAIM_STALE_SECONDS)
   → wallet_apply_*_snapshot → Processed
 ```
 
-Reference-data: `cex_addresses_import` (Dune → upsert); `token_prices_import` (Dex/CG enrich + miss mark). Full catalog: [docs/PROCESSES.md](./docs/PROCESSES.md). Column/RPC inventory: [docs/SUPABASE.md](./docs/SUPABASE.md).
+Reference-data: `dune_queries_import` (4 Dune queries → upserts); `token_prices_import` (Dex/CG enrich + miss mark). Full catalog: [docs/PROCESSES.md](./docs/PROCESSES.md). Column/RPC inventory: [docs/SUPABASE.md](./docs/SUPABASE.md).
 
 ## Secrets
 
@@ -104,7 +104,7 @@ gsa-workers/
 │   ├── owner_wallet_nonce_balance_monthly/
 │   │   ├── job.py
 │   │   └── src/
-│   ├── cex_addresses_import/
+│   ├── dune_queries_import/
 │   │   ├── job.py
 │   │   └── src/          # db, dune
 │   ├── token_prices_import/
@@ -132,7 +132,7 @@ gsa-workers/
     ├── wallet-nonce-balance-daily.yml
     ├── owner-wallet-origin.yml
     ├── owner-wallet-nonce-balance-monthly.yml
-    ├── cex-addresses-import.yml
+    ├── dune-queries-import.yml
     ├── token-prices-import.yml
     ├── wallet-token-contracts-discovery.yml
     ├── wallet-token-portfolio-discovery.yml

@@ -74,7 +74,7 @@ stateDiagram-v2
 | `wallet_nonce_balance_daily` | `wallet-nonce-balance-daily.yml` | per `worker-a` / `worker-b` | Matrix: 2 runners |
 | `owner_wallet_origin` | `owner-wallet-origin.yml` | `owner-wallet-origin` | 1 runner |
 | `owner_wallet_nonce_balance_monthly` | `owner-wallet-nonce-balance-monthly.yml` | `owner-wallet-nonce-balance-monthly` | 1 runner |
-| `cex_addresses_import` | `cex-addresses-import.yml` | `cex-addresses-import` | 1 runner |
+| `dune_queries_import` | `dune-queries-import.yml` | `dune-queries-import` | 1 runner |
 | `token_prices_import` | `token-prices-import.yml` | `token-prices-import` | 1 runner |
 | `wallet_token_contracts_discovery` | `wallet-token-contracts-discovery.yml` | `wallet-token-contracts-discovery` | 1 runner |
 | `wallet_token_portfolio_discovery` | `wallet-token-portfolio-discovery.yml` | `wallet-token-portfolio-discovery` | 1 runner |
@@ -85,7 +85,7 @@ stateDiagram-v2
 | `ai_agent_classifier` | `ai-agent-classifier.yml` | `ai-agent-classifier` | 1 runner (0/6/12/18) |
 
 Claim wallet workers schedule: `0 0,6,12,18 * * *` UTC + `workflow_dispatch`.  
-CEX import schedule: `0 0 1,16 * *` UTC + `workflow_dispatch` (1st and 16th of each month ≈ every 15 days).  
+Dune queries import schedule: `0 0 1,16 * *` UTC + `workflow_dispatch` (1st and 16th ≈ every 15 days; 4 tasks per run).  
 Token prices import schedule: `0 0,6,12,18 * * *` UTC + `workflow_dispatch`.  
 URI resolve: `0 0,12 * * *`; URI reprocess: `0 6,18 * * *` (split cadence by design).  
 AI classifier: `0 0,6,12,18 * * *` UTC + `workflow_dispatch`.
@@ -97,7 +97,7 @@ AI classifier: `0 0,6,12,18 * * *` UTC + `workflow_dispatch`.
 | daily | `is_valid_import_current_nonce_and_balance_daily` | Balance/nonce JSON → `wallet_daily_metrics` (flat); `Processed` |
 | monthly | `is_valid_import_current_nonce_and_balance_monthly` | Balance/nonce JSON → `wallet_owner_details` (current metrics) |
 | origin | same monthly flag | First-activity history JSON → `wallet_owner_details.first_transaction_at` |
-| cex import | n/a | Dune rows → `wallets.cex_addresses` via `cex_addresses_upsert` |
+| dune queries | n/a | 4 Dune queries → cex / mixer / bridge / ofac tables (paginated + chunked upserts) |
 | token prices | n/a | Unpriced ERC-20s → Dex/CG → `token_prices` → apply hits / mark misses |
 | token contracts discovery | `wallet_transactions.does_need_discovery_contracts` + `chains.subdomain_alchemy` | Alchemy ERC-20 balances → `wallets.wallet_token_contracts` via `wallet_token_contracts_upsert` |
 | token portfolio discovery | `does_need_portfolio_discovery` after contract discovery | Alchemy amounts + DeFiLlama → fungible `wallet_token_positions_insert` |
@@ -146,17 +146,23 @@ flowchart LR
 
 ## Reference-data workers
 
-`cex_addresses_import` and `token_prices_import` do **not** use claim / `next_eligible_at`.
+`dune_queries_import` and `token_prices_import` do **not** use claim / `next_eligible_at`.
 
-**CEX:** Fetch latest Dune query → fail if zero rows → `cex_addresses_upsert`.
+**Dune queries:** For each of cex / mixers / bridges / ofac_sanction — paginated Dune fetch → fail task if zero rows → upsert in chunks (`UPSERT_CHUNK_SIZE`) via the matching `wallets.*_upsert` RPC. Tasks continue on failure; job exit 1 if any failed.
 
 **Token prices:** Load chain `subdomain_*` → distinct unpriced ERC-20s (`DISTINCT ON` chain+contract) → cache TTL → DexScreener → CoinGecko → `token_prices_upsert` (deduped PK) → per-chain `apply_prices` → `mark_price_misses` for unresolved contracts → final `apply_prices`.
 
 ```mermaid
 flowchart LR
-  ghaCex[GHA_cex_import] --> duneApi[Dune_API]
-  ghaCex --> upsertCex["wallets.cex_addresses_upsert"]
+  ghaDune[GHA_dune_queries] --> duneApi[Dune_API]
+  ghaDune --> upsertCex["cex_addresses_upsert"]
+  ghaDune --> upsertMix["mixer_addresses_upsert"]
+  ghaDune --> upsertBr["bridge_addresses_upsert"]
+  ghaDune --> upsertOfac["ofac_sanction_addresses_upsert"]
   upsertCex --> cexTable[wallets.cex_addresses]
+  upsertMix --> mixTable[wallets.mixer_addresses]
+  upsertBr --> brTable[wallets.bridge_addresses]
+  upsertOfac --> ofacTable[wallets.ofac_sanction_addresses]
   ghaPrices[GHA_token_prices] --> dexCg[Dex_CoinGecko]
   dexCg --> upsertPrices["token_prices_upsert"]
   upsertPrices --> applyPos["apply_prices"]
@@ -226,7 +232,7 @@ Secrets: env name = `llm.llm_provider.secret` (Groq → `GROQ`). Gemini/Cerebras
 
 | Limit | Value |
 |---|---|
-| GHA `timeout-minutes` | 360 (claim workers / token-prices), 30 (cex import) |
+| GHA `timeout-minutes` | 360 (claim workers / token-prices), 90 (dune queries) |
 | `MAX_RUNTIME_SECONDS` | 19800 (~5.5h) — soft stop inside claim / enrich `job.py` |
 | Postgres `statement_timeout` | 300s |
 | HTTP client timeout | ~10s (daily/monthly), ~30s (origin), ~120s (Dune) |
@@ -255,7 +261,7 @@ workers/<name>/
     ├── db.py           # claim / save / snapshot / reconnect (or upsert RPC)
     ├── query.py        # balance+nonce (daily, monthly)
     ├── origin.py       # binary-search first activity (origin only)
-    ├── dune.py         # Dune HTTP client (cex import)
+    ├── dune.py         # Dune HTTP client (dune queries)
     ├── dexscreener.py / coingecko.py  # token_prices_import
     ├── nft_lp.py / classic_lp.py / pricing.py / univ3_math.py  # LP discovery
     ├── resolve.py / handlers / scrape   # URI resolve (reprocess imports via sys.path)
@@ -274,7 +280,7 @@ Origin also has `scripts/check_pending.py` and `scripts/compare_smoke.py`. `wall
 | daily | 20 | 200 | 7200 |
 | origin | 4 | 50 | 7200 |
 | monthly | 20 | 200 | 7200 |
-| cex import | n/a | n/a | n/a |
+| dune queries | n/a | n/a | n/a |
 | token prices | n/a | n/a | n/a |
 | token contracts discovery | 10 | 50 | 7200 |
 | token portfolio discovery | 5 | 25 | 7200 |
@@ -283,7 +289,7 @@ Origin also has `scripts/check_pending.py` and `scripts/compare_smoke.py`. `wall
 | agent URI reprocess | 4 | 20 | n/a |
 | AI agent classifier | 1 | 20 | n/a |
 
-Secrets: `SUPABASE_DB_URL` (required), `ALCHEMY_KEY` (balance/nonce), `ALCHEMY_FREE_KEY` (contracts / portfolio / LP), `DUNE_KEY` (cex), `COINGECKO_KEY` (token prices), `PINATA_GATEWAY` / `SCRAPE_DO_TOKEN` (URI workers, optional), `GROQ` (AI classifier). Daily sets `WORKER_ID` from the matrix.
+Secrets: `SUPABASE_DB_URL` (required), `ALCHEMY_KEY` (balance/nonce), `ALCHEMY_FREE_KEY` (contracts / portfolio / LP), `DUNE_KEY` (dune queries), `COINGECKO_KEY` (token prices), `PINATA_GATEWAY` / `SCRAPE_DO_TOKEN` (URI workers, optional), `GROQ` (AI classifier). Daily sets `WORKER_ID` from the matrix.
 
 ## Related docs
 

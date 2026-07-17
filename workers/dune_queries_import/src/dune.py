@@ -1,4 +1,4 @@
-"""Dune Analytics client for latest CEX address query results."""
+"""Dune Analytics client for paginated latest query results."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from typing import Any
 
 import httpx
 
-logger = logging.getLogger("cex_addresses_import")
+logger = logging.getLogger("dune_queries_import")
 
 DUNE_RESULTS_URL = "https://api.dune.com/api/v1/query/{query_id}/results"
 DEFAULT_PAGE_SIZE = 10_000

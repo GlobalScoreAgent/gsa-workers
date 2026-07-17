@@ -21,7 +21,7 @@ flowchart TB
     tokenActivity[wallet_token_activity_scan]
   end
   subgraph refdata [Other_reference]
-    cex[cex_addresses_import]
+    dune[dune_queries_import]
   end
   subgraph pending [Not_built_yet]
     lpRefresh[wallet_lp_positions_refresh_15d]
@@ -44,7 +44,10 @@ flowchart TB
   prices --> tpc[wallets.token_prices]
   portfolio --> lp
   lp --> wlp[wallets.wallet_lp_positions]
-  cex --> cexT[wallets.cex_addresses]
+  dune --> cexT[wallets.cex_addresses]
+  dune --> mixT[wallets.mixer_addresses]
+  dune --> brT[wallets.bridge_addresses]
+  dune --> ofacT[wallets.ofac_sanction_addresses]
   lpRefresh -.-> wlp
   tokenActivity --> wtc
   tokenActivity --> wnft[wallets.wallet_nft_contracts]
@@ -64,7 +67,7 @@ flowchart TB
 | 1 | [`wallet_nonce_balance_daily`](../workers/wallet_nonce_balance_daily/README.md) | Claim | 0/6/12/18 (matrix a/b) | `wallets` + daily flags | `wallet_apply_daily_snapshot` | `wallet_daily_metrics` (flat); rollup → `wallet_transactions` TBD |
 | 2 | [`owner_wallet_nonce_balance_monthly`](../workers/owner_wallet_nonce_balance_monthly/README.md) | Claim | 0/6/12/18 | monthly flags | `wallet_apply_monthly_snapshot` | `wallet_owner_details` |
 | 3 | [`owner_wallet_origin`](../workers/owner_wallet_origin/README.md) | Claim | 0/6/12/18 | history flags | `wallet_apply_owner_history_snapshot` | `wallet_owner_details.first_transaction_at` |
-| 4 | [`cex_addresses_import`](../workers/cex_addresses_import/README.md) | Reference | 1st & 16th 00:00 | Dune API | `wallets.cex_addresses_upsert` | `wallets.cex_addresses` |
+| 4 | [`dune_queries_import`](../workers/dune_queries_import/README.md) | Reference | 1st & 16th 00:00 | Dune API (4 queries) | cex/mixer/bridge/ofac upserts (chunked) | `wallets.cex_addresses` + mixer/bridge/ofac tables |
 | 5 | [`wallet_token_contracts_discovery`](../workers/wallet_token_contracts_discovery/README.md) | Claim (`wallet_transactions`) | 0/6/12/18 | `does_need_discovery_contracts` | `wallet_token_contracts_upsert` | `wallets.wallet_token_contracts` |
 | 6 | [`wallet_token_portfolio_discovery`](../workers/wallet_token_portfolio_discovery/README.md) | Claim (`wallet_transactions`) | 0/6/12/18 | `does_need_portfolio_discovery` | `wallet_token_positions_insert` | `wallets.wallet_token_positions` (wallet fungibles) |
 | 7 | [`token_prices_import`](../workers/token_prices_import/README.md) | Reference | 0/6/12/18 | unpriced ERC-20s (`has_price_error`) | `token_prices_upsert` + `apply_prices` + `mark_price_misses` | `token_prices` → positions |
@@ -88,9 +91,9 @@ Eligibility: `is_valid_*` + `*_next_eligible_at <= NOW()`. Soft lock via `next_e
 
 **Daily only:** snapshot destination is `erc_8004.wallet_daily_metrics` (not `wallet_transactions`). Discovery pipelines (#5–#8) still claim existing `wallet_transactions` rows; new daily data does not refresh that table until a rollup job lands.
 
-### 4. CEX addresses (reference)
+### 4. Dune queries (reference)
 
-Dune fetch → fail on empty → `cex_addresses_upsert`. No claim loop.
+Four tasks per run (cex / mixers / bridges / ofac): paginated Dune fetch → fail task on empty → chunked `*_upsert`. No claim loop. Continue on per-task failure; exit 1 if any failed.
 
 ### 5. Token contracts discovery
 
@@ -201,7 +204,7 @@ Worker README: [`ai_agent_classifier`](../workers/ai_agent_classifier/README.md)
 | `SUPABASE_DB_URL` | All |
 | `ALCHEMY_KEY` | Balance/nonce claim workers (fallback RPC) |
 | `ALCHEMY_FREE_KEY` | Contracts + portfolio + LP discovery |
-| `DUNE_KEY` | CEX import |
+| `DUNE_KEY` | Dune queries import |
 | `COINGECKO_KEY` | Token prices enrich |
 | `PINATA_GATEWAY` | URI resolve / reprocess (optional IPFS) |
 | `SCRAPE_DO_TOKEN` | URI resolve / reprocess (optional HTTP fallback) |

@@ -1,8 +1,8 @@
 # Supabase / Postgres interaction
 
-Workers connect with **direct Postgres** via `SUPABASE_DB_URL` (`psycopg`), not supabase-js or Edge Functions. Schema of truth for wallet claim jobs: `erc_8004`. Reference-data imports (CEX addresses, token prices) use schema `wallets`. URI ingest uses `erc_8004.uri_documents` + `erc_8004.agent_manifest`. AI agent classifier uses `web_dashboard.agents` + schema `llm` + `web_dashboard.agent_ai_categories`.
+Workers connect with **direct Postgres** via `SUPABASE_DB_URL` (`psycopg`), not supabase-js or Edge Functions. Schema of truth for wallet claim jobs: `erc_8004`. Reference-data imports (Dune queries, token prices) use schema `wallets`. URI ingest uses `erc_8004.uri_documents` + `erc_8004.agent_manifest`. AI agent classifier uses `web_dashboard.agents` + schema `llm` + `web_dashboard.agent_ai_categories`.
 
-Schema migrations and snapshot/upsert SQL live in the sibling repo **`gsa-supabase-schema`** (functions `wallet_apply_*_snapshot`, CEX / token_prices / discovery upserts, URI indexes + helpers, triggers). Code of truth for claim/save SQL in this repo: each worker’s `src/db.py`. Process catalog: [PROCESSES.md](./PROCESSES.md). LP refresh (15d) still pending: [PENDING_LP_POSITIONS.md](./PENDING_LP_POSITIONS.md).
+Schema migrations and snapshot/upsert SQL live in the sibling repo **`gsa-supabase-schema`** (functions `wallet_apply_*_snapshot`, Dune reference / token_prices / discovery upserts, URI indexes + helpers, triggers). Code of truth for claim/save SQL in this repo: each worker’s `src/db.py`. Process catalog: [PROCESSES.md](./PROCESSES.md). LP refresh (15d) still pending: [PENDING_LP_POSITIONS.md](./PENDING_LP_POSITIONS.md).
 
 ## Connection
 
@@ -24,6 +24,9 @@ Schema migrations and snapshot/upsert SQL live in the sibling repo **`gsa-supaba
 | `erc_8004.chain_nonces` | Per-chain daily nonce totals (not written by current daily snapshot) |
 | `erc_8004.wallet_owner_details` | Monthly + origin snapshots: owner metrics / first tx |
 | `wallets.cex_addresses` | CEX address reference list (Dune import) |
+| `wallets.mixer_addresses` | Mixer / Tornado pool addresses (Dune) |
+| `wallets.bridge_addresses` | Bridge label addresses (Dune) |
+| `wallets.ofac_sanction_addresses` | OFAC sanction addresses (Dune) |
 | `wallets.token_prices` | Spot USD cache PK `(chain_id, contract)`; Dex/CG enrich |
 | `wallets.wallet_token_contracts` | ERC-20 contracts with balance > 0 per wallet+chain (discovery) |
 | `wallets.wallet_token_positions` | Fungible positions (native=`'native'` + ERC-20); initial INSERT discovery |
@@ -203,14 +206,17 @@ Canonical SQL / migrations: `gsa-supabase-schema/supabase/migrations/` and `supa
 
 | Worker | Function | Writes |
 |---|---|---|
-| cex import | `wallets.cex_addresses_upsert(p_rows jsonb)` | `wallets.cex_addresses` (`ON CONFLICT (address, chain)`) |
+| dune queries | `wallets.cex_addresses_upsert(p_rows jsonb)` | `wallets.cex_addresses` |
+| dune queries | `wallets.mixer_addresses_upsert(p_rows jsonb)` | `wallets.mixer_addresses` |
+| dune queries | `wallets.bridge_addresses_upsert(p_rows jsonb)` | `wallets.bridge_addresses` |
+| dune queries | `wallets.ofac_sanction_addresses_upsert(p_rows jsonb)` | `wallets.ofac_sanction_addresses` |
 | token prices | `token_prices_upsert` + `apply_prices` + `mark_price_misses` | Spot cache; apply hits; mark Dex/CG misses as known-unknown |
 | token contracts discovery | `wallets.wallet_token_contracts_upsert(p_wallet_id, p_chain_id, p_rows jsonb)` | `wallets.wallet_token_contracts` (insert/update only; no delete) |
 | token portfolio discovery | `wallets.wallet_token_positions_insert(p_wallet_id, p_chain_id, p_rows jsonb)` | `wallets.wallet_token_positions` (INSERT … ON CONFLICT DO NOTHING) |
 | LP positions discovery | `wallets.wallet_lp_positions_upsert(p_wallet_id, p_chain_id, p_rows jsonb)` | `wallets.wallet_lp_positions` (DELETE+INSERT replace per wallet+chain; stamps `calculated_at`) |
 | token activity scan | `wallet_token_contracts_upsert` + `wallet_nft_contracts_upsert` + `wallet_token_transfers_upsert` | ERC-20 contracts (`source=rpc_logs_activity`); NFT collections; transfer rows |
 
-CEX `p_rows` is a JSON array of Dune row objects (`blockchain`, `address`, `cex_name`, `distinct_name`). Empty array raises. Script: `gsa-supabase-schema/supabase/scripts/wallets_cex_addresses_upsert.sql`.
+Dune upserts: JSON arrays; empty array raises. Worker sends **chunks** (default 5000). Scripts: `wallets_cex_addresses_upsert.sql`, `wallets_dune_reference_tables.sql`. Docs: `gsa-supabase-schema/supabase/docs/wallets-dune-reference-tables.md`.
 
 Token prices enrich upserts `{chain_id, contract_address, symbol?, price_usd?, source, liquidity_usd?}` (`source` = dexscreener|coingecko|miss). Upsert dedupes PK in SQL (`DISTINCT ON`). Platforms from `chains.subdomain_*`. After Dex+CG miss: `mark_price_misses` sets `has_price_error=false` and `quality_reason=unknown_token_dex_coingecko_defillama`. Scripts: `chains_price_subdomains.sql`, `wallets_token_prices_spot_cache.sql`, `wallet_token_positions_mark_price_misses.sql`.
 
@@ -367,17 +373,16 @@ WHERE is_valid_import_current_nonce_and_balance_daily IS TRUE
 
 (Adjust column names for monthly / origin.)
 
-### CEX addresses (`wallets.cex_addresses`)
+### Dune reference tables
 
 ```sql
-SELECT count(*) AS rows, max(updated_at) AS last_updated
-FROM wallets.cex_addresses;
-
-SELECT chain, count(*) AS n
-FROM wallets.cex_addresses
-GROUP BY 1
-ORDER BY n DESC
-LIMIT 10;
+SELECT 'cex' AS src, count(*) AS rows, max(updated_at) AS last_updated FROM wallets.cex_addresses
+UNION ALL
+SELECT 'mixers', count(*), max(updated_at) FROM wallets.mixer_addresses
+UNION ALL
+SELECT 'bridges', count(*), max(updated_at) FROM wallets.bridge_addresses
+UNION ALL
+SELECT 'ofac', count(*), max(updated_at) FROM wallets.ofac_sanction_addresses;
 ```
 
 ### Token prices (`wallets.token_prices`)

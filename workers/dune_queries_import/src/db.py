@@ -1,4 +1,4 @@
-"""Supabase Postgres access for cex_addresses_import job."""
+"""Supabase Postgres access for dune_queries_import job."""
 
 from __future__ import annotations
 
@@ -11,12 +11,9 @@ from typing import Any, TypeVar
 import psycopg
 from psycopg.rows import dict_row
 
-logger = logging.getLogger("cex_addresses_import")
+logger = logging.getLogger("dune_queries_import")
 
-UPSERT_CEX_ADDRESSES_SQL = """
-SELECT wallets.cex_addresses_upsert(%(rows)s::jsonb) AS message
-"""
-
+DEFAULT_UPSERT_CHUNK_SIZE = 5_000
 CLAIM_MAX_ATTEMPTS = 3
 CLAIM_RETRY_BASE_SECONDS = 2.0
 RETRYABLE_DB_EXCEPTIONS = (psycopg.OperationalError, psycopg.InterfaceError)
@@ -29,14 +26,15 @@ T = TypeVar("T")
 
 
 class Database:
-    def __init__(self, dsn: str):
+    def __init__(self, dsn: str, *, statement_timeout: str = "600s"):
         self._dsn = dsn
+        self._statement_timeout = statement_timeout
         self._conn: psycopg.Connection | None = None
 
     def connect(self) -> None:
         self._conn = psycopg.connect(self._dsn, row_factory=dict_row)
         with self._conn.cursor() as cur:
-            cur.execute("SET statement_timeout = '300s'")
+            cur.execute(f"SET statement_timeout = '{self._statement_timeout}'")
 
     def close(self) -> None:
         if self._conn is not None:
@@ -103,17 +101,51 @@ class Database:
         assert last_exc is not None
         raise last_exc
 
-    def upsert_cex_addresses(self, rows: list[dict[str, Any]]) -> str:
-        payload = json.dumps(rows, separators=(",", ":"))
+    def upsert_rows_chunked(
+        self,
+        *,
+        task_name: str,
+        rpc_sql: str,
+        rows: list[dict[str, Any]],
+        chunk_size: int = DEFAULT_UPSERT_CHUNK_SIZE,
+    ) -> str:
+        if chunk_size < 1:
+            raise ValueError("chunk_size must be >= 1")
+        if not rows:
+            raise ValueError("rows must not be empty")
 
-        def _upsert() -> str:
-            assert self._conn is not None
-            with self._conn.cursor() as cur:
-                cur.execute(UPSERT_CEX_ADDRESSES_SQL, {"rows": payload})
-                result = cur.fetchone()
-            self._conn.commit()
-            if not result or result.get("message") is None:
-                raise RuntimeError("cex_addresses_upsert returned no message")
-            return str(result["message"])
+        total = len(rows)
+        chunk_count = (total + chunk_size - 1) // chunk_size
+        messages: list[str] = []
 
-        return self._run_with_db_retry("cex_addresses_upsert", _upsert)
+        for index in range(chunk_count):
+            start = index * chunk_size
+            chunk = rows[start : start + chunk_size]
+            payload = json.dumps(chunk, separators=(",", ":"))
+            operation = f"{task_name}_upsert_chunk_{index + 1}/{chunk_count}"
+
+            def _upsert(payload: str = payload, operation: str = operation) -> str:
+                assert self._conn is not None
+                with self._conn.cursor() as cur:
+                    cur.execute(rpc_sql, {"rows": payload})
+                    result = cur.fetchone()
+                self._conn.commit()
+                if not result or result.get("message") is None:
+                    raise RuntimeError(f"{operation} returned no message")
+                return str(result["message"])
+
+            message = self._run_with_db_retry(operation, _upsert)
+            messages.append(message)
+            logger.info(
+                "Task %s upsert chunk %s/%s (%s rows): %s",
+                task_name,
+                index + 1,
+                chunk_count,
+                len(chunk),
+                message,
+            )
+
+        return (
+            f"{task_name}: {total} rows upserted in {chunk_count} chunk(s); "
+            f"last={messages[-1]}"
+        )
