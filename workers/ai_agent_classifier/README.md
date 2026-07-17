@@ -41,6 +41,8 @@ API keys come from GitHub Secrets / env vars named by `llm.llm_provider.secret` 
 | `SUPABASE_DB_URL` | required | Postgres connection string |
 | `GROQ` | required (for Groq) | Groq API key (`llm.llm_provider.secret`) |
 | `CEREBRAS` | required (for Cerebras) | Cerebras API key (`llm.llm_provider.secret`) |
+| `GEMINI` | required (for Gemini) | Gemini API key (`llm.llm_provider.secret`) |
+| `OPEN_ROUTER` | required (for OpenRouter) | OpenRouter API key (`llm.llm_provider.secret`) |
 | `CLAIM_BATCH_SIZE` | 20 | Agents claimed per loop |
 | `CONCURRENCY` | 1 | Parallel LLM calls (max 5; keep low for rpm) |
 | `MAX_RUNTIME_SECONDS` | 19800 | Soft stop (~5.5h) |
