@@ -46,4 +46,6 @@ jobs:
           MAX_RUNTIME_SECONDS: 19800
           CONCURRENCY: 1
           CLAIM_BATCH_SIZE: 20
+          # One asyncio worker per active llm provider (parallel drain).
+          # Optional: PROVIDERS: Groq,Cerebras,GEMINI,OpenRouter
         run: uv run python job.py

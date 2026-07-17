@@ -24,6 +24,7 @@ flowchart TB
   end
   subgraph pending [Not_built_yet]
     lpRefresh[wallet_lp_positions_refresh_15d]
+    tokenActivity[wallet_token_activity_scan_rpc]
     manifestConsume[agent_manifest_consume]
   end
   subgraph uriIngest [URI_ingest]
@@ -45,6 +46,7 @@ flowchart TB
   lp --> wlp[wallets.wallet_lp_positions]
   cex --> cexT[wallets.cex_addresses]
   lpRefresh -.-> wlp
+  tokenActivity -.-> wtc
   uriResolve --> ud[erc_8004.uri_documents]
   uriResolve --> am[erc_8004.agent_manifest]
   uriReprocess --> ud
@@ -147,7 +149,7 @@ Reuses resolve/handlers from `agent_uri_resolve` via `sys.path`. Indexes: `idx_a
 **Live.** Claims `web_dashboard.agents` where `does_need_ai_category_process IS TRUE`.
 
 ```
-claim FOR UPDATE → pick llm.models with daily capacity → OpenAI-compat chat → write ai_category_* → models_requests++
+claim FOR UPDATE → one asyncio worker per llm provider → pick that provider's models → OpenAI-compat chat → write ai_category_* → models_requests++
 ```
 
 | Item | Detail |
@@ -166,6 +168,7 @@ Worker README: [`ai_agent_classifier`](../workers/ai_agent_classifier/README.md)
 | Doc / work | Status |
 |---|---|
 | [PENDING_LP_POSITIONS.md](./PENDING_LP_POSITIONS.md) | Discovery **live**; only **15-day refresh** worker remains |
+| [PENDING_TOKEN_ACTIVITY_RPC.md](./PENDING_TOKEN_ACTIVITY_RPC.md) | **Not built** — ERC-20/721/1155 ~15d via public `eth_getLogs` (Alchemy `external` later) |
 | Agent manifest **consume** | Not built — rewrite SQL readers to JOIN `uri_documents`, then GHA orchestrator; keep legacy pg_cron consume **off** |
 
 ## Secrets cheat sheet

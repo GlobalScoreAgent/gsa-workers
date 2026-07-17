@@ -18,19 +18,20 @@ Another process sets the flag to `TRUE`. This worker sets it `FALSE` on success 
 2. Load `llm.process.system_prompt` for `process_code = 'agent-classifier'` (editable in DB)
 3. Requeue prior errors (`has_ai_category_process_error`) back onto the claim queue
 4. Load active providers/models for that process
-5. Claim agents with `FOR UPDATE SKIP LOCKED` (no soft-lock columns)
-6. Fingerprint prompt inputs (`ai_category_input_hash`); if another agent already classified the same inputs, **copy** categories and skip the LLM
-7. Else pick a model with remaining daily capacity (`request_total` / `token_total` vs day caps)
-8. Call `{base_url}/chat/completions` with provider params (`temperature`, `max_completion_tokens`, `response_format`); if `llm.models.does_need_thinking_off_parameter` then also `reasoning_effort=none` + `clear_thinking=false`
-9. Upsert `llm.models_requests` (`request_total += 1`, `token_total += usage.total_tokens`) — not incremented on copy
-10. On success: write `ai_category_*`, `ai_category_input_hash`, `llm_model_id`, clear error cols, flag `FALSE`
-11. On failure: `has_ai_category_process_error=TRUE`, `ai_category_process_error_message`, flag `FALSE`
+5. Start **one asyncio worker per provider** (Groq / Cerebras / Gemini / OpenRouter, …); optional filter via `PROVIDERS`
+6. Each worker claims agents with `FOR UPDATE SKIP LOCKED` and only uses models from its provider
+7. Fingerprint prompt inputs (`ai_category_input_hash`); if another agent already classified the same inputs, **copy** categories and skip the LLM
+8. Else pick a model from that provider with remaining daily capacity (`request_total` / `token_total` vs day caps)
+9. Call `{base_url}/chat/completions` with provider params (`temperature`, `max_completion_tokens`, `response_format`); if `llm.models.does_need_thinking_off_parameter` then also `reasoning_effort=none` + `clear_thinking=false`
+10. Upsert `llm.models_requests` (`request_total += 1`, `token_total += usage.total_tokens`) — not incremented on copy
+11. On success: write `ai_category_*`, `ai_category_input_hash`, `llm_model_id`, clear error cols, flag `FALSE`
+12. On failure: `has_ai_category_process_error=TRUE`, `ai_category_process_error_message`, flag `FALSE`
 
 Allowlist includes quality categories `Invalid Metadata` / `Insufficient Metadata` and `Trading Bots` (Ave/Debot-style clones) vs distinct `Trading`. Prompt rules live in `llm.process.system_prompt`.
 
-Exit `0` when: queue empty, all models hit daily request/token limits, or `MAX_RUNTIME_SECONDS` reached.
+Exit `0` when: queue empty, all provider workers hit daily request/token limits (no copies left), or `MAX_RUNTIME_SECONDS` reached.
 
-Rate limits: sliding-window hardcaps use `request_per_minute` and `tokens_per_minute`. Daily caps use `request_per_day` and `tokents_per_day` (column name as in DB). HTTP 429 TPM is retried; 429 TPD skips that model for the rest of the run.
+Rate limits: sliding-window hardcaps use `request_per_minute` and `tokens_per_minute` **per model**. Daily caps use `request_per_day` and `tokents_per_day` (column name as in DB; `NULL` TPD = request-only). HTTP 429 TPM is retried; 429 TPD skips that model for the rest of the run.
 
 API keys come from GitHub Secrets / env vars named by `llm.llm_provider.secret` (`GROQ`, `CEREBRAS`, `GEMINI`, `OPEN_ROUTER`). Endpoint from `llm.llm_provider.base_url`.
 
@@ -43,9 +44,10 @@ API keys come from GitHub Secrets / env vars named by `llm.llm_provider.secret` 
 | `CEREBRAS` | required (for Cerebras) | Cerebras API key (`llm.llm_provider.secret`) |
 | `GEMINI` | required (for Gemini) | Gemini API key (`llm.llm_provider.secret`) |
 | `OPEN_ROUTER` | required (for OpenRouter) | OpenRouter API key (`llm.llm_provider.secret`) |
-| `CLAIM_BATCH_SIZE` | 20 | Agents claimed per loop |
-| `CONCURRENCY` | 1 | Parallel LLM calls (max 5; keep low for rpm) |
-| `MAX_RUNTIME_SECONDS` | 19800 | Soft stop (~5.5h) |
+| `CLAIM_BATCH_SIZE` | 20 | Agents claimed per loop **per provider worker** |
+| `CONCURRENCY` | 1 | Parallel LLM calls **per provider** (max 5; keep low for rpm) |
+| `PROVIDERS` | all active | Optional comma filter of `llm.llm_provider.name` (e.g. `Groq,GEMINI`) |
+| `MAX_RUNTIME_SECONDS` | 19800 | Soft stop (~5.5h), shared across provider workers |
 
 ## Monitoring
 

@@ -107,6 +107,30 @@ def pick_model(
     return None
 
 
+def models_for_provider(
+    models: list[dict[str, Any]], provider_id: int
+) -> list[dict[str, Any]]:
+    return [m for m in models if int(m["provider_id"]) == int(provider_id)]
+
+
+def unique_providers(models: list[dict[str, Any]]) -> list[tuple[int, str]]:
+    seen: dict[int, str] = {}
+    for m in models:
+        pid = int(m["provider_id"])
+        if pid not in seen:
+            seen[pid] = str(m["provider_name"])
+    return list(seen.items())
+
+
+def parse_provider_filter() -> set[str] | None:
+    """Optional PROVIDERS=Groq,GEMINI filter (case-insensitive provider names)."""
+    raw = os.environ.get("PROVIDERS")
+    if raw is None or not raw.strip():
+        return None
+    names = {p.strip().lower() for p in raw.split(",") if p.strip()}
+    return names or None
+
+
 def resolve_api_key(secret_name: str) -> str:
     key = os.environ.get(secret_name)
     if key is None or not str(key).strip():
@@ -339,6 +363,7 @@ async def run_job() -> int:
     claim_batch_size = env_int("CLAIM_BATCH_SIZE", default=20, minimum=1, maximum=200)
     concurrency = env_int("CONCURRENCY", default=1, minimum=1, maximum=5)
     max_runtime_seconds = env_int("MAX_RUNTIME_SECONDS", default=19800, minimum=60)
+    provider_filter = parse_provider_filter()
 
     db = Database(dsn)
     db.connect()
@@ -370,28 +395,18 @@ async def run_job() -> int:
         logger.error("Failed to requeue prior errors: %s", exc)
         db.close()
         return 1
-    logger.info(
-        "Started categories=%s system_prompt_chars=%s requeued_errors=%s "
-        "claim_batch_size=%s concurrency=%s max_runtime=%ss",
-        len(categories),
-        len(system_prompt),
-        requeued,
-        claim_batch_size,
-        concurrency,
-        max_runtime_seconds,
-    )
 
     start = time.monotonic()
+    stats_lock = asyncio.Lock()
     processed = 0
     completed = 0
     errors = 0
-    sem = asyncio.Semaphore(concurrency)
     db_lock = asyncio.Lock()
     rate_limiter = RateLimiter()
     token_minute_limiter = TokenMinuteLimiter()
     models_cache: list[dict[str, Any]] = []
     exhausted_tpd: set[int] = set()
-    http_limits = httpx.Limits(max_connections=20, max_keepalive_connections=10)
+    http_limits = httpx.Limits(max_connections=40, max_keepalive_connections=20)
 
     async def refresh_models() -> list[dict[str, Any]]:
         nonlocal models_cache
@@ -411,6 +426,16 @@ async def run_job() -> int:
                     }
                     break
 
+    async def record_outcome(outcome: Outcome) -> None:
+        nonlocal processed, completed, errors
+        async with stats_lock:
+            if outcome == "ok":
+                processed += 1
+                completed += 1
+            elif outcome == "error":
+                processed += 1
+                errors += 1
+
     try:
         await refresh_models()
         if not models_cache:
@@ -420,242 +445,339 @@ async def run_job() -> int:
             )
             return 1
 
+        providers = unique_providers(models_cache)
+        if provider_filter is not None:
+            providers = [
+                (pid, pname)
+                for pid, pname in providers
+                if pname.lower() in provider_filter
+            ]
+            if not providers:
+                logger.error(
+                    "PROVIDERS filter matched no active providers: %s",
+                    sorted(provider_filter),
+                )
+                return 1
+
         for model in models_cache:
+            if provider_filter is not None and str(model["provider_name"]).lower() not in provider_filter:
+                continue
             resolve_api_key(str(model["provider_secret"]))
 
+        logger.info(
+            "Started categories=%s system_prompt_chars=%s requeued_errors=%s "
+            "providers=%s claim_batch_size=%s concurrency_per_provider=%s "
+            "max_runtime=%ss",
+            len(categories),
+            len(system_prompt),
+            requeued,
+            [pname for _, pname in providers],
+            claim_batch_size,
+            concurrency,
+            max_runtime_seconds,
+        )
+
         async with httpx.AsyncClient(timeout=60.0, limits=http_limits) as http_client:
-            while True:
-                elapsed = time.monotonic() - start
-                if elapsed >= max_runtime_seconds:
-                    logger.info(
-                        "Time budget reached (%.0fs). Processed=%s completed=%s errors=%s",
-                        elapsed,
-                        processed,
-                        completed,
-                        errors,
-                    )
-                    break
 
-                await refresh_models()
-                models_available = (
-                    pick_model(models_cache, exhausted_ids=exhausted_tpd) is not None
-                )
-                if not models_available:
-                    logger.info(
-                        "No LLM model capacity; continuing for exact-match copies only"
-                    )
-
-                async with db_lock:
-                    try:
-                        rows = db.claim_agents(limit=claim_batch_size)
-                    except Exception as exc:
-                        logger.error("Claim failed; will retry next loop: %s", exc)
-                        await asyncio.sleep(CLAIM_RETRY_BASE_SECONDS)
-                        continue
-
-                if not rows:
-                    if processed == 0:
-                        logger.info("No pending agents. Exiting.")
-                    else:
-                        logger.info("No more pending agents in this run.")
-                    break
-
+            async def provider_loop(provider_id: int, provider_name: str) -> None:
+                sem = asyncio.Semaphore(concurrency)
+                provider_processed = 0
+                provider_completed = 0
+                provider_errors = 0
                 logger.info(
-                    "Claimed batch size=%s first_id=%s last_id=%s",
-                    len(rows),
-                    rows[0]["id"],
-                    rows[-1]["id"],
+                    "Provider worker start name=%s provider_id=%s",
+                    provider_name,
+                    provider_id,
                 )
 
-                async def handle_agent(agent: dict[str, Any]) -> Outcome:
-                    agent_id = int(agent["id"])
-                    async with sem:
-                        model: dict[str, Any] | None = None
+                while True:
+                    elapsed = time.monotonic() - start
+                    if elapsed >= max_runtime_seconds:
+                        logger.info(
+                            "Provider %s time budget reached (%.0fs). "
+                            "local_processed=%s completed=%s errors=%s",
+                            provider_name,
+                            elapsed,
+                            provider_processed,
+                            provider_completed,
+                            provider_errors,
+                        )
+                        break
+
+                    await refresh_models()
+                    provider_models = models_for_provider(models_cache, provider_id)
+                    models_available = (
+                        pick_model(provider_models, exhausted_ids=exhausted_tpd)
+                        is not None
+                    )
+                    if not models_available:
+                        logger.info(
+                            "Provider %s: no LLM capacity; exact-match copies only",
+                            provider_name,
+                        )
+
+                    async with db_lock:
                         try:
-                            input_hash = agent_input_hash(agent)
-                            async with db_lock:
-                                donor = db.find_classification_donor(
-                                    agent_id=agent_id,
-                                    input_hash=input_hash,
-                                )
-                                if donor is not None:
-                                    secondary = donor.get("ai_category_secondary")
-                                    if secondary is None:
-                                        secondary = []
-                                    db.mark_success(
+                            rows = db.claim_agents(limit=claim_batch_size)
+                        except Exception as exc:
+                            logger.error(
+                                "Provider %s claim failed; retry: %s",
+                                provider_name,
+                                exc,
+                            )
+                            await asyncio.sleep(CLAIM_RETRY_BASE_SECONDS)
+                            continue
+
+                    if not rows:
+                        if provider_processed == 0:
+                            logger.info(
+                                "Provider %s: no pending agents. Exiting.",
+                                provider_name,
+                            )
+                        else:
+                            logger.info(
+                                "Provider %s: no more pending agents.",
+                                provider_name,
+                            )
+                        break
+
+                    logger.info(
+                        "Provider %s claimed batch size=%s first_id=%s last_id=%s",
+                        provider_name,
+                        len(rows),
+                        rows[0]["id"],
+                        rows[-1]["id"],
+                    )
+
+                    async def handle_agent(agent: dict[str, Any]) -> Outcome:
+                        agent_id = int(agent["id"])
+                        async with sem:
+                            model: dict[str, Any] | None = None
+                            try:
+                                input_hash = agent_input_hash(agent)
+                                async with db_lock:
+                                    donor = db.find_classification_donor(
                                         agent_id=agent_id,
-                                        llm_model_id=(
-                                            None
-                                            if donor.get("llm_model_id") is None
-                                            else int(donor["llm_model_id"])
-                                        ),
-                                        primary_category=str(
-                                            donor["ai_category_primary"]
-                                        ),
-                                        secondary_categories=secondary,
-                                        confidence=(
-                                            None
-                                            if donor.get("ai_category_confidence")
-                                            is None
-                                            else float(
-                                                donor["ai_category_confidence"]
-                                            )
-                                        ),
-                                        reasoning=donor.get("ai_category_reasoning"),
-                                        agent_purpose=donor.get(
-                                            "ai_category_purpose"
-                                        ),
                                         input_hash=input_hash,
                                     )
-                                    logger.info(
-                                        "Copied agent_id=%s from=%s primary=%s",
-                                        agent_id,
-                                        donor["id"],
-                                        donor["ai_category_primary"],
-                                    )
-                                    return "ok"
+                                    if donor is not None:
+                                        secondary = donor.get("ai_category_secondary")
+                                        if secondary is None:
+                                            secondary = []
+                                        db.mark_success(
+                                            agent_id=agent_id,
+                                            llm_model_id=(
+                                                None
+                                                if donor.get("llm_model_id") is None
+                                                else int(donor["llm_model_id"])
+                                            ),
+                                            primary_category=str(
+                                                donor["ai_category_primary"]
+                                            ),
+                                            secondary_categories=secondary,
+                                            confidence=(
+                                                None
+                                                if donor.get("ai_category_confidence")
+                                                is None
+                                                else float(
+                                                    donor["ai_category_confidence"]
+                                                )
+                                            ),
+                                            reasoning=donor.get(
+                                                "ai_category_reasoning"
+                                            ),
+                                            agent_purpose=donor.get(
+                                                "ai_category_purpose"
+                                            ),
+                                            input_hash=input_hash,
+                                        )
+                                        logger.info(
+                                            "Copied agent_id=%s from=%s primary=%s "
+                                            "provider=%s",
+                                            agent_id,
+                                            donor["id"],
+                                            donor["ai_category_primary"],
+                                            provider_name,
+                                        )
+                                        return "ok"
 
-                            user_prompt = build_user_prompt(
-                                categories=categories,
-                                agent=agent,
-                            )
-                            async with db_lock:
-                                current = db.load_process_models()
-                                # Temporary pick without estimate, then re-estimate
-                                # with chosen model's max_completion_tokens.
-                                model = pick_model(
-                                    current,
-                                    exhausted_ids=exhausted_tpd,
+                                user_prompt = build_user_prompt(
+                                    categories=categories,
+                                    agent=agent,
                                 )
-                                if model is not None:
-                                    est = estimate_tokens(
-                                        system_prompt,
-                                        user_prompt,
-                                        (
-                                            None
-                                            if model.get("max_completion_tokens") is None
-                                            else int(model["max_completion_tokens"])
-                                        ),
+                                async with db_lock:
+                                    current = models_for_provider(
+                                        db.load_process_models(), provider_id
                                     )
-                                    if not model_has_capacity(
-                                        model,
-                                        estimate=est,
+                                    model = pick_model(
+                                        current,
                                         exhausted_ids=exhausted_tpd,
-                                    ):
-                                        model = pick_model(
-                                            current,
+                                    )
+                                    if model is not None:
+                                        est = estimate_tokens(
+                                            system_prompt,
+                                            user_prompt,
+                                            (
+                                                None
+                                                if model.get("max_completion_tokens")
+                                                is None
+                                                else int(
+                                                    model["max_completion_tokens"]
+                                                )
+                                            ),
+                                        )
+                                        if not model_has_capacity(
+                                            model,
                                             estimate=est,
                                             exhausted_ids=exhausted_tpd,
-                                        )
+                                        ):
+                                            model = pick_model(
+                                                current,
+                                                estimate=est,
+                                                exhausted_ids=exhausted_tpd,
+                                            )
 
-                            if model is None:
+                                if model is None:
+                                    logger.info(
+                                        "No model capacity provider=%s agent_id=%s; "
+                                        "leaving pending",
+                                        provider_name,
+                                        agent_id,
+                                    )
+                                    return "capacity"
+
+                                est = estimate_tokens(
+                                    system_prompt,
+                                    user_prompt,
+                                    (
+                                        None
+                                        if model.get("max_completion_tokens") is None
+                                        else int(model["max_completion_tokens"])
+                                    ),
+                                )
+                                api_key = resolve_api_key(
+                                    str(model["provider_secret"])
+                                )
+                                raw = await call_llm_with_retries(
+                                    http_client,
+                                    model=model,
+                                    api_key=api_key,
+                                    system_prompt=system_prompt,
+                                    user_prompt=user_prompt,
+                                    estimate=est,
+                                    rate_limiter=rate_limiter,
+                                    token_minute_limiter=token_minute_limiter,
+                                    bump_model_usage=bump_model_usage,
+                                )
+
+                                parsed = parse_classification_json(raw)
+                                validated = validate_classification(
+                                    parsed,
+                                    allowed_categories=allowed,
+                                )
+                                async with db_lock:
+                                    db.mark_success(
+                                        agent_id=agent_id,
+                                        llm_model_id=int(model["model_id"]),
+                                        primary_category=validated[
+                                            "primary_category"
+                                        ],
+                                        secondary_categories=validated[
+                                            "secondary_categories"
+                                        ],
+                                        confidence=validated["confidence"],
+                                        reasoning=validated["reasoning"],
+                                        agent_purpose=validated["agent_purpose"],
+                                        input_hash=input_hash,
+                                    )
                                 logger.info(
-                                    "No model capacity for agent_id=%s; leaving pending",
+                                    "Done agent_id=%s model_id=%s primary=%s "
+                                    "provider=%s",
                                     agent_id,
+                                    model["model_id"],
+                                    validated["primary_category"],
+                                    provider_name,
+                                )
+                                return "ok"
+                            except DailyTokenExhausted as exc:
+                                exhausted_tpd.add(int(exc.model_id))
+                                logger.info(
+                                    "Agent id=%s deferred; model_id=%s TPD exhausted "
+                                    "provider=%s",
+                                    agent_id,
+                                    exc.model_id,
+                                    provider_name,
                                 )
                                 return "capacity"
-
-                            est = estimate_tokens(
-                                system_prompt,
-                                user_prompt,
-                                (
-                                    None
-                                    if model.get("max_completion_tokens") is None
-                                    else int(model["max_completion_tokens"])
-                                ),
-                            )
-                            api_key = resolve_api_key(str(model["provider_secret"]))
-                            raw = await call_llm_with_retries(
-                                http_client,
-                                model=model,
-                                api_key=api_key,
-                                system_prompt=system_prompt,
-                                user_prompt=user_prompt,
-                                estimate=est,
-                                rate_limiter=rate_limiter,
-                                token_minute_limiter=token_minute_limiter,
-                                bump_model_usage=bump_model_usage,
-                            )
-
-                            parsed = parse_classification_json(raw)
-                            validated = validate_classification(
-                                parsed,
-                                allowed_categories=allowed,
-                            )
-                            async with db_lock:
-                                db.mark_success(
-                                    agent_id=agent_id,
-                                    llm_model_id=int(model["model_id"]),
-                                    primary_category=validated["primary_category"],
-                                    secondary_categories=validated[
-                                        "secondary_categories"
-                                    ],
-                                    confidence=validated["confidence"],
-                                    reasoning=validated["reasoning"],
-                                    agent_purpose=validated["agent_purpose"],
-                                    input_hash=input_hash,
-                                )
-                            logger.info(
-                                "Done agent_id=%s model_id=%s primary=%s",
-                                agent_id,
-                                model["model_id"],
-                                validated["primary_category"],
-                            )
-                            return "ok"
-                        except DailyTokenExhausted as exc:
-                            exhausted_tpd.add(int(exc.model_id))
-                            logger.info(
-                                "Agent id=%s deferred; model_id=%s TPD exhausted",
-                                agent_id,
-                                exc.model_id,
-                            )
-                            # Leave queue flag TRUE: do not mark_error.
-                            return "capacity"
-                        except Exception as exc:
-                            err_text = f"{exc.__class__.__name__}: {exc}"
-                            logger.warning("Agent id=%s failed: %s", agent_id, err_text)
-                            try:
-                                async with db_lock:
-                                    db.mark_error(
-                                        agent_id=agent_id,
-                                        error_message=err_text,
-                                        llm_model_id=(
-                                            None
-                                            if model is None
-                                            else int(model["model_id"])
-                                        ),
-                                    )
-                            except Exception as mark_exc:
-                                logger.error(
-                                    "mark_error failed agent_id=%s: %s",
+                            except Exception as exc:
+                                err_text = f"{exc.__class__.__name__}: {exc}"
+                                logger.warning(
+                                    "Agent id=%s failed provider=%s: %s",
                                     agent_id,
-                                    mark_exc,
+                                    provider_name,
+                                    err_text,
                                 )
-                            return "error"
+                                try:
+                                    async with db_lock:
+                                        db.mark_error(
+                                            agent_id=agent_id,
+                                            error_message=err_text,
+                                            llm_model_id=(
+                                                None
+                                                if model is None
+                                                else int(model["model_id"])
+                                            ),
+                                        )
+                                except Exception as mark_exc:
+                                    logger.error(
+                                        "mark_error failed agent_id=%s: %s",
+                                        agent_id,
+                                        mark_exc,
+                                    )
+                                return "error"
 
-                outcomes = await asyncio.gather(*(handle_agent(row) for row in rows))
-                capacity_hit = False
-                batch_ok = 0
-                for outcome in outcomes:
-                    if outcome == "ok":
-                        processed += 1
-                        completed += 1
-                        batch_ok += 1
-                    elif outcome == "error":
-                        processed += 1
-                        errors += 1
-                    else:
-                        capacity_hit = True
-
-                await refresh_models()
-                models_available = (
-                    pick_model(models_cache, exhausted_ids=exhausted_tpd) is not None
-                )
-                if not models_available and batch_ok == 0 and capacity_hit:
-                    logger.info(
-                        "No LLM capacity and no exact-match copies in batch. Exiting."
+                    outcomes = await asyncio.gather(
+                        *(handle_agent(row) for row in rows)
                     )
-                    break
+                    capacity_hit = False
+                    batch_ok = 0
+                    for outcome in outcomes:
+                        await record_outcome(outcome)
+                        if outcome == "ok":
+                            provider_processed += 1
+                            provider_completed += 1
+                            batch_ok += 1
+                        elif outcome == "error":
+                            provider_processed += 1
+                            provider_errors += 1
+                        else:
+                            capacity_hit = True
+
+                    await refresh_models()
+                    provider_models = models_for_provider(models_cache, provider_id)
+                    models_available = (
+                        pick_model(provider_models, exhausted_ids=exhausted_tpd)
+                        is not None
+                    )
+                    if not models_available and batch_ok == 0 and capacity_hit:
+                        logger.info(
+                            "Provider %s: no LLM capacity and no copies in batch. "
+                            "Exiting worker.",
+                            provider_name,
+                        )
+                        break
+
+                logger.info(
+                    "Provider worker done name=%s processed=%s completed=%s errors=%s",
+                    provider_name,
+                    provider_processed,
+                    provider_completed,
+                    provider_errors,
+                )
+
+            await asyncio.gather(
+                *(provider_loop(pid, pname) for pid, pname in providers)
+            )
 
     except Exception:
         logger.error("Critical job failure:\n%s", traceback.format_exc())
