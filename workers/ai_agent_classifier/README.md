@@ -32,7 +32,7 @@ Exit `0` when: queue empty, all models hit daily request/token limits, or `MAX_R
 
 Rate limits: sliding-window hardcaps use `request_per_minute` and `tokens_per_minute`. Daily caps use `request_per_day` and `tokents_per_day` (column name as in DB). HTTP 429 TPM is retried; 429 TPD skips that model for the rest of the run.
 
-API keys come from GitHub Secrets / env vars named by `llm.llm_provider.secret` (today: `GROQ`). Endpoint from `llm.llm_provider.base_url`.
+API keys come from GitHub Secrets / env vars named by `llm.llm_provider.secret` (`GROQ`, `CEREBRAS`, `GEMINI`, `OPEN_ROUTER`). Endpoint from `llm.llm_provider.base_url`.
 
 ## Environment
 
