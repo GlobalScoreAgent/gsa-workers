@@ -23,9 +23,9 @@ scan job (CHAIN + SHARD + SHARDS) →
 | `SUPABASE_DB_URL` | required | Postgres |
 | `CHAIN` | required | slug: ethereum, base, arbitrum, polygon, bsc, celo, gnosis, xlayer |
 | `SHARD` / `SHARDS` | `0` / `1` | partition `mod(wallet_id, SHARDS)=SHARD` |
-| `WALLET_BATCH_SIZE` | 50 | wallets per claim / getLogs OR filter |
+| `WALLET_BATCH_SIZE` | per-chain (ETH 25, else 50) | wallets per claim / getLogs OR filter |
 | `ACTIVITY_CATCHUP_MAX_DAYS` | 3 | max block lookback when cursor NULL/behind |
-| `LOG_CHUNK_*` | 2000 / 50 / 10000 | adaptive block chunking |
+| `LOG_CHUNK_*` | per-chain (ETH 800, else 2000/10000) | adaptive block chunking; GHA leaves unset |
 | `RPC_MIN_INTERVAL_MS` | 150 | pacing between public RPC calls |
 | `MAX_RUNTIME_SECONDS` | 19800 | soft stop |
 | `CLAIM_STALE_SECONDS` | 7200 | reclaim in-flight |

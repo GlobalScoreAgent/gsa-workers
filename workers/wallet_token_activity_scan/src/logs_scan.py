@@ -110,6 +110,7 @@ async def scan_wallet_batch(
     nfts: dict[tuple[int, str], dict[str, Any]] = {}
 
     chunk = max(chunk_min, min(chunk_blocks, chunk_max))
+    effective_max = chunk_max
     cursor = from_block
 
     while cursor <= to_block:
@@ -125,15 +126,19 @@ async def scan_wallet_batch(
             if is_logs_query_too_heavy(exc) and chunk > chunk_min:
                 msg = str(exc).lower()
                 if "max range: 800" in msg or "-32047" in msg:
-                    # Cloudflare (and similar) hard-cap; drop straight to 800.
+                    # Cloudflare (and similar) hard-cap; drop straight to 800 and
+                    # freeze the grow ceiling so we do not re-hit -32047 next chunk.
                     chunk = max(chunk_min, min(800, chunk // 2 if chunk <= 800 else 800))
+                    effective_max = min(effective_max, 800)
                 else:
                     chunk = max(chunk_min, chunk // 2)
                 logger.warning(
-                    "getLogs range/response too heavy [%s,%s]; shrink chunk -> %s (%s)",
+                    "getLogs range/response too heavy [%s,%s]; shrink chunk -> %s "
+                    "(max=%s) (%s)",
                     cursor,
                     end,
                     chunk,
+                    effective_max,
                     exc,
                 )
                 continue
@@ -157,8 +162,8 @@ async def scan_wallet_batch(
                         "source": SOURCE,
                     }
 
-        if chunk < chunk_max:
-            chunk = min(chunk_max, max(chunk + 1, int(chunk * 1.5)))
+        if chunk < effective_max:
+            chunk = min(effective_max, max(chunk + 1, int(chunk * 1.5)))
         cursor = end + 1
 
     block_ts_cache: dict[int, int | None] = {}

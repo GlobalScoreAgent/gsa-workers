@@ -89,6 +89,10 @@ async def run_job() -> int:
     chunk_blocks = env_int("LOG_CHUNK_BLOCKS", default=default_chunk, minimum=50)
     chunk_min = env_int("LOG_CHUNK_MIN", default=50, minimum=1)
     chunk_max = env_int("LOG_CHUNK_MAX", default=default_chunk_max, minimum=50)
+    # Network hard ceilings always win (e.g. ETH Cloudflare max 800).
+    if net.get("log_chunk_max") is not None:
+        chunk_max = min(chunk_max, int(net["log_chunk_max"]))
+    chunk_blocks = min(chunk_blocks, chunk_max)
     min_interval_ms = env_int("RPC_MIN_INTERVAL_MS", default=150, minimum=0)
     retry_base = float(os.environ.get("RPC_RETRY_BASE_SECONDS") or "1")
     worker_suffix = env_str("WORKER_ID", "a")
