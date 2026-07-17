@@ -78,4 +78,6 @@ ERC-1155 events, native/external transfers, Alchemy Transfers / getTokenBalances
 
 ## Notes
 
-On provider errors like Cloudflare `-32047` / `range too large`, the scanner shrinks the block chunk (down to 800 when advertised) instead of rotating RPCs forever.
+- On provider errors like Cloudflare `-32047` / `range too large`, the scanner shrinks the block chunk (down to 800 when advertised) instead of rotating RPCs forever.
+- Hard HTTP 401/403 bans that URL for the rest of the run (avoids dying on publicnode after a good Cloudflare stretch).
+- Ethereum defaults (overridable via env): RPC order Cloudflare → drpc → publicnode; `LOG_CHUNK_*=800`; `WALLET_BATCH_SIZE=25`.

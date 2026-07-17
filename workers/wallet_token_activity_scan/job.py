@@ -76,13 +76,19 @@ async def run_job() -> int:
         return 1
 
     net = NETWORKS[chain_slug]
-    wallet_batch_size = env_int("WALLET_BATCH_SIZE", default=50, minimum=1, maximum=100)
+    # Per-chain defaults (ETH: smaller OR batch + Cloudflare-friendly 800-block chunks).
+    default_batch = int(net.get("wallet_batch_size") or 50)
+    default_chunk = int(net.get("log_chunk_blocks") or 2000)
+    default_chunk_max = int(net.get("log_chunk_max") or 10000)
+    wallet_batch_size = env_int(
+        "WALLET_BATCH_SIZE", default=default_batch, minimum=1, maximum=100
+    )
     claim_stale_seconds = env_int("CLAIM_STALE_SECONDS", default=7200, minimum=60)
     max_runtime_seconds = env_int("MAX_RUNTIME_SECONDS", default=19800, minimum=60)
     catchup_max_days = env_int("ACTIVITY_CATCHUP_MAX_DAYS", default=3, minimum=1, maximum=15)
-    chunk_blocks = env_int("LOG_CHUNK_BLOCKS", default=2000, minimum=50)
+    chunk_blocks = env_int("LOG_CHUNK_BLOCKS", default=default_chunk, minimum=50)
     chunk_min = env_int("LOG_CHUNK_MIN", default=50, minimum=1)
-    chunk_max = env_int("LOG_CHUNK_MAX", default=10000, minimum=50)
+    chunk_max = env_int("LOG_CHUNK_MAX", default=default_chunk_max, minimum=50)
     min_interval_ms = env_int("RPC_MIN_INTERVAL_MS", default=150, minimum=0)
     retry_base = float(os.environ.get("RPC_RETRY_BASE_SECONDS") or "1")
     worker_suffix = env_str("WORKER_ID", "a")
@@ -98,15 +104,18 @@ async def run_job() -> int:
 
     logger.info(
         "Started chain=%s chain_pk=%s shard=%s/%s claimed_by=%s "
-        "batch=%s catchup_days=%s max_runtime=%ss",
+        "batch=%s chunk=%s-%s catchup_days=%s max_runtime=%ss rpcs=%s",
         chain_slug,
         chain_pk,
         shard,
         shards,
         claimed_by,
         wallet_batch_size,
+        chunk_blocks,
+        chunk_max,
         catchup_max_days,
         max_runtime_seconds,
+        net["rpcs"],
     )
 
     start = time.monotonic()

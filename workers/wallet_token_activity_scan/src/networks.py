@@ -5,11 +5,16 @@ NETWORKS = {
         "name": "Ethereum Mainnet",
         "evm_chain_id": 1,
         "block_time_sec": 12.0,
+        # Cloudflare first (getLogs works with max range 800 from GHA).
+        # publicnode last: frequent 403 on eth_getLogs from GitHub runners.
         "rpcs": [
-            "https://ethereum.publicnode.com",
-            "https://eth.drpc.org",
             "https://cloudflare-eth.com",
+            "https://eth.drpc.org",
+            "https://ethereum.publicnode.com",
         ],
+        "log_chunk_blocks": 800,
+        "log_chunk_max": 800,
+        "wallet_batch_size": 25,
     },
     "base": {
         "name": "Base Mainnet",

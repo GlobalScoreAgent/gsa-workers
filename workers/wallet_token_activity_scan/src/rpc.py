@@ -99,8 +99,26 @@ def is_logs_query_too_heavy(exc: BaseException) -> bool:
     return is_result_too_large(exc) or is_block_range_too_large(exc)
 
 
+def is_hard_endpoint_failure(exc: BaseException) -> bool:
+    """Provider is unusable for this run (ban URL; do not rotate back)."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code in (401, 403)
+    text = str(exc).lower()
+    return any(
+        s in text
+        for s in (
+            "403 forbidden",
+            "401 unauthorized",
+            "status code 403",
+            "status code 401",
+            "'403",
+            "'401",
+        )
+    )
+
+
 class RpcClient:
-    """Sticky public RPC client with rotate + backoff."""
+    """Sticky public RPC client with rotate + per-run blacklist + backoff."""
 
     def __init__(
         self,
@@ -109,7 +127,7 @@ class RpcClient:
         *,
         min_interval_ms: int = 150,
         retry_base_seconds: float = 1.0,
-        max_retries: int = 5,
+        max_retries: int | None = None,
         timeout: float = 30.0,
     ):
         if not urls:
@@ -117,9 +135,12 @@ class RpcClient:
         self._client = client
         self._urls = list(urls)
         self._idx = 0
+        self._blacklisted: set[str] = set()
         self._min_interval = max(0, min_interval_ms) / 1000.0
         self._retry_base = max(0.1, retry_base_seconds)
-        self._max_retries = max(1, max_retries)
+        # Enough attempts to walk the list a few times after bans.
+        default_retries = max(8, len(self._urls) * 3)
+        self._max_retries = max(1, max_retries if max_retries is not None else default_retries)
         self._timeout = timeout
         self._last_call_at = 0.0
 
@@ -127,8 +148,26 @@ class RpcClient:
     def current_url(self) -> str:
         return self._urls[self._idx]
 
-    def _rotate(self) -> None:
-        self._idx = (self._idx + 1) % len(self._urls)
+    def _rotate(self, *, ban_current: bool = False) -> None:
+        if ban_current:
+            banned = self.current_url
+            self._blacklisted.add(banned)
+            logger.warning("Blacklisted RPC URL for this run: %s", banned)
+
+        n = len(self._urls)
+        for _ in range(n):
+            self._idx = (self._idx + 1) % n
+            if self._urls[self._idx] not in self._blacklisted:
+                logger.info("Rotated RPC URL -> %s", self.current_url)
+                return
+
+        # Every URL banned — clear and keep scanning rather than hard-fail the job.
+        logger.warning(
+            "All %s RPC URLs blacklisted; clearing blacklist to retry",
+            n,
+        )
+        self._blacklisted.clear()
+        self._idx = (self._idx + 1) % n
         logger.info("Rotated RPC URL -> %s", self.current_url)
 
     async def _pace(self) -> None:
@@ -143,6 +182,9 @@ class RpcClient:
         last_exc: Exception | None = None
         for attempt in range(1, self._max_retries + 1):
             await self._pace()
+            # Skip sticky index if it was blacklisted mid-run.
+            if self.current_url in self._blacklisted:
+                self._rotate(ban_current=False)
             url = self.current_url
             try:
                 self._last_call_at = asyncio.get_event_loop().time()
@@ -182,22 +224,23 @@ class RpcClient:
                 if is_logs_query_too_heavy(exc):
                     raise RpcError(str(exc), retryable=False) from exc
                 last_exc = exc if isinstance(exc, Exception) else RpcError(str(exc))
-                # Public RPCs: rotate on 403/429/5xx/timeouts (sticky until failure).
+                ban = is_hard_endpoint_failure(exc)
                 if attempt >= self._max_retries:
                     break
                 delay = self._retry_base * (2 ** (attempt - 1))
                 delay = min(delay, 8.0)
                 logger.warning(
-                    "RPC %s via %s failed attempt %s/%s (%s); sleep %.1fs rotate=True",
+                    "RPC %s via %s failed attempt %s/%s (%s); sleep %.1fs rotate=True ban=%s",
                     method,
                     url,
                     attempt,
                     self._max_retries,
                     exc,
                     delay,
+                    ban,
                 )
                 await asyncio.sleep(delay)
-                self._rotate()
+                self._rotate(ban_current=ban)
         assert last_exc is not None
         raise last_exc
 
