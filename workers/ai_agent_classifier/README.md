@@ -33,6 +33,8 @@ Exit `0` when: queue empty, all provider workers hit daily request/token limits 
 
 Rate limits: sliding-window hardcaps use `request_per_minute` and `tokens_per_minute` **per model**. Daily caps use `request_per_day` and `tokents_per_day` (column name as in DB; `NULL` TPD = request-only). HTTP 429 TPM is retried; 429 TPD skips that model for the rest of the run.
 
+Transient transport failures (`ConnectTimeout`, `ReadTimeout`, `ConnectError`, `ReadError`, `PoolTimeout`, `RemoteProtocolError`) are retried up to `LLM_MAX_ATTEMPTS` (4) with linear backoff instead of failing on the first drop. Connect timeout is short (`LLM_CONNECT_TIMEOUT_SECONDS`, 10s) so an unreachable endpoint fails fast and retries cheaply.
+
 API keys come from GitHub Secrets / env vars named by `llm.llm_provider.secret` (`GROQ`, `CEREBRAS`, `GEMINI`, `OPEN_ROUTER`). Endpoint from `llm.llm_provider.base_url`.
 
 ## Environment

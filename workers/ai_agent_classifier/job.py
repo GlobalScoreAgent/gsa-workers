@@ -35,6 +35,12 @@ logger = logging.getLogger("ai_agent_classifier")
 
 Outcome = Literal["ok", "error", "capacity"]
 LLM_429_MAX_ATTEMPTS = 3
+# Overall attempt ceiling for a single LLM call (covers 429 + transient network).
+LLM_MAX_ATTEMPTS = 4
+# Base backoff (seconds) between retries on transient network errors.
+NETWORK_RETRY_BASE_SECONDS = 1.5
+# Connect timeout (seconds); short so a ConnectTimeout fails fast and retries cheaply.
+LLM_CONNECT_TIMEOUT_SECONDS = 10.0
 _RETRY_AFTER_MS_RE = re.compile(r"try again in\s+(\d+(?:\.\d+)?)\s*ms", re.IGNORECASE)
 _RETRY_AFTER_S_RE = re.compile(
     r"try again in\s+(\d+(?:\.\d+)?)\s*s(?:ec(?:onds?)?)?",
@@ -227,6 +233,23 @@ class TokenMinuteLimiter:
                 window.append((time.monotonic(), max(actual_tokens, 0)))
 
 
+_NETWORK_EXC = (
+    httpx.ConnectError,
+    httpx.ConnectTimeout,
+    httpx.ReadTimeout,
+    httpx.ReadError,
+    httpx.WriteError,
+    httpx.WriteTimeout,
+    httpx.PoolTimeout,
+    httpx.RemoteProtocolError,
+)
+
+
+def _is_network_error(exc: BaseException) -> bool:
+    """Transient transport failure (connect/read/write timeout, reset, pool)."""
+    return isinstance(exc, _NETWORK_EXC)
+
+
 def _is_http_429(exc: BaseException) -> bool:
     return "HTTP 429" in str(exc)
 
@@ -281,7 +304,7 @@ async def call_llm_with_retries(
     tpm_i = int(tpm) if tpm is not None else None
     last_exc: Exception | None = None
 
-    for attempt in range(1, LLM_429_MAX_ATTEMPTS + 1):
+    for attempt in range(1, LLM_MAX_ATTEMPTS + 1):
         await rate_limiter.wait(model_id, rpm)
         await token_minute_limiter.wait(model_id, tpm_i, estimate)
         try:
@@ -345,6 +368,19 @@ async def call_llm_with_retries(
                     model_id,
                     attempt,
                     LLM_429_MAX_ATTEMPTS,
+                    delay,
+                )
+                await asyncio.sleep(delay)
+                continue
+            if _is_network_error(exc) and attempt < LLM_MAX_ATTEMPTS:
+                delay = min(NETWORK_RETRY_BASE_SECONDS * attempt, 8.0)
+                logger.warning(
+                    "LLM network error model_id=%s attempt=%s/%s (%s); "
+                    "retrying in %.1fs",
+                    model_id,
+                    attempt,
+                    LLM_MAX_ATTEMPTS,
+                    exc.__class__.__name__,
                     delay,
                 )
                 await asyncio.sleep(delay)
@@ -477,7 +513,10 @@ async def run_job() -> int:
             max_runtime_seconds,
         )
 
-        async with httpx.AsyncClient(timeout=60.0, limits=http_limits) as http_client:
+        http_timeout = httpx.Timeout(60.0, connect=LLM_CONNECT_TIMEOUT_SECONDS)
+        async with httpx.AsyncClient(
+            timeout=http_timeout, limits=http_limits
+        ) as http_client:
 
             async def provider_loop(provider_id: int, provider_name: str) -> None:
                 sem = asyncio.Semaphore(concurrency)
