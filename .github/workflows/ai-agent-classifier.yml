@@ -7,6 +7,15 @@ on:
     - cron: "0 12 * * *"
     - cron: "0 18 * * *"
   workflow_dispatch:
+    inputs:
+      providers:
+        description: "Optional provider filter (comma-separated names, e.g. TokenRouter)"
+        required: false
+        default: ""
+      max_runtime_seconds:
+        description: "Max runtime seconds (default 19800)"
+        required: false
+        default: "19800"
 
 concurrency:
   group: ai-agent-classifier
@@ -43,9 +52,11 @@ jobs:
           CEREBRAS: ${{ secrets.CEREBRAS }}
           GEMINI: ${{ secrets.GEMINI }}
           OPEN_ROUTER: ${{ secrets.OPEN_ROUTER }}
-          MAX_RUNTIME_SECONDS: 19800
+          TOKEN_ROUTER: ${{ secrets.TOKEN_ROUTER }}
+          MAX_RUNTIME_SECONDS: ${{ inputs.max_runtime_seconds || '19800' }}
+          PROVIDERS: ${{ inputs.providers }}
           CONCURRENCY: 1
           CLAIM_BATCH_SIZE: 20
           # One asyncio worker per active llm provider (parallel drain).
-          # Optional: PROVIDERS: Groq,Cerebras,GEMINI,OpenRouter
+          # Optional PROVIDERS filter: Groq,Cerebras,GEMINI,OpenRouter,TokenRouter
         run: uv run python job.py
