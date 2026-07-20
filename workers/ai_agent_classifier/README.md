@@ -22,7 +22,7 @@ Another process sets the flag to `TRUE`. This worker sets it `FALSE` on success 
 6. Each worker claims agents with `FOR UPDATE SKIP LOCKED` and only uses models from its provider
 7. Fingerprint prompt inputs (`ai_category_input_hash`); if another agent already classified the same inputs, **copy** categories and skip the LLM
 8. Else pick a model from that provider with remaining daily capacity (`request_total` / `token_total` vs day caps)
-9. Call `{base_url}/chat/completions` with provider params (`temperature`, `max_completion_tokens`, `response_format`); if `llm.models.does_need_thinking_off_parameter` then also `reasoning_effort=none` + `clear_thinking=false`
+9. Call `{base_url}/chat/completions` with provider params (`temperature`, `max_completion_tokens`, `response_format`); if `llm.models.does_need_thinking_off_parameter` then also `reasoning_effort=none` (plus `clear_thinking=false` only for Cerebras)
 10. Upsert `llm.models_requests` (`request_total += 1`, `token_total += usage.total_tokens`) — not incremented on copy
 11. On success: write `ai_category_*`, `ai_category_input_hash`, `llm_model_id`, clear error cols, flag `FALSE`
 12. On failure: `has_ai_category_process_error=TRUE`, `ai_category_process_error_message`, flag `FALSE`

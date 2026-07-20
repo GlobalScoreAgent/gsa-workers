@@ -58,8 +58,11 @@ async def chat_completion(
     if fmt is not None:
         body["response_format"] = fmt
     if thinking_off:
+        # Disable reasoning/thinking tokens. Groq (Qwen 3.6) accepts reasoning_effort
+        # only; Cerebras GLM also wants clear_thinking=false.
         body["reasoning_effort"] = "none"
-        body["clear_thinking"] = False
+        if "cerebras" in _normalize_base_url(base_url).lower():
+            body["clear_thinking"] = False
 
     headers = {
         "Authorization": f"Bearer {api_key}",
