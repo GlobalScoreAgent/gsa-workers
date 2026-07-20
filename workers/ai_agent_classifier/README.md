@@ -47,7 +47,7 @@ API keys come from GitHub Secrets / env vars named by `llm.llm_provider.secret` 
 | `GEMINI` | required (for Gemini) | Gemini API key (`llm.llm_provider.secret`) |
 | `OPEN_ROUTER` | required (for OpenRouter) | OpenRouter API key (`llm.llm_provider.secret`) |
 | `CLAIM_BATCH_SIZE` | 20 | Agents claimed per loop **per provider worker** |
-| `CONCURRENCY` | 1 | Parallel LLM calls **per provider** (max 5; keep low for rpm) |
+| `CONCURRENCY` | 1 (local) / **2 in GHA** | Parallel LLM calls **per provider** (max 5; keep low for rpm) |
 | `PROVIDERS` | all active | Optional comma filter of `llm.llm_provider.name` (e.g. `Groq,GEMINI`) |
 | `MAX_RUNTIME_SECONDS` | 19800 | Soft stop (~5.5h), shared across provider workers |
 

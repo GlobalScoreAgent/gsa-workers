@@ -55,8 +55,8 @@ jobs:
           TOKEN_ROUTER: ${{ secrets.TOKEN_ROUTER }}
           MAX_RUNTIME_SECONDS: ${{ inputs.max_runtime_seconds || '19800' }}
           PROVIDERS: ${{ inputs.providers }}
-          CONCURRENCY: 1
+          CONCURRENCY: 2
           CLAIM_BATCH_SIZE: 20
-          # One asyncio worker per active llm provider (parallel drain).
+          # Per-provider asyncio concurrency (2 helps drain Groq/Cerebras RPM).
           # Optional PROVIDERS filter: Groq,Cerebras,GEMINI,OpenRouter,TokenRouter
         run: uv run python job.py
