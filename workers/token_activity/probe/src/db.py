@@ -191,6 +191,20 @@ SET
 WHERE id = ANY(%(row_ids)s)
 """
 
+# Hygiene at drain start: clear sticky error flags on rows already due again.
+# Does not advance next_eligible (no thundering herd of early retries).
+CLEAR_DUE_ERRORS_SQL = """
+UPDATE erc_8004.wallet_transactions
+SET
+  has_token_activity_error = FALSE,
+  token_activity_message_error = NULL
+WHERE chain_id = %(chain_pk)s
+  AND has_token_activity_error IS TRUE
+  AND token_activity_next_eligible_at IS NOT NULL
+  AND token_activity_next_eligible_at <= NOW()
+RETURNING id
+"""
+
 ENQUEUE_ENRICH_BY_WALLET_SQL = """
 UPDATE erc_8004.wallet_transactions
 SET
@@ -529,3 +543,16 @@ class Database:
             self._conn.commit()
 
         self._run_with_db_retry("release_claim", _release)
+
+    def clear_due_errors(self, *, chain_pk: int) -> int:
+        """Clear error flags on this chain for rows already past next_eligible."""
+
+        def _clear() -> int:
+            assert self._conn is not None
+            with self._conn.cursor() as cur:
+                cur.execute(CLEAR_DUE_ERRORS_SQL, {"chain_pk": chain_pk})
+                n = cur.rowcount
+            self._conn.commit()
+            return int(n or 0)
+
+        return self._run_with_db_retry("clear_due_errors", _clear)

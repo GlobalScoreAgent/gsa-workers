@@ -70,6 +70,7 @@ FROM erc_8004.wallet_transactions;
 ## Notes
 
 - Claim audit prefix remains `wallet_token_activity_scan/gha:…`
+- Each drain starts with `clear_due_errors` for that chain (clears sticky error flags on rows already due; does not advance `next_eligible`)
 - Enrich worker not built yet — flags only
 - Capacity: [docs/token_activity/CAPACITY.md](../../../docs/token_activity/CAPACITY.md)
 - ERC-1155 TransferSingle/Batch still deferred

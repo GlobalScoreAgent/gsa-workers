@@ -320,6 +320,18 @@ async def run_job() -> int:
             ctx.run_native_gate,
         )
 
+        try:
+            async with db_lock:
+                n_cleared = db.clear_due_errors(chain_pk=ctx.chain_pk)
+            if n_cleared:
+                logger.info(
+                    "Cleared due error flags count=%s chain=%s",
+                    n_cleared,
+                    ctx.slug,
+                )
+        except Exception as exc:
+            logger.warning("clear_due_errors failed (continuing): %s", exc)
+
         while True:
             elapsed = time.monotonic() - start
             if elapsed >= max_runtime_seconds:
