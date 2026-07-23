@@ -205,58 +205,6 @@ WHERE chain_id = %(chain_pk)s
 RETURNING id
 """
 
-ENQUEUE_ENRICH_BY_WALLET_SQL = """
-UPDATE erc_8004.wallet_transactions
-SET
-  does_need_token_activity_enrich = TRUE,
-  token_activity_enrich_queued_at = NOW()
-WHERE chain_id = %(chain_pk)s
-  AND wallet_id = ANY(%(wallet_ids)s)
-  AND does_need_token_activity_enrich IS NOT TRUE
-RETURNING id
-"""
-
-ENQUEUE_ENRICH_NATIVE_DELTAS_SQL = """
-WITH latest AS (
-  SELECT MAX(snapshot_date) AS d1
-  FROM erc_8004.wallet_daily_metrics
-  WHERE chain_id = %(chain_pk)s
-),
-deltas AS (
-  SELECT m1.wallet_id
-  FROM erc_8004.wallet_daily_metrics m1
-  JOIN latest l ON m1.snapshot_date = l.d1
-  JOIN erc_8004.wallet_daily_metrics m0
-    ON m0.wallet_id = m1.wallet_id
-   AND m0.chain_id = m1.chain_id
-   AND m0.snapshot_date = l.d1 - 1
-  WHERE m1.chain_id = %(chain_pk)s
-    AND (
-      m1.nonce IS DISTINCT FROM m0.nonce
-      OR m1.balance IS DISTINCT FROM m0.balance
-    )
-)
-UPDATE erc_8004.wallet_transactions wt
-SET
-  does_need_token_activity_enrich = TRUE,
-  token_activity_enrich_queued_at = NOW()
-FROM deltas d
-WHERE wt.wallet_id = d.wallet_id
-  AND wt.chain_id = %(chain_pk)s
-  AND wt.does_need_token_activity_enrich IS NOT TRUE
-  AND EXISTS (
-    SELECT 1
-    FROM erc_8004.agent_wallet_tx awt
-    JOIN erc_8004.agents a
-      ON a.id = awt.agent_id
-     AND a.validation_realness_status = 'valid'
-    WHERE awt.wallet_id = wt.wallet_id
-      AND awt.is_valid
-      AND awt.deleted_at IS NULL
-  )
-RETURNING wt.id
-"""
-
 RESOLVE_CHAIN_SQL = """
 SELECT id, chain_id, token_activity_runner_count, is_active
 FROM erc_8004.chains
@@ -475,41 +423,6 @@ class Database:
             self._conn.commit()
 
         self._run_with_db_retry("mark_probe_done", _mark)
-
-    def enqueue_enrich_for_wallets(
-        self, *, chain_pk: int, wallet_ids: list[int]
-    ) -> int:
-        if not wallet_ids:
-            return 0
-
-        def _enq() -> int:
-            assert self._conn is not None
-            with self._conn.cursor() as cur:
-                cur.execute(
-                    ENQUEUE_ENRICH_BY_WALLET_SQL,
-                    {"chain_pk": chain_pk, "wallet_ids": wallet_ids},
-                )
-                n = cur.rowcount
-            self._conn.commit()
-            return int(n or 0)
-
-        return self._run_with_db_retry("enqueue_enrich_wallets", _enq)
-
-    def enqueue_enrich_native_deltas(self, *, chain_pk: int) -> int:
-        """Mark enrich from wallet_daily_metrics D vs D-1 on this chain."""
-
-        def _enq() -> int:
-            assert self._conn is not None
-            with self._conn.cursor() as cur:
-                cur.execute(
-                    ENQUEUE_ENRICH_NATIVE_DELTAS_SQL,
-                    {"chain_pk": chain_pk},
-                )
-                n = cur.rowcount
-            self._conn.commit()
-            return int(n or 0)
-
-        return self._run_with_db_retry("enqueue_enrich_native", _enq)
 
     def mark_error(self, row_ids: list[int], error_message: str) -> None:
         msg = (error_message or "unknown error").strip()

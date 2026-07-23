@@ -18,7 +18,7 @@ Target: visit every eligible `wallet_transactions` row with the **probe** about 
 
 | Celdas | Rol |
 |--------|-----|
-| BSC × 3 | Shards 0..2 (native gate solo shard 0) |
+| BSC × 3 | Shards dedicados 0..2 |
 | Base × 2 | Shards 0..1 |
 | ETH × 1 | Shard 0 |
 | `_rest` × 1 | `REST_CHAINS`: celo → polygon → arbitrum → xlayer → gnosis |

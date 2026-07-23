@@ -85,7 +85,6 @@ jobs:
           CLAIM_JITTER_MS: "2000"
           MAX_RUNTIME_SECONDS: 19800
           ACTIVITY_CATCHUP_MAX_DAYS: 15
-          NATIVE_GATE_EVERY_N_LOOPS: 1
           RPC_MIN_INTERVAL_MS: 400
           RPC_RETRY_BASE_SECONDS: 2
           WORKER_ID: ${{ matrix.chain }}-s${{ matrix.shard }}

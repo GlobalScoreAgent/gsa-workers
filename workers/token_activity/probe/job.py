@@ -95,7 +95,6 @@ class ChainCtx:
     claimed_by: str
     helper: bool
     serialize_claim: bool
-    run_native_gate: bool
     wallet_batch_size: int
     chunk_blocks: int
     chunk_min: int
@@ -108,7 +107,6 @@ class RunStats:
     completed: int = 0
     errors: int = 0
     enrich_from_logs: int = 0
-    enrich_from_native: int = 0
 
 
 def _probe_defaults(net: dict[str, Any]) -> tuple[int, int, int, int]:
@@ -145,7 +143,6 @@ async def run_job() -> int:
     retry_base = float(os.environ.get("RPC_RETRY_BASE_SECONDS") or "2")
     worker_suffix = env_str("WORKER_ID", "a")
     claim_jitter_ms = env_int("CLAIM_JITTER_MS", default=2000, minimum=0, maximum=10000)
-    native_gate_every = env_int("NATIVE_GATE_EVERY_N_LOOPS", default=1, minimum=1)
 
     is_rest = chain_slug == REST_CHAIN_SLUG
     if not is_rest and (not chain_slug or chain_slug not in NETWORKS):
@@ -196,7 +193,6 @@ async def run_job() -> int:
                 claimed_by=build_claimed_by(f"{slug}-helper", 0, worker_suffix),
                 helper=True,
                 serialize_claim=True,
-                run_native_gate=False,
                 wallet_batch_size=wallet_batch_size,
                 chunk_blocks=chunk_blocks,
                 chunk_min=chunk_min,
@@ -211,7 +207,6 @@ async def run_job() -> int:
             claimed_by=build_claimed_by(slug, shard, worker_suffix),
             helper=False,
             serialize_claim=slug == BSC_SLUG,
-            run_native_gate=slug == BSC_SLUG and shard == 0,
             wallet_batch_size=wallet_batch_size,
             chunk_blocks=chunk_blocks,
             chunk_min=chunk_min,
@@ -309,12 +304,10 @@ async def run_job() -> int:
         rpc = rpc_for(http_client, ctx.slug)
         wallet_batch_size = ctx.wallet_batch_size
         claim_limit = wallet_batch_size * concurrency
-        loop_n = 0
-        native_once = False
 
         logger.info(
             "Drain start chain=%s helper=%s shard=%s/%s claimed_by=%s "
-            "batch=%s concurrency=%s claim_limit=%s serialize=%s native_gate=%s",
+            "batch=%s concurrency=%s claim_limit=%s serialize=%s",
             ctx.slug,
             ctx.helper,
             ctx.shard,
@@ -324,7 +317,6 @@ async def run_job() -> int:
             concurrency,
             claim_limit,
             ctx.serialize_claim,
-            ctx.run_native_gate,
         )
 
         try:
@@ -349,24 +341,6 @@ async def run_job() -> int:
                     ctx.helper,
                 )
                 return "budget"
-
-            loop_n += 1
-            if ctx.run_native_gate and (
-                (loop_n == 1 and not native_once) or loop_n % native_gate_every == 0
-            ):
-                try:
-                    async with db_lock:
-                        n_nat = db.enqueue_enrich_native_deltas(chain_pk=ctx.chain_pk)
-                    native_once = True
-                    if n_nat:
-                        stats.enrich_from_native += n_nat
-                        logger.info(
-                            "Native gate enqueued enrich count=%s chain=%s",
-                            n_nat,
-                            ctx.slug,
-                        )
-                except Exception as exc:
-                    logger.warning("Native gate failed (continuing): %s", exc)
 
             if claim_jitter_ms > 0:
                 await asyncio.sleep(random.uniform(0, claim_jitter_ms / 1000.0))
@@ -492,13 +466,12 @@ async def run_job() -> int:
 
     logger.info(
         "Finished probe mode=%s processed=%s completed=%s errors=%s "
-        "enrich_logs=%s enrich_native=%s elapsed=%.0fs",
+        "enrich_logs=%s elapsed=%.0fs",
         chain_slug,
         stats.processed,
         stats.completed,
         stats.errors,
         stats.enrich_from_logs,
-        stats.enrich_from_native,
         time.monotonic() - start,
     )
     return 0

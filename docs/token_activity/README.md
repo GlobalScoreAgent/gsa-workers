@@ -10,9 +10,10 @@ Package under `workers/token_activity/`.
 ## Product model
 
 1. Probe visits each wallet×chain ~every **15 days**, scanning blocks since last visit (max 15d).
-2. Daily **native** deltas also enqueue enrich without waiting for getLogs.
-3. Once `does_need_token_activity_enrich`, probe skips that row until enrich clears it.
-4. Enrich is a **subset**; do not size Alchemy Free for the full fleet.
+2. If getLogs sees Transfer → sets `does_need_token_activity_enrich`.
+3. Native nonce/balance deltas (from `wallet_daily_metrics`) enqueue enrich in the **rollup/daily metrics pipeline**, not in this probe — vault ADR 2026-07-23.
+4. Once `does_need_token_activity_enrich`, probe skips that row until enrich clears it.
+5. Enrich is a **subset**; do not size Alchemy Free for the full fleet.
 
 Docs: [CAPACITY.md](./CAPACITY.md) · [PROBE_REDESIGN.md](./PROBE_REDESIGN.md) · historical [PENDING_TOKEN_ACTIVITY_RPC.md](../PENDING_TOKEN_ACTIVITY_RPC.md)
 

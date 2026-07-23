@@ -134,7 +134,6 @@ Worker README: [`wallet_lp_positions_discovery`](../workers/wallet_lp_positions_
 **Live**. Matrix exacta **7** cells: BSC×3 + Base×2 + ETH×1 + `_rest` (`max-parallel: 7`, cron 3/9/15/21). Eth/Base/`_rest` pivotean a BSC helper al vaciar due. Código en `workers/token_activity/probe/`.
 
 ```
-[shard0] native gate (wallet_daily_metrics D vs D-1) → enrich flag
 claim (skip does_need_token_activity_enrich) →
   eth_getLogs Transfer since last_scanned (catch-up ≤15d) →
   if Transfer → enrich flag; mark probe done (+15d next_eligible)

@@ -1,6 +1,6 @@
 # token_activity / probe (census 15d)
 
-Public-RPC **sensor**: detect ERC-20/721 Transfer activity since `token_activity_last_scanned_block` (max **15 days** of blocks). Does **not** persist transfer rows. Enqueues 15d flow enrich when tokens moved; native nonce/balance deltas also enqueue enrich.
+Public-RPC **sensor**: detect ERC-20/721 Transfer activity since `token_activity_last_scanned_block` (max **15 days** of blocks). Does **not** persist transfer rows. Enqueues 15d flow enrich when tokens moved (getLogs only). Native nonce/balance enrich is owned by the daily metrics→rollup path — see vault decision.
 
 Path: `workers/token_activity/probe/`
 
@@ -9,7 +9,6 @@ Path: `workers/token_activity/probe/`
 ```
 plan → matrix (BSC×3 + Base×2 + ETH×1 + _rest) = 7 cells
 probe (CHAIN/SHARD | CHAIN=_rest) →
-  [bsc shard0 only] native gate → does_need_token_activity_enrich
   claim (SKIP LOCKED; jitter; BSC advisory lock) →
   eth_getLogs Transfer (+catchup ≤15d) →
   if Transfer → flag enrich
@@ -29,7 +28,6 @@ probe (CHAIN/SHARD | CHAIN=_rest) →
 | `RPC_MIN_INTERVAL_MS` | **400** | pace public RPC |
 | `CLAIM_JITTER_MS` | **2000** | random sleep before claim |
 | `ACTIVITY_CATCHUP_MAX_DAYS` | **15** | max block lookback |
-| `NATIVE_GATE_EVERY_N_LOOPS` | 1 | only dedicated `bsc` shard 0 |
 | `LOG_CHUNK_*` | per-chain | adaptive chunks |
 | `MAX_RUNTIME_SECONDS` | 19800 | soft stop |
 | `CLAIM_STALE_SECONDS` | 7200 | reclaim |

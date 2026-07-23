@@ -221,7 +221,7 @@ Canonical SQL / migrations: `gsa-supabase-schema/supabase/migrations/` and `supa
 | token contracts discovery | `wallets.wallet_token_contracts_upsert(p_wallet_id, p_chain_id, p_rows jsonb)` | `wallets.wallet_token_contracts` (insert/update only; no delete) |
 | token portfolio discovery | `wallets.wallet_token_positions_insert(p_wallet_id, p_chain_id, p_rows jsonb)` | `wallets.wallet_token_positions` (INSERT … ON CONFLICT DO NOTHING) |
 | LP positions discovery | `wallets.wallet_lp_positions_upsert(p_wallet_id, p_chain_id, p_rows jsonb)` | `wallets.wallet_lp_positions` (DELETE+INSERT replace per wallet+chain; stamps `calculated_at`) |
-| token activity probe | sets `does_need_token_activity_enrich` (+ native gate) | Sensor only; enrich worker TBD |
+| token activity probe | sets `does_need_token_activity_enrich` on Transfer hit | Sensor getLogs only; native enrich enqueue → rollup pipeline (ADR); enrich worker TBD |
 
 Dune upserts: JSON arrays; empty array raises. Worker sends **chunks** (default 5000). Scripts: `wallets_cex_addresses_upsert.sql`, `wallets_dune_reference_tables.sql`. Docs: `gsa-supabase-schema/supabase/docs/wallets-dune-reference-tables.md`.
 
