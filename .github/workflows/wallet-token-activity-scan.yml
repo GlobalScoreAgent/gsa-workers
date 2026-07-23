@@ -46,8 +46,8 @@ jobs:
     timeout-minutes: 360
     strategy:
       fail-fast: false
-      # One job per chain (runner_count=1); internal CONCURRENCY handles parallelism.
-      max-parallel: 8
+      # BSC=2 runners; other chains=1. Internal CONCURRENCY=2 per job.
+      max-parallel: 9
       matrix: ${{ fromJson(needs.plan.outputs.matrix) }}
     concurrency:
       group: wallet-token-activity-scan-${{ matrix.chain }}-${{ matrix.shard }}
