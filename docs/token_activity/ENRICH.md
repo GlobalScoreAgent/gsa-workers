@@ -1,6 +1,11 @@
 # Enrich 15d (design — not built)
 
-Pull wallet×chain **flows for the last ~15 days** only for rows enqueued by the gate (probe + daily metrics).
+Pull wallet×chain **flows for the last ~15 days** only for rows with `does_need_token_activity_enrich`.
+
+**Enqueue sources (OR)** — vault ADR `2026-07-23 - Fuentes de does_need_token_activity_enrich`:
+
+1. Probe getLogs Transfer hit  
+2. Rollup / `wallet_daily_metrics` D vs D−1 (native) — **pending** in schema rollup (not in probe)
 
 ## Providers (hypothesis)
 
@@ -35,4 +40,4 @@ Pull wallet×chain **flows for the last ~15 days** only for rows enqueued by the
 - Separate GHA workflow, low concurrency, respect CU / Etherscan rps
 - Do **not** mix getLogs probe and Transfers in the same hot path
 
-Related: probe flags already written by `workers/token_activity/probe`.
+Related: probe writes Transfer flags in `workers/token_activity/probe`; native enqueue TBD in rollup.

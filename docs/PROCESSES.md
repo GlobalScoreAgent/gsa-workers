@@ -72,7 +72,7 @@ flowchart TB
 | 6 | [`wallet_token_portfolio_discovery`](../workers/wallet_token_portfolio_discovery/README.md) | Claim (`wallet_transactions`) | 0/6/12/18 | `does_need_portfolio_discovery` | `wallet_token_positions_insert` | `wallets.wallet_token_positions` (wallet fungibles) |
 | 7 | [`token_prices_import`](../workers/token_prices_import/README.md) | Reference | 0/6/12/18 | unpriced ERC-20s (`has_price_error`) | `token_prices_upsert` + `apply_prices` + `mark_price_misses` | `token_prices` → positions |
 | 8 | [`wallet_lp_positions_discovery`](../workers/wallet_lp_positions_discovery/README.md) | Claim (`wallet_transactions`) | 0/6/12/18 | `does_need_lp_discovery` | `wallet_lp_positions_upsert` | `wallets.wallet_lp_positions` |
-| 9 | [`token_activity/probe`](../workers/token_activity/probe/README.md) | Claim (`wallet_transactions`, matrix chain×shard) | 3/9/15/21 | `token_activity_next_eligible_at` + valid agents; skip enrich-pending | flags `does_need_token_activity_enrich` | Sensor getLogs (no transfer persist); enrich worker TBD |
+| 9 | [`token_activity/probe`](../workers/token_activity/probe/README.md) | Claim (`wallet_transactions`, matrix 7) | 3/9/15/21 | `token_activity_next_eligible_at` + valid agents; skip enrich-pending | flags `does_need_token_activity_enrich` on Transfer | Sensor getLogs; native enrich → rollup ADR; enrich worker TBD |
 | 10 | [`agent_uri_resolve`](../workers/agent_uri_resolve/README.md) | Claim (agents / feedbacks) | 00:00, 12:00 | `is_uri_processed` / `is_feedback_processed` | direct SQL | `uri_documents` + `agent_manifest` |
 | 11 | [`agent_uri_reprocess`](../workers/agent_uri_reprocess/README.md) | Claim (manifest errors + docs) | 06:00, 18:00 | download errors / off-chain &gt;15d | direct SQL | retry + refresh `uri_documents` |
 | 12 | [`ai_agent_classifier`](../workers/ai_agent_classifier/README.md) | Claim (`web_dashboard.agents`) | 0/6/12/18 | `does_need_ai_category_process` | exact-hash copy or LLM | `ai_category_*` + `ai_category_input_hash` |
@@ -146,7 +146,7 @@ claim (skip does_need_token_activity_enrich) →
 | Runners | Matrix **7**: BSC×3 + Base×2 + ETH×1 + `_rest`; `CONCURRENCY=1`; pivot eth/base/rest → BSC helper |
 | Secrets | `SUPABASE_DB_URL` only |
 | Persist | **Sensor only** — no transfer/contract upserts |
-| Enrich | Flag only; worker TBD — [token_activity/ENRICH.md](./token_activity/ENRICH.md) |
+| Enrich | Flag on Transfer only; native D vs D−1 → rollup (ADR); worker TBD — [token_activity/ENRICH.md](./token_activity/ENRICH.md) |
 | Queue seed | Existing rows **not** enqueued by migrate — see `wallet_token_activity_scan_seed_queue.sql` |
 | Workflow | `wallet-token-activity-scan.yml` |
 
