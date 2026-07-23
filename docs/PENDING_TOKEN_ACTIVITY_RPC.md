@@ -1,13 +1,13 @@
 # Pending: wallet token activity scan (ERC-20 / 721 / 1155 via public RPC)
 
-**Status:** probe census 15d **live** under `workers/token_activity/probe/` (getLogs sensor + enrich flags on Transfer); enrich worker TBD; native enrich enqueue → rollup (ADR)  
+**Status:** probe census 15d **live**; Fuente B native enrich enqueue **live** in `wallet_rollup_daily_metrics`; enrich consumer worker TBD  
 **Worker:** [`token_activity/probe`](../workers/token_activity/probe/) · workflow `wallet-token-activity-scan.yml`  
 **Related live:** [`wallet_token_contracts_discovery`](../workers/wallet_token_contracts_discovery/) (Alchemy Free **current** balances only) · [TOKEN_CONTRACTS_DISCOVERY_ALCHEMY.md](./TOKEN_CONTRACTS_DISCOVERY_ALCHEMY.md)  
 **Target product:** [token_activity/](./token_activity/) — census probe + enrich subset. Schema: `20260723010000_token_activity_probe_census_15d.sql` + matrix `20260723060000_…`.
 
 > Historical design notes below; **code of truth** is the probe README + [token_activity/](./token_activity/) + migrations.
 >
-> Census: public RPC; lookback from `last_scanned` capped at **15d**; `next_eligible +15d`; no transfer persist; enrich flag on Transfer only (native D vs D−1 → rollup, not probe); ERC-1155 deferred.
+> Census: public RPC; lookback from `last_scanned` capped at **15d**; `next_eligible +15d`; no transfer persist; enrich on Transfer (probe) **or** native D vs D−1 (rollup live); ERC-1155 deferred.
 
 ## Goal (product)
 

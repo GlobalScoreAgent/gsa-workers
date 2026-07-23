@@ -4,8 +4,8 @@ Pull wallet×chain **flows for the last ~15 days** only for rows with `does_need
 
 **Enqueue sources (OR)** — vault ADR `2026-07-23 - Fuentes de does_need_token_activity_enrich`:
 
-1. Probe getLogs Transfer hit  
-2. Rollup / `wallet_daily_metrics` D vs D−1 (native) — **pending** in schema rollup (not in probe)
+1. Probe getLogs Transfer hit (`workers/token_activity/probe`)
+2. **Live:** rollup `erc_8004.wallet_rollup_daily_metrics` — `wallet_daily_metrics` D vs D−1 nonce/balance (`20260723100000_wallet_tx_rollup_enqueue_native_enrich.sql`)
 
 ## Providers (hypothesis)
 
@@ -40,4 +40,4 @@ Pull wallet×chain **flows for the last ~15 days** only for rows with `does_need
 - Separate GHA workflow, low concurrency, respect CU / Etherscan rps
 - Do **not** mix getLogs probe and Transfers in the same hot path
 
-Related: probe writes Transfer flags in `workers/token_activity/probe`; native enqueue TBD in rollup.
+Related: probe writes Transfer flags; rollup writes native flags via `wallet_rollup_daily_metrics`.

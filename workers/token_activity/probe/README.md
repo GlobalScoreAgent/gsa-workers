@@ -1,6 +1,6 @@
 # token_activity / probe (census 15d)
 
-Public-RPC **sensor**: detect ERC-20/721 Transfer activity since `token_activity_last_scanned_block` (max **15 days** of blocks). Does **not** persist transfer rows. Enqueues 15d flow enrich when tokens moved (getLogs only). Native nonce/balance enrich is owned by the daily metrics→rollup path — see vault decision.
+Public-RPC **sensor**: detect ERC-20/721 Transfer activity since `token_activity_last_scanned_block` (max **15 days** of blocks). Does **not** persist transfer rows. Enqueues enrich on Transfer (getLogs). Native nonce/balance enrich is **live** in `wallet_rollup_daily_metrics` — see vault [[Native enrich en rollup]] / ADR.
 
 Path: `workers/token_activity/probe/`
 

@@ -59,7 +59,7 @@ Token activity probe (public getLogs, live): [workers/token_activity/probe/READM
 | `wallet_token_contracts_discovery` | `wallet-token-contracts-discovery.yml` | `wallets.wallet_token_contracts_upsert` | `wallets.wallet_token_contracts` |
 | `wallet_token_portfolio_discovery` | `wallet-token-portfolio-discovery.yml` | `wallets.wallet_token_positions_insert` | `wallets.wallet_token_positions` (fungible) |
 | `wallet_lp_positions_discovery` | `wallet-lp-positions-discovery.yml` | `wallets.wallet_lp_positions_upsert` | `wallets.wallet_lp_positions` (NFT + classic LP) |
-| `token_activity/probe` (ex-`wallet_token_activity_scan`) | `wallet-token-activity-scan.yml` (7 cells: BSC×3+Base×2+ETH×1+`_rest`) | sets `does_need_token_activity_enrich` on Transfer | Probe census 15d (getLogs only); native enrich → rollup ADR; enrich worker TBD |
+| `token_activity/probe` (ex-`wallet_token_activity_scan`) | `wallet-token-activity-scan.yml` (7 cells: BSC×3+Base×2+ETH×1+`_rest`) | sets enrich on Transfer | Probe census 15d; native enrich via rollup (live); enrich worker TBD |
 | `agent_uri_resolve` | `agent-uri-resolve.yml` | direct SQL upsert | `uri_documents` + `agent_manifest` (ingest) |
 | `agent_uri_reprocess` | `agent-uri-reprocess.yml` | direct SQL upsert | error retry + off-chain `uri_documents` refresh |
 | `ai_agent_classifier` | `ai-agent-classifier.yml` | direct SQL | `web_dashboard.agents` AI category fields (`llm` config) |

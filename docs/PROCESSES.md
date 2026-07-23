@@ -35,7 +35,7 @@ flowchart TB
     classifier[ai_agent_classifier]
   end
   daily --> metrics[erc_8004.wallet_daily_metrics]
-  metrics -.->|rollup_TBD| wt[erc_8004.wallet_transactions]
+  metrics -->|wallet_rollup_daily_metrics| wt[erc_8004.wallet_transactions]
   wt --> contracts
   contracts --> wtc[wallets.wallet_token_contracts]
   wtc --> portfolio
@@ -64,7 +64,7 @@ flowchart TB
 
 | # | Process | Type | Schedule (UTC) | Queue / input | Persist via | Destination |
 |---|---|---|---|---|---|---|
-| 1 | [`wallet_nonce_balance_daily`](../workers/wallet_nonce_balance_daily/README.md) | Claim | 0/6/12/18 (matrix a/b) | `wallets` + daily flags | `wallet_apply_daily_snapshot` | `wallet_daily_metrics` (flat); rollup → `wallet_transactions` TBD |
+| 1 | [`wallet_nonce_balance_daily`](../workers/wallet_nonce_balance_daily/README.md) | Claim | 0/6/12/18 (matrix a/b) | `wallets` + daily flags | `wallet_apply_daily_snapshot` | `wallet_daily_metrics` (flat); rollup `wallet_rollup_daily_metrics` → `wallet_transactions` (+ native enrich flag) |
 | 2 | [`owner_wallet_nonce_balance_monthly`](../workers/owner_wallet_nonce_balance_monthly/README.md) | Claim | 0/6/12/18 | monthly flags | `wallet_apply_monthly_snapshot` | `wallet_owner_details` |
 | 3 | [`owner_wallet_origin`](../workers/owner_wallet_origin/README.md) | Claim | 0/6/12/18 | history flags | `wallet_apply_owner_history_snapshot` | `wallet_owner_details.first_transaction_at` |
 | 4 | [`dune_queries_import`](../workers/dune_queries_import/README.md) | Reference | 1st & 16th 00:00 | Dune API (4 queries) | cex/mixer/bridge/ofac upserts (chunked) | `wallets.cex_addresses` + mixer/bridge/ofac tables |
@@ -72,7 +72,7 @@ flowchart TB
 | 6 | [`wallet_token_portfolio_discovery`](../workers/wallet_token_portfolio_discovery/README.md) | Claim (`wallet_transactions`) | 0/6/12/18 | `does_need_portfolio_discovery` | `wallet_token_positions_insert` | `wallets.wallet_token_positions` (wallet fungibles) |
 | 7 | [`token_prices_import`](../workers/token_prices_import/README.md) | Reference | 0/6/12/18 | unpriced ERC-20s (`has_price_error`) | `token_prices_upsert` + `apply_prices` + `mark_price_misses` | `token_prices` → positions |
 | 8 | [`wallet_lp_positions_discovery`](../workers/wallet_lp_positions_discovery/README.md) | Claim (`wallet_transactions`) | 0/6/12/18 | `does_need_lp_discovery` | `wallet_lp_positions_upsert` | `wallets.wallet_lp_positions` |
-| 9 | [`token_activity/probe`](../workers/token_activity/probe/README.md) | Claim (`wallet_transactions`, matrix 7) | 3/9/15/21 | `token_activity_next_eligible_at` + valid agents; skip enrich-pending | flags `does_need_token_activity_enrich` on Transfer | Sensor getLogs; native enrich → rollup ADR; enrich worker TBD |
+| 9 | [`token_activity/probe`](../workers/token_activity/probe/README.md) | Claim (`wallet_transactions`, matrix 7) | 3/9/15/21 | `token_activity_next_eligible_at` + valid agents; skip enrich-pending | flags enrich on Transfer | Sensor getLogs; native enrich via rollup (live); enrich worker TBD |
 | 10 | [`agent_uri_resolve`](../workers/agent_uri_resolve/README.md) | Claim (agents / feedbacks) | 00:00, 12:00 | `is_uri_processed` / `is_feedback_processed` | direct SQL | `uri_documents` + `agent_manifest` |
 | 11 | [`agent_uri_reprocess`](../workers/agent_uri_reprocess/README.md) | Claim (manifest errors + docs) | 06:00, 18:00 | download errors / off-chain &gt;15d | direct SQL | retry + refresh `uri_documents` |
 | 12 | [`ai_agent_classifier`](../workers/ai_agent_classifier/README.md) | Claim (`web_dashboard.agents`) | 0/6/12/18 | `does_need_ai_category_process` | exact-hash copy or LLM | `ai_category_*` + `ai_category_input_hash` |
@@ -89,7 +89,7 @@ claim → multi-chain RPC → save JSON + status → wallet_apply_*_snapshot →
 
 Eligibility: `is_valid_*` + `*_next_eligible_at <= NOW()`. Soft lock via `next_eligible_at += CLAIM_STALE_SECONDS`.
 
-**Daily only:** snapshot destination is `erc_8004.wallet_daily_metrics` (not `wallet_transactions`). Discovery pipelines (#5–#8) still claim existing `wallet_transactions` rows; new daily data does not refresh that table until a rollup job lands.
+**Daily only:** snapshot destination is `erc_8004.wallet_daily_metrics`. Rollup in-DB (`wallet_rollup_daily_metrics`, job_control) rebuilds `wallet_transactions` series/currents and **enqueues native enrich** on D vs D−1 nonce/balance delta.
 
 ### 4. Dune queries (reference)
 
@@ -146,7 +146,7 @@ claim (skip does_need_token_activity_enrich) →
 | Runners | Matrix **7**: BSC×3 + Base×2 + ETH×1 + `_rest`; `CONCURRENCY=1`; pivot eth/base/rest → BSC helper |
 | Secrets | `SUPABASE_DB_URL` only |
 | Persist | **Sensor only** — no transfer/contract upserts |
-| Enrich | Flag on Transfer only; native D vs D−1 → rollup (ADR); worker TBD — [token_activity/ENRICH.md](./token_activity/ENRICH.md) |
+| Enrich | Transfer (probe) **or** native D vs D−1 (`wallet_rollup_daily_metrics`, live); consumer TBD — [token_activity/ENRICH.md](./token_activity/ENRICH.md) |
 | Queue seed | Existing rows **not** enqueued by migrate — see `wallet_token_activity_scan_seed_queue.sql` |
 | Workflow | `wallet-token-activity-scan.yml` |
 
