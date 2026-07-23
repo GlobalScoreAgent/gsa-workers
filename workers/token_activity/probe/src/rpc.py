@@ -57,6 +57,8 @@ def is_rate_limit_error(exc: BaseException) -> bool:
             "too many requests",
             "capacity",
             "over rate",
+            "limit exceeded",
+            "-32005",
         )
     )
 
@@ -64,6 +66,7 @@ def is_rate_limit_error(exc: BaseException) -> bool:
 def is_result_too_large(exc: BaseException) -> bool:
     """Payload/result size limits (too many logs)."""
     text = str(exc).lower()
+    # Note: provider code -32005 is often *rate* limit ("limit exceeded"), not size.
     return any(
         s in text
         for s in (
@@ -71,7 +74,6 @@ def is_result_too_large(exc: BaseException) -> bool:
             "response is too big",
             "response too large",
             "log response size exceeded",
-            "-32005",
         )
     )
 
