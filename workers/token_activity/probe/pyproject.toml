@@ -1,7 +1,7 @@
 [project]
-name = "wallet-token-activity-scan"
+name = "token-activity-probe"
 version = "0.1.0"
-description = "Scan ERC-20/721 Transfer activity via public eth_getLogs (incremental, per-chain shards)"
+description = "Token activity probe: ERC-20/721 Transfer via public eth_getLogs (incremental, per-chain shards)"
 requires-python = ">=3.12"
 dependencies = [
     "httpx>=0.28",

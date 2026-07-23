@@ -1,3 +1,17 @@
+﻿<!-- BEGIN:gsa-obsidian-knowledge -->
+## Conocimiento org (bóveda Obsidian)
+
+Fuente de verdad de producto/GSA: bóveda Obsidian (`GlobalScoreAgent` en Google Drive), vía **MCP Obsidian** en Cursor.
+
+- Carpeta vault de este repo: **02 - Base de Datos** (operación / workers)
+- Docs técnicos de este repo: **`docs/`**
+- Schema / RPCs: repo hermano **`gsa-supabase-schema`**
+- Decisiones cross-repo: vault **08 - Decisiones**
+- Guía canónica: `10 - Agents/AGENTS.md` (stub raíz: `AGENTS.md`)
+
+No inventes definiciones GSA/HUMI/WAMI/Walcert: consulta la bóveda. Español por defecto salvo que se pida otro idioma. Opiniones honestas.
+<!-- END:gsa-obsidian-knowledge -->
+
 # AGENTS.md — working on gsa-workers
 
 Entry point for AI agents (and humans) changing GitHub Actions batch workers.
@@ -22,7 +36,7 @@ Entry point for AI agents (and humans) changing GitHub Actions batch workers.
 Ops / stuck wallets: [docs/OPS.md](./docs/OPS.md). Deprecations: [docs/DEPRECATION.md](./docs/DEPRECATION.md).  
 LP discovery is live; 15-day refresh still pending: [docs/PENDING_LP_POSITIONS.md](./docs/PENDING_LP_POSITIONS.md).  
 Token contracts + Alchemy Free design: [docs/TOKEN_CONTRACTS_DISCOVERY_ALCHEMY.md](./docs/TOKEN_CONTRACTS_DISCOVERY_ALCHEMY.md).  
-Token activity scan (public getLogs, live): [workers/wallet_token_activity_scan/README.md](./workers/wallet_token_activity_scan/README.md). Design notes: [docs/PENDING_TOKEN_ACTIVITY_RPC.md](./docs/PENDING_TOKEN_ACTIVITY_RPC.md).
+Token activity probe (public getLogs, live): [workers/token_activity/probe/README.md](./workers/token_activity/probe/README.md). Design notes: [docs/PENDING_TOKEN_ACTIVITY_RPC.md](./docs/PENDING_TOKEN_ACTIVITY_RPC.md) · [docs/token_activity/](./docs/token_activity/).
 
 ## Hard rules
 
@@ -45,7 +59,7 @@ Token activity scan (public getLogs, live): [workers/wallet_token_activity_scan/
 | `wallet_token_contracts_discovery` | `wallet-token-contracts-discovery.yml` | `wallets.wallet_token_contracts_upsert` | `wallets.wallet_token_contracts` |
 | `wallet_token_portfolio_discovery` | `wallet-token-portfolio-discovery.yml` | `wallets.wallet_token_positions_insert` | `wallets.wallet_token_positions` (fungible) |
 | `wallet_lp_positions_discovery` | `wallet-lp-positions-discovery.yml` | `wallets.wallet_lp_positions_upsert` | `wallets.wallet_lp_positions` (NFT + classic LP) |
-| `wallet_token_activity_scan` | `wallet-token-activity-scan.yml` (matrix chain×shard) | `wallet_token_contracts_upsert` + `wallet_nft_contracts_upsert` + `wallet_token_transfers_upsert` | ERC-20 contracts + NFT collections + transfers (public getLogs) |
+| `token_activity/probe` (ex-`wallet_token_activity_scan`) | `wallet-token-activity-scan.yml` (matrix chain×shard) | sets `does_need_token_activity_enrich` | Probe census 15d (getLogs sensor); enrich worker TBD |
 | `agent_uri_resolve` | `agent-uri-resolve.yml` | direct SQL upsert | `uri_documents` + `agent_manifest` (ingest) |
 | `agent_uri_reprocess` | `agent-uri-reprocess.yml` | direct SQL upsert | error retry + off-chain `uri_documents` refresh |
 | `ai_agent_classifier` | `ai-agent-classifier.yml` | direct SQL | `web_dashboard.agents` AI category fields (`llm` config) |

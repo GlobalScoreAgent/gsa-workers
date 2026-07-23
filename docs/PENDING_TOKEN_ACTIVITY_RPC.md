@@ -1,12 +1,13 @@
 # Pending: wallet token activity scan (ERC-20 / 721 / 1155 via public RPC)
 
-**Status:** live (v1 — Transfer ERC-20/721, incremental daily, matrix chain×shard)  
-**Worker:** [`wallet_token_activity_scan`](../workers/wallet_token_activity_scan/) · workflow `wallet-token-activity-scan.yml`  
-**Related live:** [`wallet_token_contracts_discovery`](../workers/wallet_token_contracts_discovery/) (Alchemy Free **current** balances only) · [TOKEN_CONTRACTS_DISCOVERY_ALCHEMY.md](./TOKEN_CONTRACTS_DISCOVERY_ALCHEMY.md)
+**Status:** probe census 15d under `workers/token_activity/probe/` (sensor + enrich flags); GHA often **disabled_manually**  
+**Worker:** [`token_activity/probe`](../workers/token_activity/probe/) · workflow `wallet-token-activity-scan.yml`  
+**Related live:** [`wallet_token_contracts_discovery`](../workers/wallet_token_contracts_discovery/) (Alchemy Free **current** balances only) · [TOKEN_CONTRACTS_DISCOVERY_ALCHEMY.md](./TOKEN_CONTRACTS_DISCOVERY_ALCHEMY.md)  
+**Target product:** [token_activity/](./token_activity/) — census probe + enrich subset. Schema: `20260723010000_token_activity_probe_census_15d.sql`.
 
-> Implementation notes below are historical design; **code of truth** is the worker README + schema migration `20260717180000_wallet_token_activity_scan.sql`.
+> Historical design notes below; **code of truth** is the probe README + migrations.
 >
-> v1 choices: public RPC only; batch getLogs (~50 wallets); `last_scanned_block` incremental; catch-up max 3d; runners from `chains.token_activity_runner_count`; ERC-1155 deferred.
+> Census: public RPC; lookback from `last_scanned` capped at **15d**; `next_eligible +15d`; no transfer persist; native daily gate; ERC-1155 deferred.
 
 ## Goal (product)
 
@@ -42,7 +43,7 @@ Keeping 20/721/1155 on public RPC reserves Alchemy quota for `external` (and Fre
 
 | Item | Proposal |
 |---|---|
-| Folder | `workers/wallet_token_activity_scan/` (or `wallet_token_transfers_15d/`) |
+| Folder | `workers/token_activity/probe/` (ex-`wallet_token_activity_scan`) |
 | Workflow | `wallet-token-activity-scan.yml` |
 | Schedule | `0 0,6,12,18 * * *` UTC + `workflow_dispatch` |
 | Claim surface | `erc_8004.wallet_transactions` with new flags, e.g. `does_need_token_activity_scan` + `token_activity_scanned_at` |
@@ -148,7 +149,7 @@ Read first (in order):
 
 Task:
 - Design + implement schema in gsa-supabase-schema (claim flags + tables/RPCs as needed + scripts/docs). Prefer reusing wallet_token_contracts_upsert for ERC-20 discoveries; use a separate path/table for NFTs / transfer rows so fungible inventory stays clean.
-- Implement workers/wallet_token_activity_scan/ (or agreed name) + workflow YAML + README.
+- Implement `workers/token_activity/probe/` (done; was `wallet_token_activity_scan`) + workflow YAML + README.
 - eth_getLogs only: ~15-day window, chunked block ranges, wallet as from and to, classify erc20 vs erc721 vs erc1155.
 - Do NOT call Alchemy getAssetTransfers or getTokenBalances in this worker. Do NOT implement native/external transfers here.
 - Deploy order: schema first, then worker. Update PROCESSES.md / AGENTS.md when live.

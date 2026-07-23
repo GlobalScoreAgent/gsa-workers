@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Per-chain sharded token activity scan via public eth_getLogs (Transfer)."""
+"""Per-chain sharded token activity probe (15d census via public eth_getLogs)."""
 
 from __future__ import annotations
 
@@ -9,7 +9,6 @@ import os
 import sys
 import time
 import traceback
-from collections import defaultdict
 from pathlib import Path
 
 import httpx
@@ -17,7 +16,7 @@ import httpx
 sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 
 from db import CLAIM_RETRY_BASE_SECONDS, Database
-from logs_scan import scan_wallet_batch
+from logs_scan import probe_wallet_batch
 from networks import NETWORKS
 from rpc import RpcClient, RpcError
 
@@ -76,7 +75,6 @@ async def run_job() -> int:
         return 1
 
     net = NETWORKS[chain_slug]
-    # Per-chain defaults (ETH: smaller OR batch + Cloudflare-friendly 800-block chunks).
     default_batch = int(net.get("wallet_batch_size") or 50)
     default_chunk = int(net.get("log_chunk_blocks") or 2000)
     default_chunk_max = int(net.get("log_chunk_max") or 10000)
@@ -85,11 +83,11 @@ async def run_job() -> int:
     )
     claim_stale_seconds = env_int("CLAIM_STALE_SECONDS", default=7200, minimum=60)
     max_runtime_seconds = env_int("MAX_RUNTIME_SECONDS", default=19800, minimum=60)
-    catchup_max_days = env_int("ACTIVITY_CATCHUP_MAX_DAYS", default=3, minimum=1, maximum=15)
+    # Align catch-up with 15d census period (not 1d / 3d).
+    catchup_max_days = env_int("ACTIVITY_CATCHUP_MAX_DAYS", default=15, minimum=1, maximum=15)
     chunk_blocks = env_int("LOG_CHUNK_BLOCKS", default=default_chunk, minimum=50)
     chunk_min = env_int("LOG_CHUNK_MIN", default=50, minimum=1)
     chunk_max = env_int("LOG_CHUNK_MAX", default=default_chunk_max, minimum=50)
-    # Network hard ceilings always win (e.g. ETH Cloudflare max 800).
     if net.get("log_chunk_max") is not None:
         chunk_max = min(chunk_max, int(net["log_chunk_max"]))
     chunk_blocks = min(chunk_blocks, chunk_max)
@@ -97,6 +95,7 @@ async def run_job() -> int:
     retry_base = float(os.environ.get("RPC_RETRY_BASE_SECONDS") or "1")
     worker_suffix = env_str("WORKER_ID", "a")
     claimed_by = build_claimed_by(chain_slug, shard, worker_suffix)
+    native_gate_every = env_int("NATIVE_GATE_EVERY_N_LOOPS", default=1, minimum=1)
 
     db = Database(dsn)
     db.connect()
@@ -107,7 +106,7 @@ async def run_job() -> int:
     chain_pk = int(chain_row["id"])
 
     logger.info(
-        "Started chain=%s chain_pk=%s shard=%s/%s claimed_by=%s "
+        "Started probe census chain=%s chain_pk=%s shard=%s/%s claimed_by=%s "
         "batch=%s chunk=%s-%s catchup_days=%s max_runtime=%ss rpcs=%s",
         chain_slug,
         chain_pk,
@@ -126,6 +125,9 @@ async def run_job() -> int:
     processed = 0
     completed = 0
     errors = 0
+    enrich_from_logs = 0
+    enrich_from_native = 0
+    loop_n = 0
     http_limits = httpx.Limits(max_connections=20, max_keepalive_connections=10)
 
     try:
@@ -140,13 +142,31 @@ async def run_job() -> int:
                 elapsed = time.monotonic() - start
                 if elapsed >= max_runtime_seconds:
                     logger.info(
-                        "Time budget reached (%.0fs). processed=%s completed=%s errors=%s",
+                        "Time budget reached (%.0fs). processed=%s completed=%s "
+                        "errors=%s enrich_logs=%s enrich_native=%s",
                         elapsed,
                         processed,
                         completed,
                         errors,
+                        enrich_from_logs,
+                        enrich_from_native,
                     )
                     break
+
+                loop_n += 1
+                # One native-gate pass per chain (shard 0 only) to avoid N× redundant UPDATEs.
+                if shard == 0 and (loop_n == 1 or loop_n % native_gate_every == 0):
+                    try:
+                        n_nat = db.enqueue_enrich_native_deltas(chain_pk=chain_pk)
+                        if n_nat:
+                            enrich_from_native += n_nat
+                            logger.info(
+                                "Native gate enqueued enrich count=%s chain_pk=%s",
+                                n_nat,
+                                chain_pk,
+                            )
+                    except Exception as exc:
+                        logger.warning("Native gate failed (continuing): %s", exc)
 
                 try:
                     rows = db.claim_rows(
@@ -164,9 +184,9 @@ async def run_job() -> int:
 
                 if not rows:
                     if processed == 0:
-                        logger.info("No pending rows for this shard. Exiting.")
+                        logger.info("No pending probe rows for this shard. Exiting.")
                     else:
-                        logger.info("No more pending rows in this run.")
+                        logger.info("No more pending probe rows in this run.")
                     break
 
                 row_ids = [int(r["id"]) for r in rows]
@@ -178,10 +198,9 @@ async def run_job() -> int:
                 )
 
                 try:
-                    transfers, erc20_flat, nft_flat, to_block = await scan_wallet_batch(
+                    active_wallets, to_block = await probe_wallet_batch(
                         rpc,
                         wallets=rows,
-                        chain_pk=chain_pk,
                         block_time_sec=float(net["block_time_sec"]),
                         catchup_max_days=catchup_max_days,
                         chunk_blocks=chunk_blocks,
@@ -189,43 +208,23 @@ async def run_job() -> int:
                         chunk_max=chunk_max,
                     )
 
-                    erc20_by_wallet: dict[int, list[dict[str, str]]] = defaultdict(list)
-                    for item in erc20_flat:
-                        wid = int(item["wallet_id"])
-                        erc20_by_wallet[wid].append(
-                            {
-                                "contract_address": item["contract_address"],
-                                "source": item["source"],
-                            }
-                        )
-
-                    nft_by_wallet: dict[int, list[dict[str, str]]] = defaultdict(list)
-                    for item in nft_flat:
-                        wid = int(item["wallet_id"])
-                        nft_by_wallet[wid].append(
-                            {
-                                "contract_address": item["contract_address"],
-                                "standard": item["standard"],
-                                "source": item["source"],
-                            }
-                        )
-
-                    msg = db.persist_batch_and_mark_done(
+                    enrich_row_ids = [
+                        int(r["id"])
+                        for r in rows
+                        if int(r["wallet_id"]) in active_wallets
+                    ]
+                    db.mark_probe_done(
                         row_ids=row_ids,
-                        chain_pk=chain_pk,
                         last_block=to_block,
-                        transfers=transfers,
-                        erc20_by_wallet=dict(erc20_by_wallet),
-                        nft_by_wallet=dict(nft_by_wallet),
+                        enqueue_enrich_row_ids=enrich_row_ids,
                     )
+                    enrich_from_logs += len(enrich_row_ids)
                     logger.info(
-                        "Done batch wallets=%s transfers=%s erc20=%s nft=%s to_block=%s %s",
+                        "Probe done wallets=%s active=%s to_block=%s enrich=%s",
                         len(rows),
-                        len(transfers),
-                        len(erc20_flat),
-                        len(nft_flat),
+                        len(active_wallets),
                         to_block,
-                        msg,
+                        len(enrich_row_ids),
                     )
                     processed += len(rows)
                     completed += len(rows)
@@ -239,7 +238,6 @@ async def run_job() -> int:
                     processed += len(rows)
                     errors += len(rows)
 
-                    # Adaptive: if topic OR list rejected, shrink batch for next claims
                     if isinstance(exc, RpcError) and (
                         "topic" in str(exc).lower() or "invalid" in str(exc).lower()
                     ):
@@ -257,13 +255,16 @@ async def run_job() -> int:
         db.close()
 
     logger.info(
-        "Finished chain=%s shard=%s/%s processed=%s completed=%s errors=%s elapsed=%.0fs",
+        "Finished probe chain=%s shard=%s/%s processed=%s completed=%s errors=%s "
+        "enrich_logs=%s enrich_native=%s elapsed=%.0fs",
         chain_slug,
         shard,
         shards,
         processed,
         completed,
         errors,
+        enrich_from_logs,
+        enrich_from_native,
         time.monotonic() - start,
     )
     return 0

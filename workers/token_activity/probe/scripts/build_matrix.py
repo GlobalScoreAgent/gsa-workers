@@ -4,6 +4,7 @@
 Prints JSON object to stdout:
   {"include":[{"chain":"ethereum","shard":0,"shards":2}, ...]}
 
+Chains with runner_count < 1 are omitted (capacity pause).
 Writes GitHub Actions output `matrix` when GITHUB_OUTPUT is set (heredoc-safe).
 """
 

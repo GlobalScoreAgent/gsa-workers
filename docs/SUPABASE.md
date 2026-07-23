@@ -91,28 +91,35 @@ Trigger `trg_wallet_transactions_portfolio_flag_bu` sets portfolio pending when 
 
 Trigger `trg_wallet_transactions_lp_flag_bu` sets LP pending when portfolio discovery completes successfully.
 
-### Token activity scan (`wallet_transactions` + public RPC)
+### Token activity probe (`wallet_transactions` + public RPC census)
 
 | Column | Role |
 |---|---|
-| `token_activity_next_eligible_at` | Claim clock (`NULL` = not queued; `<= NOW()` = due). New inserts get `-infinity` via BI; existing need seed script |
-| `token_activity_last_scanned_block` | Inclusive cursor for incremental getLogs |
+| `token_activity_next_eligible_at` | Probe claim clock (`NULL` = not queued). Success → **+15 days**. New inserts `-infinity` via BI |
+| `token_activity_last_scanned_block` | Inclusive getLogs cursor (scan from last+1, max 15d lookback) |
 | `token_activity_scanned_at` / `claimed_at` / `claimed_by` | Audit |
-| `has_token_activity_error` / `token_activity_message_error` | Last failure (requeue in 1h) |
-| `chains.token_activity_runner_count` | GHA shard count (1–16) |
+| `has_token_activity_error` / `token_activity_message_error` | Last probe failure (requeue +1h) |
+| `does_need_token_activity_enrich` | Enrich queue; probe **skips** while TRUE |
+| `token_activity_enrich_queued_at` / `completed_at` / `next_eligible_at` / claim / error | Future enrich worker |
+| `chains.token_activity_runner_count` | GHA shards; `max(1, round(7×wt%))` → matrix 11, concurrent ≤7 (`max-parallel`); `0` = omit |
 
-Eligibility also requires `agent_wallet_tx.is_valid` + agent `validation_realness_status='valid'`. Index: `idx_wallet_transactions_token_activity_due`.
+Eligibility: due probe clock + enrich flag not true + `agent_wallet_tx.is_valid` + agent `validation_realness_status='valid'`.
 
 ```sql
 SELECT
-  count(*) FILTER (WHERE token_activity_next_eligible_at IS NOT NULL
-                   AND token_activity_next_eligible_at <= NOW()) AS due,
+  count(*) FILTER (
+    WHERE token_activity_next_eligible_at IS NOT NULL
+      AND token_activity_next_eligible_at <= NOW()
+      AND does_need_token_activity_enrich IS NOT TRUE
+  ) AS probe_due,
   count(*) FILTER (WHERE token_activity_next_eligible_at IS NULL) AS not_queued,
-  count(*) FILTER (WHERE has_token_activity_error IS TRUE) AS errors
+  count(*) FILTER (WHERE does_need_token_activity_enrich) AS enrich_pending,
+  count(*) FILTER (WHERE has_token_activity_error IS TRUE) AS probe_errors
 FROM erc_8004.wallet_transactions;
 ```
 
-Seed (ask first): `gsa-supabase-schema/supabase/scripts/wallet_token_activity_scan_seed_queue.sql`.
+Seed probe queue (ask first): `gsa-supabase-schema/supabase/scripts/wallet_token_activity_scan_seed_queue.sql`.  
+Census migration: `20260723010000_token_activity_probe_census_15d.sql`.
 
 ### URI ingest (`uri_documents` / `agent_manifest`)
 
@@ -214,7 +221,7 @@ Canonical SQL / migrations: `gsa-supabase-schema/supabase/migrations/` and `supa
 | token contracts discovery | `wallets.wallet_token_contracts_upsert(p_wallet_id, p_chain_id, p_rows jsonb)` | `wallets.wallet_token_contracts` (insert/update only; no delete) |
 | token portfolio discovery | `wallets.wallet_token_positions_insert(p_wallet_id, p_chain_id, p_rows jsonb)` | `wallets.wallet_token_positions` (INSERT … ON CONFLICT DO NOTHING) |
 | LP positions discovery | `wallets.wallet_lp_positions_upsert(p_wallet_id, p_chain_id, p_rows jsonb)` | `wallets.wallet_lp_positions` (DELETE+INSERT replace per wallet+chain; stamps `calculated_at`) |
-| token activity scan | `wallet_token_contracts_upsert` + `wallet_nft_contracts_upsert` + `wallet_token_transfers_upsert` | ERC-20 contracts (`source=rpc_logs_activity`); NFT collections; transfer rows |
+| token activity probe | sets `does_need_token_activity_enrich` (+ native gate) | Sensor only; enrich worker TBD |
 
 Dune upserts: JSON arrays; empty array raises. Worker sends **chunks** (default 5000). Scripts: `wallets_cex_addresses_upsert.sql`, `wallets_dune_reference_tables.sql`. Docs: `gsa-supabase-schema/supabase/docs/wallets-dune-reference-tables.md`.
 

@@ -36,6 +36,22 @@ After `owner_wallet_origin` is validated in production, consider deprecating:
 - Standalone `query_wallet_origin.py` CLI tool (replaced by this worker)
 - Any manual origin-import scripts or one-off jobs writing `import_wallet_history_data`
 
+## Agent URI ingest (Edge → GHA)
+
+Current: **`agent_uri_resolve`** (00:00 / 12:00 UTC) materializes agents + feedbacks into `uri_documents` / `agent_manifest`. **`agent_uri_reprocess`** (06:00 / 18:00) retries download errors and refreshes off-chain HTTP/IPFS docs older than 15 days.
+
+Do **not** re-enable Edge URI batch processors or legacy manifest reprocess cron for ingest. Canonical JSON lives in `uri_documents` (`uri_hash`); `agent_manifest.data` / `url` are dropped.
+
+| Legacy component | Status |
+|---|---|
+| Edge `agent-uri-batch-processor` | Superseded by `agent_uri_resolve`; keep **disabled** |
+| Edge `feedback-uri-batch-processor` | Superseded by `agent_uri_resolve`; keep **disabled** |
+| Edge `agent-process-uri` (ingest path) | Superseded; keep **disabled** for ingest |
+| pg_cron / SPs that reprocessed `agent_manifest.url` / `data` | Superseded by `agent_uri_reprocess`; leave off |
+| Manifest **entity consume** pg_cron (profile / feedbacks / liveness / sentinel) | Still **off** until SQL readers JOIN `uri_documents`; not replaced by these two workers |
+
+Ops may delete leftover URI Edge/cron artifacts in the schema repo; workers do not call those stubs.
+
 ## Token prices (walcert → GHA → Dex/CoinGecko)
 
 Current: **`token_prices_import`** enriches unpriced `wallet_token_positions` via DexScreener → CoinGecko into spot cache `wallets.token_prices` (PK `chain_id`+`contract`), then `wallet_token_positions_apply_prices`.

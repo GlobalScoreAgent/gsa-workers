@@ -1,11 +1,12 @@
 name: Wallet token activity scan
 
 on:
+  # Stagger vs other workers at 0/6/12/18 (Free ~20 concurrent).
   schedule:
-    - cron: "0 0 * * *"
-    - cron: "0 6 * * *"
-    - cron: "0 12 * * *"
-    - cron: "0 18 * * *"
+    - cron: "0 3 * * *"
+    - cron: "0 9 * * *"
+    - cron: "0 15 * * *"
+    - cron: "0 21 * * *"
   workflow_dispatch:
 
 jobs:
@@ -29,12 +30,12 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        working-directory: workers/wallet_token_activity_scan
+        working-directory: workers/token_activity/probe
         run: uv sync
 
       - name: Build matrix from chains.token_activity_runner_count
         id: build
-        working-directory: workers/wallet_token_activity_scan
+        working-directory: workers/token_activity/probe
         env:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
         run: uv run python scripts/build_matrix.py
@@ -45,6 +46,8 @@ jobs:
     timeout-minutes: 360
     strategy:
       fail-fast: false
+      # Hard cap vs GHA Free (~20). Matrix sum of runners is tuned to 7.
+      max-parallel: 7
       matrix: ${{ fromJson(needs.plan.outputs.matrix) }}
     concurrency:
       group: wallet-token-activity-scan-${{ matrix.chain }}-${{ matrix.shard }}
@@ -64,11 +67,11 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        working-directory: workers/wallet_token_activity_scan
+        working-directory: workers/token_activity/probe
         run: uv sync
 
       - name: Run token activity scan
-        working-directory: workers/wallet_token_activity_scan
+        working-directory: workers/token_activity/probe
         env:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
           CHAIN: ${{ matrix.chain }}
@@ -78,7 +81,8 @@ jobs:
           # (ETH: batch=25, chunk=800; others: batch=50, chunk=2000).
           CLAIM_STALE_SECONDS: 7200
           MAX_RUNTIME_SECONDS: 19800
-          ACTIVITY_CATCHUP_MAX_DAYS: 3
+          ACTIVITY_CATCHUP_MAX_DAYS: 15
+          NATIVE_GATE_EVERY_N_LOOPS: 1
           RPC_MIN_INTERVAL_MS: 150
           RPC_RETRY_BASE_SECONDS: 1
           WORKER_ID: ${{ matrix.chain }}-s${{ matrix.shard }}

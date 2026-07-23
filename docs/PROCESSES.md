@@ -18,7 +18,7 @@ flowchart TB
     portfolio[wallet_token_portfolio_discovery]
     prices[token_prices_import]
     lp[wallet_lp_positions_discovery]
-    tokenActivity[wallet_token_activity_scan]
+    tokenActivity[token_activity_probe]
   end
   subgraph refdata [Other_reference]
     dune[dune_queries_import]
@@ -72,7 +72,7 @@ flowchart TB
 | 6 | [`wallet_token_portfolio_discovery`](../workers/wallet_token_portfolio_discovery/README.md) | Claim (`wallet_transactions`) | 0/6/12/18 | `does_need_portfolio_discovery` | `wallet_token_positions_insert` | `wallets.wallet_token_positions` (wallet fungibles) |
 | 7 | [`token_prices_import`](../workers/token_prices_import/README.md) | Reference | 0/6/12/18 | unpriced ERC-20s (`has_price_error`) | `token_prices_upsert` + `apply_prices` + `mark_price_misses` | `token_prices` → positions |
 | 8 | [`wallet_lp_positions_discovery`](../workers/wallet_lp_positions_discovery/README.md) | Claim (`wallet_transactions`) | 0/6/12/18 | `does_need_lp_discovery` | `wallet_lp_positions_upsert` | `wallets.wallet_lp_positions` |
-| 9 | [`wallet_token_activity_scan`](../workers/wallet_token_activity_scan/README.md) | Claim (`wallet_transactions`, matrix chain×shard) | 0/6/12/18 | `token_activity_next_eligible_at` + valid agents | contracts + nft_contracts + transfers upserts | ERC-20 / NFT collections / transfers (public getLogs) |
+| 9 | [`token_activity/probe`](../workers/token_activity/probe/README.md) | Claim (`wallet_transactions`, matrix chain×shard) | 3/9/15/21 | `token_activity_next_eligible_at` + valid agents; skip enrich-pending | flags `does_need_token_activity_enrich` | Sensor getLogs (no transfer persist); enrich worker TBD |
 | 10 | [`agent_uri_resolve`](../workers/agent_uri_resolve/README.md) | Claim (agents / feedbacks) | 00:00, 12:00 | `is_uri_processed` / `is_feedback_processed` | direct SQL | `uri_documents` + `agent_manifest` |
 | 11 | [`agent_uri_reprocess`](../workers/agent_uri_reprocess/README.md) | Claim (manifest errors + docs) | 06:00, 18:00 | download errors / off-chain &gt;15d | direct SQL | retry + refresh `uri_documents` |
 | 12 | [`ai_agent_classifier`](../workers/ai_agent_classifier/README.md) | Claim (`web_dashboard.agents`) | 0/6/12/18 | `does_need_ai_category_process` | exact-hash copy or LLM | `ai_category_*` + `ai_category_input_hash` |
@@ -129,25 +129,29 @@ Covered extractors: Ethereum / Base / Arbitrum UniV3 NFT; BNB Pancake V3 NFT; Ba
 
 Worker README: [`wallet_lp_positions_discovery`](../workers/wallet_lp_positions_discovery/README.md). 15-day refresh still pending: [PENDING_LP_POSITIONS.md](./PENDING_LP_POSITIONS.md).
 
-### 9. Token activity scan (public getLogs)
+### 9. Token activity probe (census 15d, public getLogs)
 
-**Live.** Matrix GHA por chain×shard (`chains.token_activity_runner_count`). Un solo código; env `CHAIN`/`SHARD`/`SHARDS`.
+**Live** (workflow often **`disabled_manually`**). Matrix GHA por chain×shard (`max(1,round(7×wt%))` → 11 cells, `max-parallel: 7`, cron 3/9/15/21). Código en `workers/token_activity/probe/`.
 
 ```
-claim batch 50 (valid agents + awt.is_valid + mod shard) →
-  eth_getLogs Transfer from/to (OR topics) → classify erc20/erc721 →
-  upsert contracts + nft_contracts + transfers → advance last_scanned_block
+[shard0] native gate (wallet_daily_metrics D vs D-1) → enrich flag
+claim (skip does_need_token_activity_enrich) →
+  eth_getLogs Transfer since last_scanned (catch-up ≤15d) →
+  if Transfer → enrich flag; mark probe done (+15d next_eligible)
 ```
 
 | Item | Detail |
 |---|---|
-| Cursor | `token_activity_last_scanned_block`; catch-up max 3d |
-| Runners | DB column `token_activity_runner_count` (bsc/arb=4, eth/base/poly=2, …) |
+| Cursor | `token_activity_last_scanned_block`; catch-up max **15d** |
+| Cadence | `next_eligible + 15 days` after success |
+| Runners | `token_activity_runner_count` by WT% of budget 7, min 1 (bsc=4, others=1; max-parallel 7) |
 | Secrets | `SUPABASE_DB_URL` only |
+| Persist | **Sensor only** — no transfer/contract upserts |
+| Enrich | Flag only; worker TBD — [token_activity/ENRICH.md](./token_activity/ENRICH.md) |
 | Queue seed | Existing rows **not** enqueued by migrate — see `wallet_token_activity_scan_seed_queue.sql` |
 | Workflow | `wallet-token-activity-scan.yml` |
 
-Worker README: [`wallet_token_activity_scan`](../workers/wallet_token_activity_scan/README.md). Design notes: [PENDING_TOKEN_ACTIVITY_RPC.md](./PENDING_TOKEN_ACTIVITY_RPC.md).
+Worker README: [`token_activity/probe`](../workers/token_activity/probe/README.md). Capacity: [token_activity/CAPACITY.md](./token_activity/CAPACITY.md).
 
 ### 10. Agent URI resolve (ingest)
 
@@ -194,7 +198,7 @@ Worker README: [`ai_agent_classifier`](../workers/ai_agent_classifier/README.md)
 | Doc / work | Status |
 |---|---|
 | [PENDING_LP_POSITIONS.md](./PENDING_LP_POSITIONS.md) | Discovery **live**; only **15-day refresh** worker remains |
-| [PENDING_TOKEN_ACTIVITY_RPC.md](./PENDING_TOKEN_ACTIVITY_RPC.md) | **Live** as `wallet_token_activity_scan` (v1 Transfer); ERC-1155 deferred |
+| [PENDING_TOKEN_ACTIVITY_RPC.md](./PENDING_TOKEN_ACTIVITY_RPC.md) | Probe census 15d live under `workers/token_activity/probe`; enrich 15d TBD; ERC-1155 deferred |
 | Agent manifest **consume** | Not built — rewrite SQL readers to JOIN `uri_documents`, then GHA orchestrator; keep legacy pg_cron consume **off** |
 
 ## Secrets cheat sheet

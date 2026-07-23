@@ -1,8 +1,7 @@
-"""Supabase Postgres access for wallet_token_activity_scan."""
+"""Supabase Postgres access for token activity probe (15d census)."""
 
 from __future__ import annotations
 
-import json
 import logging
 import time
 from collections.abc import Callable
@@ -23,6 +22,7 @@ WITH candidates AS (
     AND mod(wt.wallet_id, %(shards)s) = %(shard)s
     AND wt.token_activity_next_eligible_at IS NOT NULL
     AND wt.token_activity_next_eligible_at <= NOW()
+    AND wt.does_need_token_activity_enrich IS NOT TRUE
     AND (
       wt.token_activity_claimed_at IS NULL
       OR wt.token_activity_claimed_at
@@ -66,7 +66,7 @@ FROM updated u
 JOIN erc_8004.wallets w ON w.id = u.wallet_id
 """
 
-MARK_DONE_SQL = """
+MARK_PROBE_DONE_SQL = """
 UPDATE erc_8004.wallet_transactions
 SET
   token_activity_last_scanned_block = %(last_block)s,
@@ -74,7 +74,15 @@ SET
   token_activity_claimed_at = NOW(),
   has_token_activity_error = FALSE,
   token_activity_message_error = NULL,
-  token_activity_next_eligible_at = NOW() + interval '1 day'
+  token_activity_next_eligible_at = NOW() + interval '15 days',
+  does_need_token_activity_enrich = CASE
+    WHEN %(enqueue_enrich)s THEN TRUE
+    ELSE does_need_token_activity_enrich
+  END,
+  token_activity_enrich_queued_at = CASE
+    WHEN %(enqueue_enrich)s THEN NOW()
+    ELSE token_activity_enrich_queued_at
+  END
 WHERE id = ANY(%(row_ids)s)
 """
 
@@ -89,24 +97,55 @@ SET
 WHERE id = ANY(%(row_ids)s)
 """
 
-UPSERT_ERC20_SQL = """
-SELECT wallets.wallet_token_contracts_upsert(
-  %(wallet_id)s,
-  %(chain_id)s,
-  %(rows)s::jsonb
-)
+ENQUEUE_ENRICH_BY_WALLET_SQL = """
+UPDATE erc_8004.wallet_transactions
+SET
+  does_need_token_activity_enrich = TRUE,
+  token_activity_enrich_queued_at = NOW()
+WHERE chain_id = %(chain_pk)s
+  AND wallet_id = ANY(%(wallet_ids)s)
+  AND does_need_token_activity_enrich IS NOT TRUE
+RETURNING id
 """
 
-UPSERT_NFT_SQL = """
-SELECT wallets.wallet_nft_contracts_upsert(
-  %(wallet_id)s,
-  %(chain_id)s,
-  %(rows)s::jsonb
+ENQUEUE_ENRICH_NATIVE_DELTAS_SQL = """
+WITH latest AS (
+  SELECT MAX(snapshot_date) AS d1
+  FROM erc_8004.wallet_daily_metrics
+  WHERE chain_id = %(chain_pk)s
+),
+deltas AS (
+  SELECT m1.wallet_id
+  FROM erc_8004.wallet_daily_metrics m1
+  JOIN latest l ON m1.snapshot_date = l.d1
+  JOIN erc_8004.wallet_daily_metrics m0
+    ON m0.wallet_id = m1.wallet_id
+   AND m0.chain_id = m1.chain_id
+   AND m0.snapshot_date = l.d1 - 1
+  WHERE m1.chain_id = %(chain_pk)s
+    AND (
+      m1.nonce IS DISTINCT FROM m0.nonce
+      OR m1.balance IS DISTINCT FROM m0.balance
+    )
 )
-"""
-
-UPSERT_TRANSFERS_SQL = """
-SELECT wallets.wallet_token_transfers_upsert(%(rows)s::jsonb)
+UPDATE erc_8004.wallet_transactions wt
+SET
+  does_need_token_activity_enrich = TRUE,
+  token_activity_enrich_queued_at = NOW()
+FROM deltas d
+WHERE wt.wallet_id = d.wallet_id
+  AND wt.chain_id = %(chain_pk)s
+  AND wt.does_need_token_activity_enrich IS NOT TRUE
+  AND EXISTS (
+    SELECT 1
+    FROM erc_8004.agent_wallet_tx awt
+    JOIN erc_8004.agents a ON a.id = awt.agent_id
+    WHERE awt.wallet_id = wt.wallet_id
+      AND awt.is_valid IS TRUE
+      AND awt.deleted_at IS NULL
+      AND a.validation_realness_status = 'valid'
+  )
+RETURNING wt.id
 """
 
 RESOLVE_CHAIN_SQL = """
@@ -235,7 +274,14 @@ class Database:
                 slug = EVM_CHAIN_ID_TO_SLUG.get(int(row["chain_id"]))
                 if not slug:
                     continue
-                shards = max(1, int(row["token_activity_runner_count"] or 1))
+                # 0 = capacity pause (omit from GHA matrix). NULL/invalid → 1.
+                raw = row["token_activity_runner_count"]
+                if raw is None:
+                    shards = 1
+                else:
+                    shards = int(raw)
+                if shards < 1:
+                    continue
                 for shard in range(shards):
                     cells.append(
                         {"chain": slug, "shard": shard, "shards": shards}
@@ -274,67 +320,77 @@ class Database:
 
         return self._run_with_db_retry("claim", _claim)
 
-    def persist_batch_and_mark_done(
+    def mark_probe_done(
         self,
         *,
         row_ids: list[int],
-        chain_pk: int,
         last_block: int,
-        transfers: list[dict[str, Any]],
-        erc20_by_wallet: dict[int, list[dict[str, str]]],
-        nft_by_wallet: dict[int, list[dict[str, str]]],
-    ) -> str:
-        def _save() -> str:
+        enqueue_enrich_row_ids: list[int],
+    ) -> None:
+        """Advance probe cursor (+15d). Optionally flag enrich on a subset of row ids."""
+        enrich_set = set(enqueue_enrich_row_ids)
+
+        def _mark() -> None:
             assert self._conn is not None
-            msgs: list[str] = []
             with self._conn.cursor() as cur:
-                if transfers:
+                quiet_ids = [i for i in row_ids if i not in enrich_set]
+                active_ids = [i for i in row_ids if i in enrich_set]
+                if quiet_ids:
                     cur.execute(
-                        UPSERT_TRANSFERS_SQL,
-                        {"rows": json.dumps(transfers)},
-                    )
-                    r = cur.fetchone()
-                    if r:
-                        msgs.append(str(next(iter(r.values()))))
-
-                for wallet_id, rows in erc20_by_wallet.items():
-                    if not rows:
-                        continue
-                    cur.execute(
-                        UPSERT_ERC20_SQL,
+                        MARK_PROBE_DONE_SQL,
                         {
-                            "wallet_id": wallet_id,
-                            "chain_id": chain_pk,
-                            "rows": json.dumps(rows),
+                            "row_ids": quiet_ids,
+                            "last_block": last_block,
+                            "enqueue_enrich": False,
                         },
                     )
-                    r = cur.fetchone()
-                    if r:
-                        msgs.append(str(next(iter(r.values()))))
-
-                for wallet_id, rows in nft_by_wallet.items():
-                    if not rows:
-                        continue
+                if active_ids:
                     cur.execute(
-                        UPSERT_NFT_SQL,
+                        MARK_PROBE_DONE_SQL,
                         {
-                            "wallet_id": wallet_id,
-                            "chain_id": chain_pk,
-                            "rows": json.dumps(rows),
+                            "row_ids": active_ids,
+                            "last_block": last_block,
+                            "enqueue_enrich": True,
                         },
                     )
-                    r = cur.fetchone()
-                    if r:
-                        msgs.append(str(next(iter(r.values()))))
-
-                cur.execute(
-                    MARK_DONE_SQL,
-                    {"row_ids": row_ids, "last_block": last_block},
-                )
             self._conn.commit()
-            return " | ".join(msgs) if msgs else "ok empty"
 
-        return self._run_with_db_retry("persist_and_mark_done", _save)
+        self._run_with_db_retry("mark_probe_done", _mark)
+
+    def enqueue_enrich_for_wallets(
+        self, *, chain_pk: int, wallet_ids: list[int]
+    ) -> int:
+        if not wallet_ids:
+            return 0
+
+        def _enq() -> int:
+            assert self._conn is not None
+            with self._conn.cursor() as cur:
+                cur.execute(
+                    ENQUEUE_ENRICH_BY_WALLET_SQL,
+                    {"chain_pk": chain_pk, "wallet_ids": wallet_ids},
+                )
+                n = cur.rowcount
+            self._conn.commit()
+            return int(n or 0)
+
+        return self._run_with_db_retry("enqueue_enrich_wallets", _enq)
+
+    def enqueue_enrich_native_deltas(self, *, chain_pk: int) -> int:
+        """Mark enrich from wallet_daily_metrics D vs D-1 on this chain."""
+
+        def _enq() -> int:
+            assert self._conn is not None
+            with self._conn.cursor() as cur:
+                cur.execute(
+                    ENQUEUE_ENRICH_NATIVE_DELTAS_SQL,
+                    {"chain_pk": chain_pk},
+                )
+                n = cur.rowcount
+            self._conn.commit()
+            return int(n or 0)
+
+        return self._run_with_db_retry("enqueue_enrich_native", _enq)
 
     def mark_error(self, row_ids: list[int], error_message: str) -> None:
         msg = (error_message or "unknown error").strip()
