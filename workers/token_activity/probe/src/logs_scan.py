@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from rpc import (
@@ -19,6 +20,10 @@ logger = logging.getLogger("wallet_token_activity_scan")
 
 TRANSFER_TOPIC0 = (
     "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+)
+_MAX_BLOCK_RANGE_RE = re.compile(
+    r"max(?:imum)?\s+block\s+range[:\s]+(\d+)",
+    re.IGNORECASE,
 )
 
 
@@ -112,7 +117,12 @@ async def probe_wallet_batch(
         except RpcError as exc:
             if is_logs_query_too_heavy(exc) and chunk > chunk_min:
                 msg = str(exc).lower()
-                if "max range: 800" in msg or "-32047" in msg:
+                m = _MAX_BLOCK_RANGE_RE.search(str(exc))
+                if m:
+                    provider_cap = max(chunk_min, int(m.group(1)))
+                    chunk = max(chunk_min, min(provider_cap, chunk // 2 if chunk > provider_cap else provider_cap))
+                    effective_max = min(effective_max, provider_cap)
+                elif "max range: 800" in msg or "-32047" in msg:
                     chunk = max(chunk_min, min(800, chunk // 2 if chunk <= 800 else 800))
                     effective_max = min(effective_max, 800)
                 else:

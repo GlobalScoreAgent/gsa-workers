@@ -25,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 from db import CLAIM_RETRY_BASE_SECONDS, Database
 from logs_scan import probe_wallet_batch
 from networks import NETWORKS
-from rpc import RpcClient, RpcError, is_rate_limit_error
+from rpc import RpcClient, RpcError, is_logs_query_too_heavy, is_rate_limit_error, is_soft_release_error
 
 logging.basicConfig(
     level=logging.INFO,
@@ -264,9 +264,10 @@ async def run_job() -> int:
             return len(chunk), len(chunk), len(enrich_row_ids)
         except Exception as exc:
             err_text = f"{exc.__class__.__name__}: {exc}"
-            if is_rate_limit_error(exc):
+            soft = is_soft_release_error(exc) or is_logs_query_too_heavy(exc)
+            if soft:
                 logger.warning(
-                    "RPC rate-limited chain=%s ids=%s; soft-release +5m (%s)",
+                    "RPC soft-release chain=%s ids=%s; +5m (%s)",
                     ctx.slug,
                     row_ids[:5],
                     err_text,
@@ -276,6 +277,12 @@ async def run_job() -> int:
                         db.release_claim(row_ids, delay_seconds=300)
                 except Exception as mark_exc:
                     logger.error("release_claim failed: %s", mark_exc)
+                # -2 soft release; -1 also shrink batch when range/topic issues.
+                if is_logs_query_too_heavy(exc) or (
+                    isinstance(exc, RpcError)
+                    and ("topic" in str(exc).lower() or "invalid" in str(exc).lower())
+                ):
+                    return len(chunk), 0, -1
                 return len(chunk), 0, -2
             logger.warning(
                 "Batch failed chain=%s ids=%s: %s",

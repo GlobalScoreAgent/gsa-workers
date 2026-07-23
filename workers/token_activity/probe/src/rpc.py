@@ -88,7 +88,11 @@ def is_block_range_too_large(exc: BaseException) -> bool:
             "max range",
             "block range is too large",
             "exceeds the range",
+            "exceeds range",
             "query exceeds max block",
+            "query exceeds range",
+            "max block range",
+            "retry smaller",
             "fromblock'-'toblock'",
             "fromblock\":\"toblock",
             "-32047",
@@ -104,18 +108,45 @@ def is_logs_query_too_heavy(exc: BaseException) -> bool:
 def is_hard_endpoint_failure(exc: BaseException) -> bool:
     """Provider is unusable for this run (ban URL; do not rotate back)."""
     if isinstance(exc, httpx.HTTPStatusError):
-        return exc.response.status_code in (401, 403)
+        # 400 on public getLogs often means "this node won't serve this query".
+        return exc.response.status_code in (400, 401, 403)
     text = str(exc).lower()
     return any(
         s in text
         for s in (
             "403 forbidden",
             "401 unauthorized",
+            "400 bad request",
             "status code 403",
             "status code 401",
+            "status code 400",
             "'403",
             "'401",
+            "'400",
             # JSON-RPC bodies (e.g. Ankr) often say Unauthorized without HTTP 401.
+            "unauthorized",
+            "api key",
+            "must authenticate",
+        )
+    )
+
+
+def is_soft_release_error(exc: BaseException) -> bool:
+    """Transient provider farm issues — requeue soon, do not burn census error."""
+    if is_rate_limit_error(exc):
+        return True
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code in (400, 401, 403, 429, 502, 503, 504)
+    text = str(exc).lower()
+    return any(
+        s in text
+        for s in (
+            "400 bad request",
+            "401 unauthorized",
+            "403 forbidden",
+            "502 bad gateway",
+            "503 service",
+            "504 gateway",
             "unauthorized",
             "api key",
             "must authenticate",

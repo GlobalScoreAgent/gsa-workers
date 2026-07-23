@@ -41,10 +41,11 @@ NETWORKS = {
         "evm_chain_id": 137,
         "block_time_sec": 2.0,
         "rpcs": [
-            "https://polygon.drpc.org",
             "https://polygon-bor.publicnode.com",
+            "https://polygon.drpc.org",
             "https://polygon-rpc.com",
         ],
+        "log_chunk_max": 3500,
     },
     "bsc": {
         "name": "BNB Smart Chain",
@@ -68,6 +69,8 @@ NETWORKS = {
             "https://forno.celo.org",
             "https://celo.drpc.org",
         ],
+        # forno rejects spans > 5000; keep adaptive grow under that.
+        "log_chunk_max": 5000,
     },
     "gnosis": {
         "name": "Gnosis Chain",
