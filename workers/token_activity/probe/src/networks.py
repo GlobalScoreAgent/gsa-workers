@@ -58,7 +58,6 @@ NETWORKS = {
             "https://bsc-dataseed2.bnbchain.org",
             "https://bsc.drpc.org",
             "https://bsc-dataseed1.defibit.io",
-            "https://rpc.ankr.com/bsc",
         ],
     },
     "celo": {
@@ -68,7 +67,6 @@ NETWORKS = {
         "rpcs": [
             "https://forno.celo.org",
             "https://celo.drpc.org",
-            "https://rpc.ankr.com/celo",
         ],
     },
     "gnosis": {
@@ -78,7 +76,6 @@ NETWORKS = {
         "rpcs": [
             "https://rpc.gnosischain.com",
             "https://gnosis-rpc.publicnode.com",
-            "https://rpc.ankr.com/gnosis",
         ],
     },
     "xlayer": {

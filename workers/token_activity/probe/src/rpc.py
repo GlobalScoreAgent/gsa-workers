@@ -115,6 +115,10 @@ def is_hard_endpoint_failure(exc: BaseException) -> bool:
             "status code 401",
             "'403",
             "'401",
+            # JSON-RPC bodies (e.g. Ankr) often say Unauthorized without HTTP 401.
+            "unauthorized",
+            "api key",
+            "must authenticate",
         )
     )
 
