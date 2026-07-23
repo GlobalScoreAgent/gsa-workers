@@ -46,8 +46,8 @@ jobs:
     timeout-minutes: 360
     strategy:
       fail-fast: false
-      # BSC=2 runners; other chains=1. Internal CONCURRENCY=2 per job.
-      max-parallel: 9
+      # Exactly 7 cells: BSC×3 + Base×2 + ETH×1 + _rest. Eth/Base/_rest pivot → BSC helper.
+      max-parallel: 7
       matrix: ${{ fromJson(needs.plan.outputs.matrix) }}
     concurrency:
       group: wallet-token-activity-scan-${{ matrix.chain }}-${{ matrix.shard }}
@@ -77,12 +77,12 @@ jobs:
           CHAIN: ${{ matrix.chain }}
           SHARD: ${{ matrix.shard }}
           SHARDS: ${{ matrix.shards }}
-          # Batch / LOG_CHUNK_* left unset so job.py uses per-chain NETWORKS defaults
-          # (ETH: batch=25, chunk=800; others: batch=50, chunk=2000).
-          # 2 BSC GHA jobs × CONCURRENCY 1 ≈ 2 parallel getLogs (different runner IPs).
-          # Higher pacing reduces -32005/429 on public RPCs.
+          # Batch / LOG_CHUNK_* unset → NETWORKS defaults per chain.
+          # Long-tail covered by CHAIN=_rest (sequential), then BSC helper.
+          REST_CHAINS: "celo,polygon,arbitrum,xlayer,gnosis"
           CONCURRENCY: "1"
           CLAIM_STALE_SECONDS: 7200
+          CLAIM_JITTER_MS: "2000"
           MAX_RUNTIME_SECONDS: 19800
           ACTIVITY_CATCHUP_MAX_DAYS: 15
           NATIVE_GATE_EVERY_N_LOOPS: 1

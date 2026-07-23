@@ -101,7 +101,7 @@ Trigger `trg_wallet_transactions_lp_flag_bu` sets LP pending when portfolio disc
 | `has_token_activity_error` / `token_activity_message_error` | Last probe failure (requeue +1h) |
 | `does_need_token_activity_enrich` | Enrich queue; probe **skips** while TRUE |
 | `token_activity_enrich_queued_at` / `completed_at` / `next_eligible_at` / claim / error | Future enrich worker |
-| `chains.token_activity_runner_count` | GHA shards; `max(1, round(7×wt%))` → matrix 11, concurrent ≤7 (`max-parallel`); `0` = omit |
+| `chains.token_activity_runner_count` | GHA shards; budget BSC=3 Base=2 ETH=1 long-tail=0 + `_rest` flex (=7); `0` = omit from dedicated matrix |
 
 Eligibility: due probe clock + enrich flag not true + `agent_wallet_tx.is_valid` + agent `validation_realness_status='valid'`.
 

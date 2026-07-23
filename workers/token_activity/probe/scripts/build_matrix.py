@@ -1,11 +1,8 @@
 #!/usr/bin/env python3
-"""Build GHA matrix JSON from erc_8004.chains.token_activity_runner_count.
+"""Build GHA matrix JSON for token activity probe (budget = 7 cells).
 
-Prints JSON object to stdout:
-  {"include":[{"chain":"ethereum","shard":0,"shards":2}, ...]}
-
-Chains with runner_count < 1 are omitted (capacity pause).
-Writes GitHub Actions output `matrix` when GITHUB_OUTPUT is set (heredoc-safe).
+Emits shards from chains.token_activity_runner_count (BSC/Base/ETH) plus a
+fixed `_rest` flex cell. Fails if include length != 7.
 """
 
 from __future__ import annotations
@@ -19,6 +16,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from db import Database
 from networks import NETWORKS
+
+EXPECTED_MATRIX_CELLS = 7
+REST_CELL = {"chain": "_rest", "shard": 0, "shards": 1}
 
 
 def main() -> int:
@@ -35,8 +35,13 @@ def main() -> int:
     finally:
         db.close()
 
-    if not cells:
-        print("No active chains for matrix", file=sys.stderr)
+    cells.append(dict(REST_CELL))
+    if len(cells) != EXPECTED_MATRIX_CELLS:
+        print(
+            f"Matrix must have exactly {EXPECTED_MATRIX_CELLS} cells, got {len(cells)}: "
+            f"{cells}",
+            file=sys.stderr,
+        )
         return 1
 
     matrix_obj = {"include": cells}

@@ -7,13 +7,14 @@ Path: `workers/token_activity/probe/`
 ## Pipeline
 
 ```
-plan → matrix from chains.token_activity_runner_count
-probe (CHAIN/SHARD) →
-  [shard0] native gate: wallet_daily_metrics D vs D-1 → does_need_token_activity_enrich
-  claim (skip enrich-pending) →
-  eth_getLogs Transfer from last_scanned (+catchup ≤15d) →
-  if any Transfer for wallet → flag enrich
+plan → matrix (BSC×3 + Base×2 + ETH×1 + _rest) = 7 cells
+probe (CHAIN/SHARD | CHAIN=_rest) →
+  [bsc shard0 only] native gate → does_need_token_activity_enrich
+  claim (SKIP LOCKED; jitter; BSC advisory lock) →
+  eth_getLogs Transfer (+catchup ≤15d) →
+  if Transfer → flag enrich
   mark probe done: last_scanned=tip, next_eligible=+15d
+  eth|base|_rest empty + time left → Pivot to BSC helper (no mod shard)
 ```
 
 ## Env
@@ -21,12 +22,14 @@ probe (CHAIN/SHARD) →
 | Var | Default | Role |
 |---|---|---|
 | `SUPABASE_DB_URL` | required | Postgres |
-| `CHAIN` / `SHARD` / `SHARDS` | required / 0 / 1 | matrix |
+| `CHAIN` / `SHARD` / `SHARDS` | matrix | slug, `_rest`, or dedicated shard |
+| `REST_CHAINS` | celo,polygon,arbitrum,xlayer,gnosis | order for `_rest` job |
 | `WALLET_BATCH_SIZE` | per-chain | getLogs sub-batch size |
-| `CONCURRENCY` | **1** (GHA) | parallel sub-batches after one claim; keep low with multi-shard BSC |
-| `RPC_MIN_INTERVAL_MS` | **400** | pace public RPC; raise if -32005/429 |
-| `ACTIVITY_CATCHUP_MAX_DAYS` | **15** | max block lookback (= census period) |
-| `NATIVE_GATE_EVERY_N_LOOPS` | 1 | how often shard0 runs native enqueue |
+| `CONCURRENCY` | **1** (GHA) | parallel sub-batches after one claim |
+| `RPC_MIN_INTERVAL_MS` | **400** | pace public RPC |
+| `CLAIM_JITTER_MS` | **2000** | random sleep before claim |
+| `ACTIVITY_CATCHUP_MAX_DAYS` | **15** | max block lookback |
+| `NATIVE_GATE_EVERY_N_LOOPS` | 1 | only dedicated `bsc` shard 0 |
 | `LOG_CHUNK_*` | per-chain | adaptive chunks |
 | `MAX_RUNTIME_SECONDS` | 19800 | soft stop |
 | `CLAIM_STALE_SECONDS` | 7200 | reclaim |
@@ -35,10 +38,10 @@ Secrets: only `SUPABASE_DB_URL`.
 
 ## Schema (apply first)
 
-Migration `20260723010000_token_activity_probe_census_15d.sql` — enrich flags.
-Migration `20260723040000_token_activity_runners_one_per_chain.sql` — **1 runner/chain**; parallelism via `CONCURRENCY`.
+- `20260723010000_token_activity_probe_census_15d.sql` — enrich flags
+- `20260723060000_token_activity_matrix_7_pivot.sql` — BSC=3, Base=2, ETH=1, long-tail=0
 
-GHA: cron **3/9/15/21**, `max-parallel: 8`, `CONCURRENCY=4`. Claim SQL uses two-phase + `awt.is_valid` (partial index).
+GHA: cron **3/9/15/21**, `max-parallel: 7`, `CONCURRENCY=1`. Claim: two-phase + `awt.is_valid`; BSC uses `pg_advisory_xact_lock`.
 
 ## Local
 
@@ -46,6 +49,8 @@ GHA: cron **3/9/15/21**, `max-parallel: 8`, `CONCURRENCY=4`. Claim SQL uses two-
 cd workers/token_activity/probe
 uv sync
 CHAIN=ethereum SHARD=0 SHARDS=1 uv run python job.py
+# flex long-tail then BSC helper:
+CHAIN=_rest SHARD=0 SHARDS=1 REST_CHAINS=celo,polygon uv run python job.py
 ```
 
 ## Monitoring

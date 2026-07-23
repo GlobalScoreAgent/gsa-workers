@@ -82,6 +82,71 @@ FROM updated u
 JOIN erc_8004.wallets w ON w.id = u.wallet_id
 """
 
+# BSC helper / any-shard claim: no mod() filter; SKIP LOCKED vs dedicated shards.
+CLAIM_ROWS_HELPER_SQL = """
+WITH rough AS MATERIALIZED (
+  SELECT wt.id, wt.wallet_id, wt.token_activity_next_eligible_at
+  FROM erc_8004.wallet_transactions wt
+  WHERE wt.chain_id = %(chain_pk)s
+    AND wt.token_activity_next_eligible_at IS NOT NULL
+    AND wt.token_activity_next_eligible_at <= NOW()
+    AND wt.does_need_token_activity_enrich IS NOT TRUE
+    AND (
+      wt.token_activity_claimed_at IS NULL
+      OR wt.token_activity_claimed_at
+           < NOW() - make_interval(secs => %(stale_seconds)s)
+    )
+  ORDER BY wt.token_activity_next_eligible_at, wt.id
+  LIMIT GREATEST(%(limit)s * 5, %(limit)s)
+),
+filtered AS MATERIALIZED (
+  SELECT r.id, r.token_activity_next_eligible_at
+  FROM rough r
+  WHERE EXISTS (
+    SELECT 1
+    FROM erc_8004.agent_wallet_tx awt
+    JOIN erc_8004.agents a
+      ON a.id = awt.agent_id
+     AND a.validation_realness_status = 'valid'
+    WHERE awt.wallet_id = r.wallet_id
+      AND awt.is_valid
+      AND awt.deleted_at IS NULL
+  )
+  ORDER BY r.token_activity_next_eligible_at, r.id
+  LIMIT %(limit)s
+),
+candidates AS (
+  SELECT wt.id
+  FROM erc_8004.wallet_transactions wt
+  JOIN filtered f ON f.id = wt.id
+  ORDER BY f.token_activity_next_eligible_at, wt.id
+  FOR UPDATE OF wt SKIP LOCKED
+),
+updated AS (
+  UPDATE erc_8004.wallet_transactions wt
+  SET
+    token_activity_claimed_at = NOW(),
+    token_activity_claimed_by = %(worker_id)s,
+    token_activity_next_eligible_at =
+      NOW() + make_interval(secs => %(stale_seconds)s)
+  FROM candidates c
+  WHERE wt.id = c.id
+  RETURNING
+    wt.id,
+    wt.wallet_id,
+    wt.chain_id,
+    wt.token_activity_last_scanned_block
+)
+SELECT
+  u.id,
+  u.wallet_id,
+  u.chain_id,
+  u.token_activity_last_scanned_block,
+  lower(w.address) AS address
+FROM updated u
+JOIN erc_8004.wallets w ON w.id = u.wallet_id
+"""
+
 MARK_PROBE_DONE_SQL = """
 UPDATE erc_8004.wallet_transactions
 SET
@@ -195,6 +260,8 @@ ORDER BY chain_id
 
 CLAIM_MAX_ATTEMPTS = 3
 CLAIM_RETRY_BASE_SECONDS = 2.0
+# Namespace for pg_advisory_xact_lock(k1, chain_pk) on BSC claims.
+CLAIM_ADVISORY_K1 = 800415  # token_activity claim
 ERROR_MESSAGE_MAX_LEN = 2000
 RETRYABLE_DB_EXCEPTIONS = (psycopg.OperationalError, psycopg.InterfaceError)
 _NO_RECONNECT_EXCEPTIONS = (
@@ -329,21 +396,29 @@ class Database:
         shards: int,
         limit: int,
         stale_seconds: int,
+        helper: bool = False,
+        serialize_claim: bool = False,
     ) -> list[dict[str, Any]]:
+        sql = CLAIM_ROWS_HELPER_SQL if helper else CLAIM_ROWS_SQL
+
         def _claim() -> list[dict[str, Any]]:
             assert self._conn is not None
             with self._conn.cursor() as cur:
-                cur.execute(
-                    CLAIM_ROWS_SQL,
-                    {
-                        "worker_id": worker_id,
-                        "chain_pk": chain_pk,
-                        "shard": shard,
-                        "shards": shards,
-                        "limit": limit,
-                        "stale_seconds": stale_seconds,
-                    },
-                )
+                if serialize_claim:
+                    cur.execute(
+                        "SELECT pg_advisory_xact_lock(%s, %s)",
+                        (CLAIM_ADVISORY_K1, int(chain_pk)),
+                    )
+                params: dict[str, Any] = {
+                    "worker_id": worker_id,
+                    "chain_pk": chain_pk,
+                    "limit": limit,
+                    "stale_seconds": stale_seconds,
+                }
+                if not helper:
+                    params["shard"] = shard
+                    params["shards"] = shards
+                cur.execute(sql, params)
                 rows = list(cur.fetchall())
             self._conn.commit()
             return rows

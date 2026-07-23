@@ -19,5 +19,6 @@ Docs: [CAPACITY.md](./CAPACITY.md) · [PROBE_REDESIGN.md](./PROBE_REDESIGN.md) �
 ## Ops
 
 - Workflow: `wallet-token-activity-scan.yml` → `workers/token_activity/probe`
-- Apply schema migration `20260723010000_token_activity_probe_census_15d.sql` before relying on enrich flags
-- Often **`disabled_manually`** in GHA until capacity/cron window is ready
+- Matrix **7**: BSC×3 + Base×2 + ETH×1 + `_rest` (pivot eth/base/rest → BSC helper)
+- Apply `20260723010000_…` (enrich flags) + `20260723060000_token_activity_matrix_7_pivot.sql`
+- Capacity: [CAPACITY.md](./CAPACITY.md)

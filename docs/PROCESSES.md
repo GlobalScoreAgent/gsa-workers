@@ -131,7 +131,7 @@ Worker README: [`wallet_lp_positions_discovery`](../workers/wallet_lp_positions_
 
 ### 9. Token activity probe (census 15d, public getLogs)
 
-**Live** (workflow often **`disabled_manually`**). Matrix GHA por chain×shard (`max(1,round(7×wt%))` → 11 cells, `max-parallel: 7`, cron 3/9/15/21). Código en `workers/token_activity/probe/`.
+**Live**. Matrix exacta **7** cells: BSC×3 + Base×2 + ETH×1 + `_rest` (`max-parallel: 7`, cron 3/9/15/21). Eth/Base/`_rest` pivotean a BSC helper al vaciar due. Código en `workers/token_activity/probe/`.
 
 ```
 [shard0] native gate (wallet_daily_metrics D vs D-1) → enrich flag
@@ -144,7 +144,7 @@ claim (skip does_need_token_activity_enrich) →
 |---|---|
 | Cursor | `token_activity_last_scanned_block`; catch-up max **15d** |
 | Cadence | `next_eligible + 15 days` after success |
-| Runners | 1 GHA job/chain + in-process `CONCURRENCY=4` (claim once → parallel getLogs) |
+| Runners | Matrix **7**: BSC×3 + Base×2 + ETH×1 + `_rest`; `CONCURRENCY=1`; pivot eth/base/rest → BSC helper |
 | Secrets | `SUPABASE_DB_URL` only |
 | Persist | **Sensor only** — no transfer/contract upserts |
 | Enrich | Flag only; worker TBD — [token_activity/ENRICH.md](./token_activity/ENRICH.md) |

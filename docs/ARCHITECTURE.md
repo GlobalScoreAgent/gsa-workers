@@ -79,7 +79,7 @@ stateDiagram-v2
 | `wallet_token_contracts_discovery` | `wallet-token-contracts-discovery.yml` | `wallet-token-contracts-discovery` | 1 runner |
 | `wallet_token_portfolio_discovery` | `wallet-token-portfolio-discovery.yml` | `wallet-token-portfolio-discovery` | 1 runner |
 | `wallet_lp_positions_discovery` | `wallet-lp-positions-discovery.yml` | `wallet-lp-positions-discovery` | 1 runner |
-| `token_activity/probe` | `wallet-token-activity-scan.yml` | per `chain-shard` | Runners by WT%×7 min1 (matrix 11); `max-parallel: 7`; cron 3/9/15/21 |
+| `token_activity/probe` | `wallet-token-activity-scan.yml` | per `chain-shard` + `_rest` | BSC×3+Base×2+ETH×1+`_rest` (=7); pivot→BSC helper; `max-parallel: 7`; cron 3/9/15/21 |
 | `agent_uri_resolve` | `agent-uri-resolve.yml` | `agent-uri-resolve` | 1 runner (00:00 / 12:00) |
 | `agent_uri_reprocess` | `agent-uri-reprocess.yml` | `agent-uri-reprocess` | 1 runner (06:00 / 18:00) |
 | `ai_agent_classifier` | `ai-agent-classifier.yml` | `ai-agent-classifier` | 1 runner (0/6/12/18) |
