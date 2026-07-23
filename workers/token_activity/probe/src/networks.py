@@ -50,10 +50,15 @@ NETWORKS = {
         "name": "BNB Smart Chain",
         "evm_chain_id": 56,
         "block_time_sec": 3.0,
+        # Prefer diverse public endpoints so rotate has somewhere to go on -32005/429.
         "rpcs": [
+            "https://bsc.publicnode.com",
             "https://bsc-dataseed.bnbchain.org",
+            "https://bsc-dataseed1.bnbchain.org",
+            "https://bsc-dataseed2.bnbchain.org",
             "https://bsc.drpc.org",
             "https://bsc-dataseed1.defibit.io",
+            "https://rpc.ankr.com/bsc",
         ],
     },
     "celo": {

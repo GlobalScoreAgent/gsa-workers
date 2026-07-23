@@ -23,7 +23,8 @@ probe (CHAIN/SHARD) →
 | `SUPABASE_DB_URL` | required | Postgres |
 | `CHAIN` / `SHARD` / `SHARDS` | required / 0 / 1 | matrix |
 | `WALLET_BATCH_SIZE` | per-chain | getLogs sub-batch size |
-| `CONCURRENCY` | **4** | parallel sub-batches after one claim (`claim_limit = batch × concurrency`) |
+| `CONCURRENCY` | **1** (GHA) | parallel sub-batches after one claim; keep low with multi-shard BSC |
+| `RPC_MIN_INTERVAL_MS` | **400** | pace public RPC; raise if -32005/429 |
 | `ACTIVITY_CATCHUP_MAX_DAYS` | **15** | max block lookback (= census period) |
 | `NATIVE_GATE_EVERY_N_LOOPS` | 1 | how often shard0 runs native enqueue |
 | `LOG_CHUNK_*` | per-chain | adaptive chunks |

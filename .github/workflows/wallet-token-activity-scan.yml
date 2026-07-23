@@ -79,12 +79,14 @@ jobs:
           SHARDS: ${{ matrix.shards }}
           # Batch / LOG_CHUNK_* left unset so job.py uses per-chain NETWORKS defaults
           # (ETH: batch=25, chunk=800; others: batch=50, chunk=2000).
-          CONCURRENCY: "2"
+          # 2 BSC GHA jobs × CONCURRENCY 1 ≈ 2 parallel getLogs (different runner IPs).
+          # Higher pacing reduces -32005/429 on public RPCs.
+          CONCURRENCY: "1"
           CLAIM_STALE_SECONDS: 7200
           MAX_RUNTIME_SECONDS: 19800
           ACTIVITY_CATCHUP_MAX_DAYS: 15
           NATIVE_GATE_EVERY_N_LOOPS: 1
-          RPC_MIN_INTERVAL_MS: 150
-          RPC_RETRY_BASE_SECONDS: 1
+          RPC_MIN_INTERVAL_MS: 400
+          RPC_RETRY_BASE_SECONDS: 2
           WORKER_ID: ${{ matrix.chain }}-s${{ matrix.shard }}
         run: uv run python job.py

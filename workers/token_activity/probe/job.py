@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 from db import CLAIM_RETRY_BASE_SECONDS, Database
 from logs_scan import probe_wallet_batch
 from networks import NETWORKS
-from rpc import RpcClient, RpcError
+from rpc import RpcClient, RpcError, is_rate_limit_error
 
 logging.basicConfig(
     level=logging.INFO,
@@ -188,6 +188,19 @@ async def run_job() -> int:
             return len(chunk), len(chunk), len(enrich_row_ids)
         except Exception as exc:
             err_text = f"{exc.__class__.__name__}: {exc}"
+            if is_rate_limit_error(exc):
+                logger.warning(
+                    "RPC rate-limited ids=%s; soft-release +5m (%s)",
+                    row_ids[:5],
+                    err_text,
+                )
+                try:
+                    async with db_lock:
+                        db.release_claim(row_ids, delay_seconds=300)
+                except Exception as mark_exc:
+                    logger.error("release_claim failed: %s", mark_exc)
+                # Count as processed but not completed/error burn.
+                return len(chunk), 0, -2  # -2 => rate-limit soft release
             logger.warning("Batch failed ids=%s: %s", row_ids[:5], err_text)
             try:
                 async with db_lock:
@@ -292,10 +305,14 @@ async def run_job() -> int:
                     processed += proc
                     if ok:
                         completed += ok
+                    elif enr == -2:
+                        pass  # soft-released on rate limit
                     else:
                         errors += proc
                     if enr == -1:
                         shrink = True
+                    elif enr == -2:
+                        pass
                     elif enr > 0:
                         enrich_from_logs += enr
 

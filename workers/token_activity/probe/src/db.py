@@ -113,6 +113,19 @@ SET
 WHERE id = ANY(%(row_ids)s)
 """
 
+# Soft release after transient RPC rate limits — do not burn a census error.
+RELEASE_CLAIM_SQL = """
+UPDATE erc_8004.wallet_transactions
+SET
+  token_activity_claimed_at = NULL,
+  token_activity_claimed_by = NULL,
+  token_activity_next_eligible_at =
+    NOW() + make_interval(secs => %(delay_seconds)s),
+  has_token_activity_error = FALSE,
+  token_activity_message_error = NULL
+WHERE id = ANY(%(row_ids)s)
+"""
+
 ENQUEUE_ENRICH_BY_WALLET_SQL = """
 UPDATE erc_8004.wallet_transactions
 SET
@@ -424,3 +437,20 @@ class Database:
             self._conn.commit()
 
         self._run_with_db_retry("mark_error", _mark)
+
+    def release_claim(self, row_ids: list[int], *, delay_seconds: int = 300) -> None:
+        """Return rows to the due queue soon (rate-limit / transient RPC)."""
+        if not row_ids:
+            return
+        delay = max(60, int(delay_seconds))
+
+        def _release() -> None:
+            assert self._conn is not None
+            with self._conn.cursor() as cur:
+                cur.execute(
+                    RELEASE_CLAIM_SQL,
+                    {"row_ids": row_ids, "delay_seconds": delay},
+                )
+            self._conn.commit()
+
+        self._run_with_db_retry("release_claim", _release)
