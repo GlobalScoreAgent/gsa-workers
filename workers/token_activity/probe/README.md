@@ -22,7 +22,8 @@ probe (CHAIN/SHARD) →
 |---|---|---|
 | `SUPABASE_DB_URL` | required | Postgres |
 | `CHAIN` / `SHARD` / `SHARDS` | required / 0 / 1 | matrix |
-| `WALLET_BATCH_SIZE` | per-chain | claim / OR topics size |
+| `WALLET_BATCH_SIZE` | per-chain | getLogs sub-batch size |
+| `CONCURRENCY` | **4** | parallel sub-batches after one claim (`claim_limit = batch × concurrency`) |
 | `ACTIVITY_CATCHUP_MAX_DAYS` | **15** | max block lookback (= census period) |
 | `NATIVE_GATE_EVERY_N_LOOPS` | 1 | how often shard0 runs native enqueue |
 | `LOG_CHUNK_*` | per-chain | adaptive chunks |
@@ -34,9 +35,9 @@ Secrets: only `SUPABASE_DB_URL`.
 ## Schema (apply first)
 
 Migration `20260723010000_token_activity_probe_census_15d.sql` — enrich flags.
-Migration `20260723020000_…` / `20260723030000_token_activity_runners_by_pct.sql` — runners by WT% of budget 7 (min 1; BSC=4, rest=1).
+Migration `20260723040000_token_activity_runners_one_per_chain.sql` — **1 runner/chain**; parallelism via `CONCURRENCY`.
 
-GHA: cron **3/9/15/21**, `max-parallel: 7` (matrix ~11 cells).
+GHA: cron **3/9/15/21**, `max-parallel: 8`, `CONCURRENCY=4`. Claim SQL uses two-phase + `awt.is_valid` (partial index).
 
 ## Local
 

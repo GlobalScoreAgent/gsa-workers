@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Per-chain sharded token activity probe (15d census via public eth_getLogs)."""
+"""Per-chain token activity probe (15d census via public eth_getLogs).
+
+One GHA job per chain (runner_count=1): single claim, then internal CONCURRENCY
+to probe sub-batches in parallel.
+"""
 
 from __future__ import annotations
 
@@ -54,6 +58,14 @@ def build_claimed_by(chain: str, shard: int, worker_suffix: str) -> str:
     return f"{CLAIMED_BY_PREFIX}:{chain}:s{shard}:{suffix}"
 
 
+def _chunk_rows(
+    rows: list[dict], size: int
+) -> list[list[dict]]:
+    if size <= 0:
+        return [rows]
+    return [rows[i : i + size] for i in range(0, len(rows), size)]
+
+
 async def run_job() -> int:
     dsn = os.environ.get("SUPABASE_DB_URL")
     if not dsn:
@@ -81,9 +93,10 @@ async def run_job() -> int:
     wallet_batch_size = env_int(
         "WALLET_BATCH_SIZE", default=default_batch, minimum=1, maximum=100
     )
+    # Parallel getLogs sub-batches after a single claim.
+    concurrency = env_int("CONCURRENCY", default=4, minimum=1, maximum=8)
     claim_stale_seconds = env_int("CLAIM_STALE_SECONDS", default=7200, minimum=60)
     max_runtime_seconds = env_int("MAX_RUNTIME_SECONDS", default=19800, minimum=60)
-    # Align catch-up with 15d census period (not 1d / 3d).
     catchup_max_days = env_int("ACTIVITY_CATCHUP_MAX_DAYS", default=15, minimum=1, maximum=15)
     chunk_blocks = env_int("LOG_CHUNK_BLOCKS", default=default_chunk, minimum=50)
     chunk_min = env_int("LOG_CHUNK_MIN", default=50, minimum=1)
@@ -97,6 +110,8 @@ async def run_job() -> int:
     claimed_by = build_claimed_by(chain_slug, shard, worker_suffix)
     native_gate_every = env_int("NATIVE_GATE_EVERY_N_LOOPS", default=1, minimum=1)
 
+    claim_limit = wallet_batch_size * concurrency
+
     db = Database(dsn)
     db.connect()
     chain_row = db.resolve_chain(int(net["evm_chain_id"]))
@@ -107,13 +122,16 @@ async def run_job() -> int:
 
     logger.info(
         "Started probe census chain=%s chain_pk=%s shard=%s/%s claimed_by=%s "
-        "batch=%s chunk=%s-%s catchup_days=%s max_runtime=%ss rpcs=%s",
+        "batch=%s concurrency=%s claim_limit=%s chunk=%s-%s catchup_days=%s "
+        "max_runtime=%ss rpcs=%s",
         chain_slug,
         chain_pk,
         shard,
         shards,
         claimed_by,
         wallet_batch_size,
+        concurrency,
+        claim_limit,
         chunk_blocks,
         chunk_max,
         catchup_max_days,
@@ -128,7 +146,59 @@ async def run_job() -> int:
     enrich_from_logs = 0
     enrich_from_native = 0
     loop_n = 0
-    http_limits = httpx.Limits(max_connections=20, max_keepalive_connections=10)
+    http_limits = httpx.Limits(
+        max_connections=max(20, concurrency * 4),
+        max_keepalive_connections=max(10, concurrency * 2),
+    )
+    db_lock = asyncio.Lock()
+
+    async def _process_chunk(
+        rpc: RpcClient, chunk: list[dict]
+    ) -> tuple[int, int, int]:
+        """Returns (processed, completed, enrich_count)."""
+        row_ids = [int(r["id"]) for r in chunk]
+        try:
+            active_wallets, to_block = await probe_wallet_batch(
+                rpc,
+                wallets=chunk,
+                block_time_sec=float(net["block_time_sec"]),
+                catchup_max_days=catchup_max_days,
+                chunk_blocks=chunk_blocks,
+                chunk_min=chunk_min,
+                chunk_max=chunk_max,
+            )
+            enrich_row_ids = [
+                int(r["id"])
+                for r in chunk
+                if int(r["wallet_id"]) in active_wallets
+            ]
+            async with db_lock:
+                db.mark_probe_done(
+                    row_ids=row_ids,
+                    last_block=to_block,
+                    enqueue_enrich_row_ids=enrich_row_ids,
+                )
+            logger.info(
+                "Probe done wallets=%s active=%s to_block=%s enrich=%s",
+                len(chunk),
+                len(active_wallets),
+                to_block,
+                len(enrich_row_ids),
+            )
+            return len(chunk), len(chunk), len(enrich_row_ids)
+        except Exception as exc:
+            err_text = f"{exc.__class__.__name__}: {exc}"
+            logger.warning("Batch failed ids=%s: %s", row_ids[:5], err_text)
+            try:
+                async with db_lock:
+                    db.mark_error(row_ids, err_text)
+            except Exception as mark_exc:
+                logger.error("mark_error failed: %s", mark_exc)
+            if isinstance(exc, RpcError) and (
+                "topic" in str(exc).lower() or "invalid" in str(exc).lower()
+            ):
+                return len(chunk), 0, -1  # enrich=-1 => shrink WALLET_BATCH_SIZE
+            return len(chunk), 0, 0
 
     try:
         async with httpx.AsyncClient(timeout=30.0, limits=http_limits) as http_client:
@@ -154,10 +224,10 @@ async def run_job() -> int:
                     break
 
                 loop_n += 1
-                # One native-gate pass per chain (shard 0 only) to avoid N× redundant UPDATEs.
                 if shard == 0 and (loop_n == 1 or loop_n % native_gate_every == 0):
                     try:
-                        n_nat = db.enqueue_enrich_native_deltas(chain_pk=chain_pk)
+                        async with db_lock:
+                            n_nat = db.enqueue_enrich_native_deltas(chain_pk=chain_pk)
                         if n_nat:
                             enrich_from_native += n_nat
                             logger.info(
@@ -169,14 +239,15 @@ async def run_job() -> int:
                         logger.warning("Native gate failed (continuing): %s", exc)
 
                 try:
-                    rows = db.claim_rows(
-                        worker_id=claimed_by,
-                        chain_pk=chain_pk,
-                        shard=shard,
-                        shards=shards,
-                        limit=wallet_batch_size,
-                        stale_seconds=claim_stale_seconds,
-                    )
+                    async with db_lock:
+                        rows = db.claim_rows(
+                            worker_id=claimed_by,
+                            chain_pk=chain_pk,
+                            shard=shard,
+                            shards=shards,
+                            limit=claim_limit,
+                            stale_seconds=claim_stale_seconds,
+                        )
                 except Exception as exc:
                     logger.error("Claim failed; will retry next loop: %s", exc)
                     await asyncio.sleep(CLAIM_RETRY_BASE_SECONDS)
@@ -189,64 +260,53 @@ async def run_job() -> int:
                         logger.info("No more pending probe rows in this run.")
                     break
 
-                row_ids = [int(r["id"]) for r in rows]
+                chunks = _chunk_rows(rows, wallet_batch_size)
                 logger.info(
-                    "Claimed batch size=%s first_id=%s last_id=%s",
+                    "Claimed batch size=%s chunks=%s concurrency=%s first_id=%s last_id=%s",
                     len(rows),
-                    row_ids[0],
-                    row_ids[-1],
+                    len(chunks),
+                    concurrency,
+                    int(rows[0]["id"]),
+                    int(rows[-1]["id"]),
                 )
 
-                try:
-                    active_wallets, to_block = await probe_wallet_batch(
-                        rpc,
-                        wallets=rows,
-                        block_time_sec=float(net["block_time_sec"]),
-                        catchup_max_days=catchup_max_days,
-                        chunk_blocks=chunk_blocks,
-                        chunk_min=chunk_min,
-                        chunk_max=chunk_max,
-                    )
+                # Cap parallel probes to CONCURRENCY (chunks may be fewer).
+                sem = asyncio.Semaphore(concurrency)
 
-                    enrich_row_ids = [
-                        int(r["id"])
-                        for r in rows
-                        if int(r["wallet_id"]) in active_wallets
-                    ]
-                    db.mark_probe_done(
-                        row_ids=row_ids,
-                        last_block=to_block,
-                        enqueue_enrich_row_ids=enrich_row_ids,
-                    )
-                    enrich_from_logs += len(enrich_row_ids)
-                    logger.info(
-                        "Probe done wallets=%s active=%s to_block=%s enrich=%s",
-                        len(rows),
-                        len(active_wallets),
-                        to_block,
-                        len(enrich_row_ids),
-                    )
-                    processed += len(rows)
-                    completed += len(rows)
-                except Exception as exc:
-                    err_text = f"{exc.__class__.__name__}: {exc}"
-                    logger.warning("Batch failed ids=%s: %s", row_ids[:5], err_text)
-                    try:
-                        db.mark_error(row_ids, err_text)
-                    except Exception as mark_exc:
-                        logger.error("mark_error failed: %s", mark_exc)
-                    processed += len(rows)
-                    errors += len(rows)
+                async def _gated(chunk: list[dict]) -> tuple[int, int, int]:
+                    async with sem:
+                        return await _process_chunk(rpc, chunk)
 
-                    if isinstance(exc, RpcError) and (
-                        "topic" in str(exc).lower() or "invalid" in str(exc).lower()
-                    ):
-                        if wallet_batch_size > 10:
-                            wallet_batch_size = max(10, wallet_batch_size // 2)
-                            logger.warning(
-                                "Shrinking WALLET_BATCH_SIZE -> %s after RPC error",
-                                wallet_batch_size,
-                            )
+                results = await asyncio.gather(
+                    *[_gated(c) for c in chunks],
+                    return_exceptions=True,
+                )
+                shrink = False
+                for res in results:
+                    if isinstance(res, BaseException):
+                        logger.error("Chunk task crashed: %s", res)
+                        errors += wallet_batch_size
+                        processed += wallet_batch_size
+                        continue
+                    proc, ok, enr = res
+                    processed += proc
+                    if ok:
+                        completed += ok
+                    else:
+                        errors += proc
+                    if enr == -1:
+                        shrink = True
+                    elif enr > 0:
+                        enrich_from_logs += enr
+
+                if shrink and wallet_batch_size > 10:
+                    wallet_batch_size = max(10, wallet_batch_size // 2)
+                    claim_limit = wallet_batch_size * concurrency
+                    logger.warning(
+                        "Shrinking WALLET_BATCH_SIZE -> %s claim_limit=%s after RPC error",
+                        wallet_batch_size,
+                        claim_limit,
+                    )
 
     except Exception:
         logger.error("Critical job failure:\n%s", traceback.format_exc())

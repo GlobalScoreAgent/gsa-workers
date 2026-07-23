@@ -14,9 +14,12 @@ from networks import EVM_CHAIN_ID_TO_SLUG
 
 logger = logging.getLogger("wallet_token_activity_scan")
 
+# Two-phase claim: cheap due index prefilter, then nested-loop validity via
+# idx_agent_wallet_tx_wallet_active. Use `awt.is_valid` (not `IS TRUE`) so the
+# partial index matches — otherwise Postgres seq-scans agent_wallet_tx (~15s+).
 CLAIM_ROWS_SQL = """
-WITH candidates AS (
-  SELECT wt.id
+WITH rough AS MATERIALIZED (
+  SELECT wt.id, wt.wallet_id, wt.token_activity_next_eligible_at
   FROM erc_8004.wallet_transactions wt
   WHERE wt.chain_id = %(chain_pk)s
     AND mod(wt.wallet_id, %(shards)s) = %(shard)s
@@ -28,17 +31,30 @@ WITH candidates AS (
       OR wt.token_activity_claimed_at
            < NOW() - make_interval(secs => %(stale_seconds)s)
     )
-    AND EXISTS (
-      SELECT 1
-      FROM erc_8004.agent_wallet_tx awt
-      JOIN erc_8004.agents a ON a.id = awt.agent_id
-      WHERE awt.wallet_id = wt.wallet_id
-        AND awt.is_valid IS TRUE
-        AND awt.deleted_at IS NULL
-        AND a.validation_realness_status = 'valid'
-    )
   ORDER BY wt.token_activity_next_eligible_at, wt.id
+  LIMIT GREATEST(%(limit)s * 5, %(limit)s)
+),
+filtered AS MATERIALIZED (
+  SELECT r.id, r.token_activity_next_eligible_at
+  FROM rough r
+  WHERE EXISTS (
+    SELECT 1
+    FROM erc_8004.agent_wallet_tx awt
+    JOIN erc_8004.agents a
+      ON a.id = awt.agent_id
+     AND a.validation_realness_status = 'valid'
+    WHERE awt.wallet_id = r.wallet_id
+      AND awt.is_valid
+      AND awt.deleted_at IS NULL
+  )
+  ORDER BY r.token_activity_next_eligible_at, r.id
   LIMIT %(limit)s
+),
+candidates AS (
+  SELECT wt.id
+  FROM erc_8004.wallet_transactions wt
+  JOIN filtered f ON f.id = wt.id
+  ORDER BY f.token_activity_next_eligible_at, wt.id
   FOR UPDATE OF wt SKIP LOCKED
 ),
 updated AS (
@@ -139,11 +155,12 @@ WHERE wt.wallet_id = d.wallet_id
   AND EXISTS (
     SELECT 1
     FROM erc_8004.agent_wallet_tx awt
-    JOIN erc_8004.agents a ON a.id = awt.agent_id
+    JOIN erc_8004.agents a
+      ON a.id = awt.agent_id
+     AND a.validation_realness_status = 'valid'
     WHERE awt.wallet_id = wt.wallet_id
-      AND awt.is_valid IS TRUE
+      AND awt.is_valid
       AND awt.deleted_at IS NULL
-      AND a.validation_realness_status = 'valid'
   )
 RETURNING wt.id
 """

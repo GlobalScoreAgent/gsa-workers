@@ -144,7 +144,7 @@ claim (skip does_need_token_activity_enrich) →
 |---|---|
 | Cursor | `token_activity_last_scanned_block`; catch-up max **15d** |
 | Cadence | `next_eligible + 15 days` after success |
-| Runners | `token_activity_runner_count` by WT% of budget 7, min 1 (bsc=4, others=1; max-parallel 7) |
+| Runners | 1 GHA job/chain + in-process `CONCURRENCY=4` (claim once → parallel getLogs) |
 | Secrets | `SUPABASE_DB_URL` only |
 | Persist | **Sensor only** — no transfer/contract upserts |
 | Enrich | Flag only; worker TBD — [token_activity/ENRICH.md](./token_activity/ENRICH.md) |

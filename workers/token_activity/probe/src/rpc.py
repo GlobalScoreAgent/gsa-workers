@@ -143,6 +143,7 @@ class RpcClient:
         self._max_retries = max(1, max_retries if max_retries is not None else default_retries)
         self._timeout = timeout
         self._last_call_at = 0.0
+        self._lock = asyncio.Lock()
 
     @property
     def current_url(self) -> str:
@@ -181,13 +182,14 @@ class RpcClient:
     async def call(self, method: str, params: list[Any]) -> Any:
         last_exc: Exception | None = None
         for attempt in range(1, self._max_retries + 1):
-            await self._pace()
-            # Skip sticky index if it was blacklisted mid-run.
-            if self.current_url in self._blacklisted:
-                self._rotate(ban_current=False)
-            url = self.current_url
-            try:
+            async with self._lock:
+                await self._pace()
+                # Skip sticky index if it was blacklisted mid-run.
+                if self.current_url in self._blacklisted:
+                    self._rotate(ban_current=False)
+                url = self.current_url
                 self._last_call_at = asyncio.get_event_loop().time()
+            try:
                 response = await self._client.post(
                     url,
                     json={
@@ -240,7 +242,8 @@ class RpcClient:
                     ban,
                 )
                 await asyncio.sleep(delay)
-                self._rotate(ban_current=ban)
+                async with self._lock:
+                    self._rotate(ban_current=ban)
         assert last_exc is not None
         raise last_exc
 
