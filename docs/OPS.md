@@ -53,11 +53,12 @@ Adjust column names for monthly / origin ([SUPABASE.md](./SUPABASE.md)).
 
 ## Dune queries import
 
-Reference-data job (`dune_queries_import`). No claim / `Pending` / `next_eligible_at`. Four Dune queries per run (paginated fetch + chunked upsert).
+Reference-data job (`dune_queries_import`). No claim / `Pending` / `next_eligible_at`. Four Dune queries per run (paginated fetch + chunked upsert). Schedule: day **18** 00:00 UTC (`0 0 18 * *`) after typical Dune billing reset ~17th (+ `workflow_dispatch`).
 
 | Symptom | Likely cause | Action |
 |---|---|---|
 | Workflow fails immediately | Missing/invalid `DUNE_KEY` or `SUPABASE_DB_URL` | Check repo secrets; re-run |
+| Task fails with HTTP **402** / datapoint limit | Billing-cycle quota exhausted (often `cex`) | Wait for reset (~17th) or raise limit; re-run with `dune_tasks=cex` when quota allows |
 | Task fails with 0 rows | Empty/stale Dune result for that query | Check the query on Dune; re-run when data exists |
 | Upsert / function does not exist | Migration not applied | Deploy `wallets_*_upsert` + tables in **gsa-supabase-schema** first |
 | Upsert timeout | Large chunk / DB load | Lower `UPSERT_CHUNK_SIZE`; check `statement_timeout` (worker uses 600s) |

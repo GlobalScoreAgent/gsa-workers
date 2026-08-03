@@ -85,7 +85,7 @@ stateDiagram-v2
 | `ai_agent_classifier` | `ai-agent-classifier.yml` | `ai-agent-classifier` | 1 runner (0/6/12/18) |
 
 Claim wallet workers schedule: `0 0,6,12,18 * * *` UTC + `workflow_dispatch`.  
-Dune queries import schedule: `0 0 1,16 * *` UTC + `workflow_dispatch` (1st and 16th ≈ every 15 days; 4 tasks per run).  
+Dune queries import schedule: `0 0 18 * *` UTC + `workflow_dispatch` (18th monthly, after typical Dune billing reset ~17th; 4 tasks per run).  
 Token prices import schedule: `0 0,6,12,18 * * *` UTC + `workflow_dispatch`.  
 URI resolve: `0 0,12 * * *`; URI reprocess: `0 6,18 * * *` (split cadence by design).  
 AI classifier: `0 0,6,12,18 * * *` UTC + `workflow_dispatch`.

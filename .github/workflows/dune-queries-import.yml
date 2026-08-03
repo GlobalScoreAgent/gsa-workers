@@ -2,7 +2,8 @@ name: Dune queries import
 
 on:
   schedule:
-    - cron: "0 0 1,16 * *"
+    # Day 18 UTC — day after typical Dune billing-cycle reset (~17th) so CEX has fresh datapoint quota.
+    - cron: "0 0 18 * *"
   workflow_dispatch:
     inputs:
       dune_tasks:

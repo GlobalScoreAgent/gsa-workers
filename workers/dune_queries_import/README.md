@@ -27,7 +27,7 @@ Large result sets: keep Dune queries bounded. An unbounded Bridges query (~1M+ r
 
 ## Schedule
 
-GitHub Actions: days **1 and 16** at 00:00 UTC (`0 0 1,16 * *`) + `workflow_dispatch` (~every 15 days). GHA timeout: **90 minutes**.
+GitHub Actions: day **18** at 00:00 UTC (`0 0 18 * *`) + `workflow_dispatch` (monthly, day after typical Dune billing reset ~17th — avoids CEX `HTTP 402` datapoint limit). GHA timeout: **90 minutes**.
 
 ### Partial re-run (`DUNE_TASKS`)
 
