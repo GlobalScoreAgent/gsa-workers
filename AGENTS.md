@@ -63,6 +63,7 @@ Token activity probe (public getLogs, live): [workers/token_activity/probe/READM
 | `agent_uri_resolve` | `agent-uri-resolve.yml` | direct SQL upsert | `uri_documents` + `agent_manifest` (ingest) |
 | `agent_uri_reprocess` | `agent-uri-reprocess.yml` | direct SQL upsert | error retry + off-chain `uri_documents` refresh |
 | `ai_agent_classifier` | `ai-agent-classifier.yml` | direct SQL | `web_dashboard.agents` AI category fields (`llm` config) |
+| `ethos_enrich` | `ethos-enrich.yml` | `claim/complete_history_fetch` + `upsert_official_scores` | `ethos.*` signals + `ethos.official_scores` (TTL 15d) |
 
 LP 15-day refresh worker: **not built** — see [docs/PENDING_LP_POSITIONS.md](./docs/PENDING_LP_POSITIONS.md).  
 Agent manifest **consume** (profile / feedbacks / liveness / sentinel): **not built** — keep legacy consume off until readers JOIN `uri_documents`.
@@ -71,7 +72,7 @@ Agent manifest **consume** (profile / feedbacks / liveness / sentinel): **not bu
 
 1. Local: `cd workers/<name>`, `uv sync`, `uv run python job.py` with `SUPABASE_DB_URL` (+ Alchemy / Dune / CoinGecko / `PINATA_GATEWAY` / `SCRAPE_DO_TOKEN` / `GROQ` as needed). URI workers also need `uv run playwright install chromium`.
 2. Or GitHub Actions → workflow → **Run workflow** (`workflow_dispatch`).
-3. Logs: `Claimed batch`, reconnect/retry, snapshot failures (wallet claim), Dune tasks / chunk upserts, token-price enrich, discovery `Done wt_id=`, URI `Claimed agents` / `on-chain` / `Reprocess` / `Refresh`, or classifier `Done agent_id=`.
+3. Logs: `Claimed batch`, reconnect/retry, snapshot failures (wallet claim), Dune tasks / chunk upserts, token-price enrich, discovery `Done wt_id=`, URI `Claimed agents` / `on-chain` / `Reprocess` / `Refresh`, classifier `Done agent_id=`, or ethos `Claimed history` / `Score chunk` / `Done history profile_id=`.
 4. SQL: eligible counts in [docs/SUPABASE.md](./docs/SUPABASE.md) (wallets + URI + AI classifier sections).
 
 ## When to touch which repo
