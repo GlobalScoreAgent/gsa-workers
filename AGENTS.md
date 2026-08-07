@@ -18,7 +18,7 @@ Entry point for AI agents (and humans) changing GitHub Actions batch workers.
 
 ## What this repo is
 
-**Python 3.12** batch jobs on **GitHub Actions**. Most claim rows from Supabase Postgres (`erc_8004.wallets` / `wallet_transactions`), query EVM chains over HTTP, save JSON, then call **inline SQL snapshot / upsert** RPCs. There are also **reference-data** workers (Dune queries, token prices), **URI ingest** workers (`uri_documents` + `agent_manifest`), **AI classification** (`web_dashboard.agents` via schema `llm`), and **on-demand backfill** (`on_demand_backfill`: Ethos history/scores + ERC-8183 + Virtual ACP satellites).
+**Python 3.12** batch jobs on **GitHub Actions**. Most claim rows from Supabase Postgres (`erc_8004.wallets` / `wallet_transactions`), query EVM chains over HTTP, save JSON, then call **inline SQL snapshot / upsert** RPCs. There are also **reference-data** workers (Dune queries, token prices), **URI ingest** workers (`uri_documents` + `agent_manifest`), **AI classification** (`web_dashboard.agents` via schema `llm`), and **on-demand backfill** (`on_demand_backfill`: Ethos history/scores + ERC-8183 + Virtual ACP + Olas Mech satellites).
 
 - **Not** Edge Functions / supabase-js in the hot path
 - **Not** Cloudflare Workers for these pipelines
@@ -63,7 +63,7 @@ Token activity probe (public getLogs, live): [workers/token_activity/probe/READM
 | `agent_uri_resolve` | `agent-uri-resolve.yml` | direct SQL upsert | `uri_documents` + `agent_manifest` (ingest) |
 | `agent_uri_reprocess` | `agent-uri-reprocess.yml` | direct SQL upsert | error retry + off-chain `uri_documents` refresh |
 | `ai_agent_classifier` | `ai-agent-classifier.yml` | direct SQL | `web_dashboard.agents` AI category fields (`llm` config) |
-| `on_demand_backfill` | `on-demand-backfill.yml` | Ethos claim/complete + scores; 8183 + Virtual ACP `claim/complete_satellite_backfill` | `ethos.*` + `official_scores` + `bsc_erc_8183` / `virtual_acp` satellites |
+| `on_demand_backfill` | `on-demand-backfill.yml` | Ethos claim/complete + scores; 8183 + Virtual ACP + Olas Mech `claim/complete_satellite_backfill` | `ethos.*` + `official_scores` + `bsc_erc_8183` / `virtual_acp` / `olas_mech` satellites |
 
 LP 15-day refresh worker: **not built** — see [docs/PENDING_LP_POSITIONS.md](./docs/PENDING_LP_POSITIONS.md).  
 Agent manifest **consume** (profile / feedbacks / liveness / sentinel): **not built** — keep legacy consume off until readers JOIN `uri_documents`.

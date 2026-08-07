@@ -288,7 +288,7 @@ Origin also has `scripts/check_pending.py` and `scripts/compare_smoke.py`. `wall
 | agent URI resolve | 4 | 20 | n/a |
 | agent URI reprocess | 4 | 20 | n/a |
 | AI agent classifier | 1 | 20 | n/a |
-| on-demand backfill | Ethos 3 / 8183 5 | Ethos 10 / 8183 100 | 7200 |
+| on-demand backfill | Ethos 3 / satellites 5 | Ethos 10 / satellites 100 | 7200 |
 
 Secrets: `SUPABASE_DB_URL` (required), `ALCHEMY_KEY` (balance/nonce), `ALCHEMY_FREE_KEY` (contracts / portfolio / LP), `DUNE_KEY` (dune queries), `COINGECKO_KEY` (token prices), `PINATA_GATEWAY` / `SCRAPE_DO_TOKEN` (URI workers, optional), `GROQ` (AI classifier). Daily sets `WORKER_ID` from the matrix.
 
@@ -297,13 +297,14 @@ Secrets: `SUPABASE_DB_URL` (required), `ALCHEMY_KEY` (balance/nonce), `ALCHEMY_F
 Catch-up after late GSA wallet link — **not** the continuous `graphs.*` normalize path.
 
 ```
-ethos_history → ethos_scores → erc8183_satellites → virtual_acp_satellites → olas_marketplace (stub)
+ethos_history → ethos_scores → erc8183_satellites → virtual_acp_satellites → olas_mech_satellites
 ```
 
 - Empty step queue → skip; step error → continue; global `MAX_RUNTIME_SECONDS`.
 - Ethos: `claim_history_fetch` / `complete` + `list_score_candidates` / `upsert_official_scores`.
 - ERC-8183: `bsc_erc_8183.claim_satellite_backfill` / `complete` → Goldsky ×4 → upsert.
 - Virtual ACP: `virtual_acp.claim_satellite_backfill` / `complete` → Goldsky ×4 → upsert (no `contract_address`).
+- Olas Mech: `olas_mech.claim_satellite_backfill` / `complete` → Autonolas Base/Gnosis → upsert requests/deliveries (`address` + `chain_id`).
 - Workflow: `on-demand-backfill.yml`. Replaces deprecated `ethos-enrich.yml`.
 
 See [PROCESSES.md](./PROCESSES.md) #13 and [`workers/on_demand_backfill/README.md`](../workers/on_demand_backfill/README.md).

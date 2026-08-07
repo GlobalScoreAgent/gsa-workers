@@ -629,3 +629,4 @@ Re-run: **Actions** → `ai-agent-classifier` → **Run workflow**. README: [`ai
 - Ethos linking (schema): sibling `gsa-supabase-schema` → `supabase/docs/ethos-erc8004-linking.md`
 - ERC-8183 catch-up: `supabase/docs/bsc-erc-8183-import.md` (Fase 3 = `on_demand_backfill`)
 - Virtual ACP catch-up: `supabase/docs/virtual-acp-import.md` (consumer = `on_demand_backfill` / `virtual_acp_satellites`)
+- Olas Mech catch-up: `supabase/docs/olas-mech-import.md` (consumer = `on_demand_backfill` / `olas_mech_satellites`)

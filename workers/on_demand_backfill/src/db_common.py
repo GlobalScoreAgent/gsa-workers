@@ -316,6 +316,69 @@ ON CONFLICT (id) DO UPDATE SET
 """,
 }
 
+OLAS_MECH_UPSERT_SQL: dict[str, str] = {
+    "requests": """
+INSERT INTO olas_mech.requests (
+  id, sender, priority_mech, mech, delivered_by_mech, is_delivered,
+  fee_raw, fee_unit, fee_usd, final_fee_usd, service_id,
+  chain_id, block_number, block_timestamp, tx_hash,
+  sender_wallet_id, priority_mech_wallet_id, mech_wallet_id,
+  imported_at, updated_at
+) VALUES (
+  %(id)s, %(sender)s, %(priority_mech)s, %(mech)s, %(delivered_by_mech)s,
+  %(is_delivered)s, %(fee_raw)s, %(fee_unit)s, %(fee_usd)s, %(final_fee_usd)s,
+  %(service_id)s, %(chain_id)s, %(block_number)s,
+  to_timestamp(%(block_timestamp)s), %(tx_hash)s,
+  (SELECT w.id FROM erc_8004.wallets w WHERE w.address = %(sender)s LIMIT 1),
+  (SELECT w.id FROM erc_8004.wallets w WHERE w.address = %(priority_mech)s LIMIT 1),
+  (SELECT w.id FROM erc_8004.wallets w WHERE w.address = %(mech)s LIMIT 1),
+  NOW(), NOW()
+)
+ON CONFLICT (id) DO UPDATE SET
+  sender = EXCLUDED.sender,
+  priority_mech = EXCLUDED.priority_mech,
+  mech = EXCLUDED.mech,
+  delivered_by_mech = EXCLUDED.delivered_by_mech,
+  is_delivered = EXCLUDED.is_delivered,
+  fee_raw = EXCLUDED.fee_raw,
+  fee_unit = EXCLUDED.fee_unit,
+  fee_usd = EXCLUDED.fee_usd,
+  final_fee_usd = EXCLUDED.final_fee_usd,
+  service_id = EXCLUDED.service_id,
+  chain_id = EXCLUDED.chain_id,
+  block_number = EXCLUDED.block_number,
+  block_timestamp = EXCLUDED.block_timestamp,
+  tx_hash = EXCLUDED.tx_hash,
+  sender_wallet_id = EXCLUDED.sender_wallet_id,
+  priority_mech_wallet_id = EXCLUDED.priority_mech_wallet_id,
+  mech_wallet_id = EXCLUDED.mech_wallet_id,
+  updated_at = NOW()
+""",
+    "deliveries": """
+INSERT INTO olas_mech.deliveries (
+  id, request_id, delivery_mech, delivered, num_deliveries,
+  chain_id, block_number, block_timestamp, tx_hash,
+  delivery_mech_wallet_id, imported_at, updated_at
+) VALUES (
+  %(id)s, %(request_id)s, %(delivery_mech)s, %(delivered)s, %(num_deliveries)s,
+  %(chain_id)s, %(block_number)s, to_timestamp(%(block_timestamp)s), %(tx_hash)s,
+  (SELECT w.id FROM erc_8004.wallets w WHERE w.address = %(delivery_mech)s LIMIT 1),
+  NOW(), NOW()
+)
+ON CONFLICT (id) DO UPDATE SET
+  request_id = EXCLUDED.request_id,
+  delivery_mech = EXCLUDED.delivery_mech,
+  delivered = EXCLUDED.delivered,
+  num_deliveries = EXCLUDED.num_deliveries,
+  chain_id = EXCLUDED.chain_id,
+  block_number = EXCLUDED.block_number,
+  block_timestamp = EXCLUDED.block_timestamp,
+  tx_hash = EXCLUDED.tx_hash,
+  delivery_mech_wallet_id = EXCLUDED.delivery_mech_wallet_id,
+  updated_at = NOW()
+""",
+}
+
 
 class Database:
     def __init__(self, dsn: str):
@@ -574,3 +637,59 @@ class Database:
             return len(rows)
 
         return self._run_with_db_retry(f"upsert_virtual_acp_{entity}", _upsert)
+
+    # --- Olas Mech ---
+
+    def claim_olas_mech_satellite_backfill(
+        self, worker_id: str, limit: int, stale_seconds: int
+    ) -> list[dict[str, Any]]:
+        def _claim() -> list[dict[str, Any]]:
+            assert self._conn is not None
+            with self._conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT id, address, chain_id
+                      FROM olas_mech.claim_satellite_backfill(%s, %s, %s)
+                    """,
+                    (limit, worker_id, stale_seconds),
+                )
+                rows = list(cur.fetchall())
+            self._conn.commit()
+            return rows
+
+        return self._run_with_db_retry("claim_olas_mech_satellite_backfill", _claim)
+
+    def complete_olas_mech_satellite_backfill(self, ids: list[str]) -> int:
+        if not ids:
+            return 0
+
+        def _complete() -> int:
+            assert self._conn is not None
+            with self._conn.cursor() as cur:
+                cur.execute(
+                    "SELECT olas_mech.complete_satellite_backfill(%s::text[])",
+                    (ids,),
+                )
+                result = cur.fetchone()
+            self._conn.commit()
+            if result is None:
+                return 0
+            return int(next(iter(result.values())))
+
+        return self._run_with_db_retry("complete_olas_mech_satellite_backfill", _complete)
+
+    def upsert_olas_mech_entity_rows(self, entity: str, rows: list[dict[str, Any]]) -> int:
+        if not rows:
+            return 0
+        sql = OLAS_MECH_UPSERT_SQL.get(entity)
+        if sql is None:
+            raise ValueError(f"unknown olas_mech entity for upsert: {entity}")
+
+        def _upsert() -> int:
+            assert self._conn is not None
+            with self._conn.cursor() as cur:
+                cur.executemany(sql, rows)
+            self._conn.commit()
+            return len(rows)
+
+        return self._run_with_db_retry(f"upsert_olas_mech_{entity}", _upsert)

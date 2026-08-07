@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""On-demand backfill orchestrator: Ethos + ERC-8183 + Virtual ACP (+ Olas stub)."""
+"""On-demand backfill orchestrator: Ethos + ERC-8183 + Virtual ACP + Olas Mech."""
 
 from __future__ import annotations
 
@@ -19,12 +19,14 @@ from db_common import Database
 from ethos.goldsky import DEFAULT_GOLDSKY_URL as DEFAULT_ETHOS_GOLDSKY
 from ethos.score_api import DEFAULT_ETHOS_API_BASE
 from erc8183.goldsky import DEFAULT_GOLDSKY_URL as DEFAULT_ERC8183_GOLDSKY
+from olas_mech.autonolas import DEFAULT_BASE_URL as DEFAULT_OLAS_BASE
+from olas_mech.autonolas import DEFAULT_GNOSIS_URL as DEFAULT_OLAS_GNOSIS
 from orchestrator import run_steps
 from steps.base import StepContext
 from steps.erc8183_satellites import Erc8183SatellitesStep
 from steps.ethos_history import EthosHistoryStep
 from steps.ethos_scores import EthosScoresStep
-from steps.olas_marketplace import OlasMarketplaceStep
+from steps.olas_mech_satellites import OlasMechSatellitesStep
 from steps.virtual_acp_satellites import VirtualAcpSatellitesStep
 from virtual_acp.goldsky import DEFAULT_GOLDSKY_URL as DEFAULT_VIRTUAL_ACP_GOLDSKY
 
@@ -106,6 +108,17 @@ async def run_job() -> int:
         "virtual_acp_concurrency": env_int(
             "VIRTUAL_ACP_CONCURRENCY", default=5, minimum=1, maximum=20
         ),
+        "olas_mech_base_url": env_str("OLAS_MECH_BASE_URL", DEFAULT_OLAS_BASE),
+        "olas_mech_gnosis_url": env_str("OLAS_MECH_GNOSIS_URL", DEFAULT_OLAS_GNOSIS),
+        "olas_mech_claim_batch_size": env_int(
+            "OLAS_MECH_CLAIM_BATCH_SIZE", default=100, minimum=1, maximum=500
+        ),
+        "olas_mech_claim_stale_seconds": env_int(
+            "OLAS_MECH_CLAIM_STALE_SECONDS", default=7200, minimum=60
+        ),
+        "olas_mech_concurrency": env_int(
+            "OLAS_MECH_CONCURRENCY", default=5, minimum=1, maximum=20
+        ),
     }
 
     db = Database(dsn)
@@ -120,7 +133,7 @@ async def run_job() -> int:
         EthosScoresStep(),
         Erc8183SatellitesStep(),
         VirtualAcpSatellitesStep(),
-        OlasMarketplaceStep(),
+        OlasMechSatellitesStep(),
     ]
 
     logger.info(

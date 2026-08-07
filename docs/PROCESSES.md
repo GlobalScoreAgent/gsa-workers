@@ -76,7 +76,7 @@ flowchart TB
 | 10 | [`agent_uri_resolve`](../workers/agent_uri_resolve/README.md) | Claim (agents / feedbacks) | 00:00, 12:00 | `is_uri_processed` / `is_feedback_processed` | direct SQL | `uri_documents` + `agent_manifest` |
 | 11 | [`agent_uri_reprocess`](../workers/agent_uri_reprocess/README.md) | Claim (manifest errors + docs) | 06:00, 18:00 | download errors / off-chain &gt;15d | direct SQL | retry + refresh `uri_documents` |
 | 12 | [`ai_agent_classifier`](../workers/ai_agent_classifier/README.md) | Claim (`web_dashboard.agents`) | 0/6/12/18 | `does_need_ai_category_process` | exact-hash copy or LLM | `ai_category_*` + `ai_category_input_hash` |
-| 13 | [`on_demand_backfill`](../workers/on_demand_backfill/README.md) | Orchestrator (Ethos + ERC-8183 + Virtual ACP + Olas stub) | 0/6/12/18 | `needs_history_fetch` → scores TTL 15d → `needs_satellite_backfill` (8183 + Virtual ACP) | per-step claim/complete | `ethos.*` + `official_scores` + `bsc_erc_8183` / `virtual_acp` satellites |
+| 13 | [`on_demand_backfill`](../workers/on_demand_backfill/README.md) | Orchestrator (Ethos + ERC-8183 + Virtual ACP + Olas Mech) | 0/6/12/18 | `needs_history_fetch` → scores TTL 15d → `needs_satellite_backfill` (8183 + Virtual ACP + Olas Mech) | per-step claim/complete | `ethos.*` + `official_scores` + `bsc_erc_8183` / `virtual_acp` / `olas_mech` satellites |
 
 Soft runtime budget for claim / enrich jobs: **`MAX_RUNTIME_SECONDS=19800`** (~5.5h). Empty queue → exit 0; next cron still fires.
 
@@ -201,12 +201,12 @@ Worker README: [`ai_agent_classifier`](../workers/ai_agent_classifier/README.md)
 | [PENDING_TOKEN_ACTIVITY_RPC.md](./PENDING_TOKEN_ACTIVITY_RPC.md) | Probe census 15d live under `workers/token_activity/probe`; enrich 15d TBD; ERC-1155 deferred |
 | Agent manifest **consume** | Not built — rewrite SQL readers to JOIN `uri_documents`, then GHA orchestrator; keep legacy pg_cron consume **off** |
 
-### 13. On-demand backfill (Ethos + ERC-8183 + stubs)
+### 13. On-demand backfill (Ethos + ERC-8183 + Virtual ACP + Olas Mech)
 
-**Live (schema claims Ethos / 8183 / Virtual ACP must be deployed).** Orchestrator with sequential plug-in steps; empty step → skip; step error → continue; global `MAX_RUNTIME_SECONDS`.
+**Live (schema claims Ethos / 8183 / Virtual ACP / Olas Mech must be deployed).** Orchestrator with sequential plug-in steps; empty step → skip; step error → continue; global `MAX_RUNTIME_SECONDS`.
 
 ```
-ethos_history → ethos_scores → erc8183_satellites → virtual_acp_satellites → olas_marketplace (stub)
+ethos_history → ethos_scores → erc8183_satellites → virtual_acp_satellites → olas_mech_satellites
 ```
 
 | Step | Queue / action |
@@ -215,7 +215,7 @@ ethos_history → ethos_scores → erc8183_satellites → virtual_acp_satellites
 | `ethos_scores` | linked wallets due TTL **15d** → Ethos API → `upsert_official_scores` |
 | `erc8183_satellites` | `bsc_erc_8183.needs_satellite_backfill` → Goldsky ×4 → upsert → complete (even if 0 events) |
 | `virtual_acp_satellites` | `virtual_acp.needs_satellite_backfill` → Goldsky ×4 → upsert → complete (even if 0 events) |
-| `olas_marketplace` | stub until dedicated ADR |
+| `olas_mech_satellites` | `olas_mech.needs_satellite_backfill` → Autonolas ×2 → upsert requests/deliveries → complete (even if 0 events) |
 
 | Item | Detail |
 |---|---|
@@ -224,6 +224,7 @@ ethos_history → ethos_scores → erc8183_satellites → virtual_acp_satellites
 | Schema Ethos | `20260806010000_ethos_enrich_worker.sql` |
 | Schema 8183 claim | `20260807010000_bsc_erc_8183_satellite_backfill_claim.sql` |
 | Schema Virtual ACP claim | `20260807140000_virtual_acp_satellite_backfill_claim.sql` |
+| Schema Olas Mech claim | `20260807154000_olas_mech_satellite_backfill_claim.sql` |
 
 ## Secrets cheat sheet
 
