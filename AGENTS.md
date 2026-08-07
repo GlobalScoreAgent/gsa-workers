@@ -18,7 +18,7 @@ Entry point for AI agents (and humans) changing GitHub Actions batch workers.
 
 ## What this repo is
 
-**Python 3.12** batch jobs on **GitHub Actions**. Most claim rows from Supabase Postgres (`erc_8004.wallets` / `wallet_transactions`), query EVM chains over HTTP, save JSON, then call **inline SQL snapshot / upsert** RPCs. There are also **reference-data** workers (Dune queries, token prices), **URI ingest** workers (`uri_documents` + `agent_manifest`), and **AI classification** (`web_dashboard.agents` via schema `llm`).
+**Python 3.12** batch jobs on **GitHub Actions**. Most claim rows from Supabase Postgres (`erc_8004.wallets` / `wallet_transactions`), query EVM chains over HTTP, save JSON, then call **inline SQL snapshot / upsert** RPCs. There are also **reference-data** workers (Dune queries, token prices), **URI ingest** workers (`uri_documents` + `agent_manifest`), **AI classification** (`web_dashboard.agents` via schema `llm`), and **on-demand backfill** (`on_demand_backfill`: Ethos history/scores + ERC-8183 satellites).
 
 - **Not** Edge Functions / supabase-js in the hot path
 - **Not** Cloudflare Workers for these pipelines
@@ -28,12 +28,12 @@ Entry point for AI agents (and humans) changing GitHub Actions batch workers.
 
 1. [README.md](./README.md) — workers table, secrets, local run
 2. [docs/PROCESSES.md](./docs/PROCESSES.md) — catalog of all live pipelines
-3. [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) — claim → save → snapshot (wallets) + URI resolve/reprocess
+3. [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) — claim → save → snapshot (wallets) + URI + on-demand backfill
 4. [docs/SUPABASE.md](./docs/SUPABASE.md) — columns, RPCs, monitoring SQL
 5. The worker README for the job you touch (`workers/<name>/README.md`)
 6. That worker’s `src/db.py` and `job.py` (code of truth)
 
-Ops / stuck wallets: [docs/OPS.md](./docs/OPS.md). Deprecations: [docs/DEPRECATION.md](./docs/DEPRECATION.md).  
+Ops / stuck wallets: [docs/OPS.md](./docs/OPS.md). Deprecations: [docs/DEPRECATION.md](./docs/DEPRECATION.md) (`ethos-enrich` absorbed by `on_demand_backfill`).  
 LP discovery is live; 15-day refresh still pending: [docs/PENDING_LP_POSITIONS.md](./docs/PENDING_LP_POSITIONS.md).  
 Token contracts + Alchemy Free design: [docs/TOKEN_CONTRACTS_DISCOVERY_ALCHEMY.md](./docs/TOKEN_CONTRACTS_DISCOVERY_ALCHEMY.md).  
 Token activity probe (public getLogs, live): [workers/token_activity/probe/README.md](./workers/token_activity/probe/README.md). Design notes: [docs/PENDING_TOKEN_ACTIVITY_RPC.md](./docs/PENDING_TOKEN_ACTIVITY_RPC.md) · [docs/token_activity/](./docs/token_activity/).
@@ -72,8 +72,8 @@ Agent manifest **consume** (profile / feedbacks / liveness / sentinel): **not bu
 
 1. Local: `cd workers/<name>`, `uv sync`, `uv run python job.py` with `SUPABASE_DB_URL` (+ Alchemy / Dune / CoinGecko / `PINATA_GATEWAY` / `SCRAPE_DO_TOKEN` / `GROQ` as needed). URI workers also need `uv run playwright install chromium`.
 2. Or GitHub Actions → workflow → **Run workflow** (`workflow_dispatch`).
-3. Logs: `Claimed batch`, reconnect/retry, snapshot failures (wallet claim), Dune tasks / chunk upserts, token-price enrich, discovery `Done wt_id=`, URI `Claimed agents` / `on-chain` / `Reprocess` / `Refresh`, classifier `Done agent_id=`, or ethos `Claimed history` / `Score chunk` / `Done history profile_id=`.
-4. SQL: eligible counts in [docs/SUPABASE.md](./docs/SUPABASE.md) (wallets + URI + AI classifier sections).
+3. Logs: `Claimed batch`, reconnect/retry, snapshot failures (wallet claim), Dune tasks / chunk upserts, token-price enrich, discovery `Done wt_id=`, URI `Claimed agents` / `on-chain` / `Reprocess` / `Refresh`, classifier `Done agent_id=`, or on-demand backfill `Step done name=` / `skipped_empty` / `Claimed history` / `Claimed satellite`.
+4. SQL: eligible counts in [docs/SUPABASE.md](./docs/SUPABASE.md) (wallets + URI + AI classifier sections); Ethos/8183 catch-up counts in worker README / vault Monitoreo.
 
 ## When to touch which repo
 

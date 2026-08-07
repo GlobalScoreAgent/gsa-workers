@@ -624,5 +624,7 @@ Re-run: **Actions** → `ai-agent-classifier` → **Run workflow**. README: [`ai
 
 - [ARCHITECTURE.md](./ARCHITECTURE.md) — GHA pipeline and state machine
 - [OPS.md](./OPS.md) — stuck wallets, URI ops, logs
-- [PROCESSES.md](./PROCESSES.md) — live catalog (#9–10 URI ingest)
+- [PROCESSES.md](./PROCESSES.md) — live catalog (#10–11 URI ingest, **#13 on-demand backfill**)
 - Worker READMEs under `workers/*/README.md`
+- Ethos linking (schema): sibling `gsa-supabase-schema` → `supabase/docs/ethos-erc8004-linking.md`
+- ERC-8183 catch-up: `supabase/docs/bsc-erc-8183-import.md` (Fase 3 = `on_demand_backfill`)

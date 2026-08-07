@@ -2,7 +2,7 @@
 
 Unified Python batch workers for [Global Score Agent](https://www.globalscoreagent.com/), run via GitHub Actions against Supabase Postgres.
 
-**For AI agents:** start at [AGENTS.md](./AGENTS.md). Process catalog: [docs/PROCESSES.md](./docs/PROCESSES.md) (wallet pipelines + **URI resolve/reprocess** #9–10). Architecture / DB / ops: [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md), [docs/SUPABASE.md](./docs/SUPABASE.md), [docs/OPS.md](./docs/OPS.md). LP **15-day refresh** still pending: [docs/PENDING_LP_POSITIONS.md](./docs/PENDING_LP_POSITIONS.md).
+**For AI agents:** start at [AGENTS.md](./AGENTS.md). Process catalog: [docs/PROCESSES.md](./docs/PROCESSES.md) (wallet pipelines + URI #10–11 + **on-demand backfill** #13). Architecture / DB / ops: [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md), [docs/SUPABASE.md](./docs/SUPABASE.md), [docs/OPS.md](./docs/OPS.md). LP **15-day refresh** still pending: [docs/PENDING_LP_POSITIONS.md](./docs/PENDING_LP_POSITIONS.md).
 
 ## Workers
 
@@ -19,8 +19,9 @@ Unified Python batch workers for [Global Score Agent](https://www.globalscoreage
 | [`agent_uri_resolve`](./workers/agent_uri_resolve/README.md) | 00:00, 12:00 | agents / `feedback_on_chain` / external feedbacks pending | Resolve/materialize → `uri_documents` + `agent_manifest` |
 | [`agent_uri_reprocess`](./workers/agent_uri_reprocess/README.md) | 06:00, 18:00 | download errors (max 3) + off-chain docs &gt;15d | Retry errors; refresh HTTP/IPFS; `is_processed` only if document changed |
 | [`ai_agent_classifier`](./workers/ai_agent_classifier/README.md) | 0, 6, 12, 18h | `web_dashboard.agents.does_need_ai_category_process` | LLM categories → `ai_category_*` (+ `llm.models_requests` rate limits) |
+| [`on_demand_backfill`](./workers/on_demand_backfill/README.md) | 0, 6, 12, 18h | per-step queues (Ethos history/scores, ERC-8183 satellites; Virtuals/Olas stubs) | Orchestrator catch-up after late wallet link |
 
-Pending: [LP 15-day refresh](./docs/PENDING_LP_POSITIONS.md). Manifest **consume** (entity SPs) not built yet.
+Pending: [LP 15-day refresh](./docs/PENDING_LP_POSITIONS.md). Manifest **consume** (entity SPs) not built yet. `ethos_enrich` → absorbed by `on_demand_backfill` ([DEPRECATION](./docs/DEPRECATION.md)).
 
 ## Common pipeline (claim workers)
 
@@ -61,6 +62,7 @@ Reference-data: `dune_queries_import` (4 Dune queries → upserts); `token_price
 | agent URI resolve | 4 | 20 | n/a | 19800 |
 | agent URI reprocess | 4 | 20 | n/a | 19800 |
 | AI agent classifier | 1 | 20 | n/a | 19800 |
+| on-demand backfill | Ethos 3 / 8183 5 | Ethos 10 / 8183 100 | 7200 | 19800 |
 
 Daily also sets `WORKER_ID` to `worker-a` or `worker-b`. Origin/monthly set `SKIP_ELIGIBLE_COUNT=1`.
 
@@ -122,6 +124,9 @@ gsa-workers/
 │   ├── ai_agent_classifier/
 │   │   ├── job.py
 │   │   └── src/          # db, llm_client, prompt
+│   ├── on_demand_backfill/
+│   │   ├── job.py        # orchestrator (Ethos + ERC-8183 + stubs)
+│   │   └── src/          # steps/, ethos/, erc8183/, db_common
 │   ├── agent_uri_resolve/
 │   │   ├── job.py
 │   │   └── src/          # db, resolve, handlers, scrape (Playwright)
@@ -137,6 +142,8 @@ gsa-workers/
     ├── wallet-token-contracts-discovery.yml
     ├── wallet-token-portfolio-discovery.yml
     ├── wallet-lp-positions-discovery.yml
+    ├── ai-agent-classifier.yml
+    ├── on-demand-backfill.yml
     ├── agent-uri-resolve.yml
     └── agent-uri-reprocess.yml
 ```
