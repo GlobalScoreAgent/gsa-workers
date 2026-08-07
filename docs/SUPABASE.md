@@ -620,6 +620,41 @@ ORDER BY m.id;
 
 Re-run: **Actions** → `ai-agent-classifier` → **Run workflow**. README: [`ai_agent_classifier`](../workers/ai_agent_classifier/README.md).
 
+## Monitoring — on-demand backfill (#13)
+
+One GHA workflow (`on-demand-backfill.yml`) runs **four** sequential steps. Empty queue → skip; step error → continue.
+
+```sql
+SELECT jsonb_build_object(
+  'ethos_history_pending', (
+    SELECT count(*) FROM ethos.profile_addresses WHERE needs_history_fetch = true
+  ),
+  'ethos_score_due', (
+    SELECT count(*) FROM ethos.list_score_candidates(100000)
+  ),
+  'official_scores', (SELECT count(*) FROM ethos.official_scores),
+  'erc8183_pending', (
+    SELECT count(*) FROM bsc_erc_8183.jobs WHERE needs_satellite_backfill = true
+  ),
+  'vacp_pending', (
+    SELECT count(*) FILTER (WHERE needs_satellite_backfill) FROM virtual_acp.jobs
+  ),
+  'olas_pending', (
+    SELECT count(*) FILTER (WHERE needs_satellite_backfill) FROM olas_mech.mechs
+  ),
+  'olas_requests', (SELECT count(*) FROM olas_mech.requests),
+  'olas_deliveries', (SELECT count(*) FROM olas_mech.deliveries)
+) AS on_demand_queues;
+```
+
+| Step | Queue | Source GraphQL |
+|------|-------|----------------|
+| `ethos_history` | `needs_history_fetch` | Goldsky Ethos |
+| `ethos_scores` | `list_score_candidates` | Ethos API (no subgraph) |
+| `erc8183_satellites` | `bsc_erc_8183.jobs.needs_satellite_backfill` | Goldsky ERC-8183 BSC |
+| `virtual_acp_satellites` | `virtual_acp.jobs.needs_satellite_backfill` | Goldsky Virtual ACP Base |
+| `olas_mech_satellites` | `olas_mech.mechs.needs_satellite_backfill` | Autonolas Base + Gnosis |
+
 ## Related docs
 
 - [ARCHITECTURE.md](./ARCHITECTURE.md) — GHA pipeline and state machine
