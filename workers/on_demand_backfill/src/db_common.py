@@ -246,6 +246,76 @@ ON CONFLICT (id) DO UPDATE SET
 """,
 }
 
+VIRTUAL_ACP_UPSERT_SQL: dict[str, str] = {
+    "payments": """
+INSERT INTO virtual_acp.payments (
+  id, event_type, job_id, account, amount, chain_id,
+  block_number, block_timestamp, tx_hash, log_index, job_ref_id,
+  imported_at, updated_at
+) VALUES (
+  %(id)s, %(event_type)s, %(job_id)s, %(account)s, %(amount)s,
+  %(chain_id)s, %(block_number)s, to_timestamp(%(block_timestamp)s), %(tx_hash)s,
+  %(log_index)s, %(job_ref_id)s, NOW(), NOW()
+)
+ON CONFLICT (id) DO UPDATE SET
+  event_type = EXCLUDED.event_type, job_id = EXCLUDED.job_id,
+  account = EXCLUDED.account, amount = EXCLUDED.amount, chain_id = EXCLUDED.chain_id,
+  block_number = EXCLUDED.block_number, block_timestamp = EXCLUDED.block_timestamp,
+  tx_hash = EXCLUDED.tx_hash, log_index = EXCLUDED.log_index,
+  job_ref_id = EXCLUDED.job_ref_id, updated_at = NOW()
+""",
+    "budgets": """
+INSERT INTO virtual_acp.budgets (
+  id, job_id, budget, chain_id,
+  block_number, block_timestamp, tx_hash, log_index, job_ref_id,
+  imported_at, updated_at
+) VALUES (
+  %(id)s, %(job_id)s, %(budget)s, %(chain_id)s,
+  %(block_number)s, to_timestamp(%(block_timestamp)s), %(tx_hash)s,
+  %(log_index)s, %(job_ref_id)s, NOW(), NOW()
+)
+ON CONFLICT (id) DO UPDATE SET
+  job_id = EXCLUDED.job_id, budget = EXCLUDED.budget, chain_id = EXCLUDED.chain_id,
+  block_number = EXCLUDED.block_number, block_timestamp = EXCLUDED.block_timestamp,
+  tx_hash = EXCLUDED.tx_hash, log_index = EXCLUDED.log_index,
+  job_ref_id = EXCLUDED.job_ref_id, updated_at = NOW()
+""",
+    "deliveries": """
+INSERT INTO virtual_acp.deliveries (
+  id, job_id, provider, deliverable, chain_id,
+  block_number, block_timestamp, tx_hash, log_index, job_ref_id,
+  imported_at, updated_at
+) VALUES (
+  %(id)s, %(job_id)s, %(provider)s, %(deliverable)s, %(chain_id)s,
+  %(block_number)s, to_timestamp(%(block_timestamp)s), %(tx_hash)s,
+  %(log_index)s, %(job_ref_id)s, NOW(), NOW()
+)
+ON CONFLICT (id) DO UPDATE SET
+  job_id = EXCLUDED.job_id, provider = EXCLUDED.provider,
+  deliverable = EXCLUDED.deliverable, chain_id = EXCLUDED.chain_id,
+  block_number = EXCLUDED.block_number, block_timestamp = EXCLUDED.block_timestamp,
+  tx_hash = EXCLUDED.tx_hash, log_index = EXCLUDED.log_index,
+  job_ref_id = EXCLUDED.job_ref_id, updated_at = NOW()
+""",
+    "job_statuses": """
+INSERT INTO virtual_acp.job_statuses (
+  id, job_id, status_type, actor, reason, chain_id,
+  block_number, block_timestamp, tx_hash, log_index, job_ref_id,
+  imported_at, updated_at
+) VALUES (
+  %(id)s, %(job_id)s, %(status_type)s, %(actor)s, %(reason)s,
+  %(chain_id)s, %(block_number)s, to_timestamp(%(block_timestamp)s), %(tx_hash)s,
+  %(log_index)s, %(job_ref_id)s, NOW(), NOW()
+)
+ON CONFLICT (id) DO UPDATE SET
+  job_id = EXCLUDED.job_id, status_type = EXCLUDED.status_type,
+  actor = EXCLUDED.actor, reason = EXCLUDED.reason, chain_id = EXCLUDED.chain_id,
+  block_number = EXCLUDED.block_number, block_timestamp = EXCLUDED.block_timestamp,
+  tx_hash = EXCLUDED.tx_hash, log_index = EXCLUDED.log_index,
+  job_ref_id = EXCLUDED.job_ref_id, updated_at = NOW()
+""",
+}
+
 
 class Database:
     def __init__(self, dsn: str):
@@ -448,3 +518,59 @@ class Database:
             return len(rows)
 
         return self._run_with_db_retry(f"upsert_erc8183_{entity}", _upsert)
+
+    # --- Virtual ACP ---
+
+    def claim_virtual_acp_satellite_backfill(
+        self, worker_id: str, limit: int, stale_seconds: int
+    ) -> list[dict[str, Any]]:
+        def _claim() -> list[dict[str, Any]]:
+            assert self._conn is not None
+            with self._conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT id, job_id, chain_id
+                      FROM virtual_acp.claim_satellite_backfill(%s, %s, %s)
+                    """,
+                    (limit, worker_id, stale_seconds),
+                )
+                rows = list(cur.fetchall())
+            self._conn.commit()
+            return rows
+
+        return self._run_with_db_retry("claim_virtual_acp_satellite_backfill", _claim)
+
+    def complete_virtual_acp_satellite_backfill(self, ids: list[str]) -> int:
+        if not ids:
+            return 0
+
+        def _complete() -> int:
+            assert self._conn is not None
+            with self._conn.cursor() as cur:
+                cur.execute(
+                    "SELECT virtual_acp.complete_satellite_backfill(%s::text[])",
+                    (ids,),
+                )
+                result = cur.fetchone()
+            self._conn.commit()
+            if result is None:
+                return 0
+            return int(next(iter(result.values())))
+
+        return self._run_with_db_retry("complete_virtual_acp_satellite_backfill", _complete)
+
+    def upsert_virtual_acp_entity_rows(self, entity: str, rows: list[dict[str, Any]]) -> int:
+        if not rows:
+            return 0
+        sql = VIRTUAL_ACP_UPSERT_SQL.get(entity)
+        if sql is None:
+            raise ValueError(f"unknown virtual_acp entity for upsert: {entity}")
+
+        def _upsert() -> int:
+            assert self._conn is not None
+            with self._conn.cursor() as cur:
+                cur.executemany(sql, rows)
+            self._conn.commit()
+            return len(rows)
+
+        return self._run_with_db_retry(f"upsert_virtual_acp_{entity}", _upsert)

@@ -297,12 +297,13 @@ Secrets: `SUPABASE_DB_URL` (required), `ALCHEMY_KEY` (balance/nonce), `ALCHEMY_F
 Catch-up after late GSA wallet link — **not** the continuous `graphs.*` normalize path.
 
 ```
-ethos_history → ethos_scores → erc8183_satellites → virtuals_acp (stub) → olas_marketplace (stub)
+ethos_history → ethos_scores → erc8183_satellites → virtual_acp_satellites → olas_marketplace (stub)
 ```
 
 - Empty step queue → skip; step error → continue; global `MAX_RUNTIME_SECONDS`.
 - Ethos: `claim_history_fetch` / `complete` + `list_score_candidates` / `upsert_official_scores`.
-- ERC-8183: `claim_satellite_backfill` / `complete_satellite_backfill` → Goldsky ×4 satellites → upsert.
+- ERC-8183: `bsc_erc_8183.claim_satellite_backfill` / `complete` → Goldsky ×4 → upsert.
+- Virtual ACP: `virtual_acp.claim_satellite_backfill` / `complete` → Goldsky ×4 → upsert (no `contract_address`).
 - Workflow: `on-demand-backfill.yml`. Replaces deprecated `ethos-enrich.yml`.
 
 See [PROCESSES.md](./PROCESSES.md) #13 and [`workers/on_demand_backfill/README.md`](../workers/on_demand_backfill/README.md).

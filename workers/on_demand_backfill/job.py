@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""On-demand backfill orchestrator: Ethos + ERC-8183 (+ stubs Virtuals/Olas)."""
+"""On-demand backfill orchestrator: Ethos + ERC-8183 + Virtual ACP (+ Olas stub)."""
 
 from __future__ import annotations
 
@@ -25,7 +25,8 @@ from steps.erc8183_satellites import Erc8183SatellitesStep
 from steps.ethos_history import EthosHistoryStep
 from steps.ethos_scores import EthosScoresStep
 from steps.olas_marketplace import OlasMarketplaceStep
-from steps.virtuals_acp import VirtualsAcpStep
+from steps.virtual_acp_satellites import VirtualAcpSatellitesStep
+from virtual_acp.goldsky import DEFAULT_GOLDSKY_URL as DEFAULT_VIRTUAL_ACP_GOLDSKY
 
 logging.basicConfig(
     level=logging.INFO,
@@ -93,6 +94,18 @@ async def run_job() -> int:
         "erc8183_concurrency": env_int(
             "ERC8183_CONCURRENCY", default=5, minimum=1, maximum=20
         ),
+        "goldsky_virtual_acp_url": env_str(
+            "GOLDSKY_VIRTUAL_ACP_URL", DEFAULT_VIRTUAL_ACP_GOLDSKY
+        ),
+        "virtual_acp_claim_batch_size": env_int(
+            "VIRTUAL_ACP_CLAIM_BATCH_SIZE", default=100, minimum=1, maximum=500
+        ),
+        "virtual_acp_claim_stale_seconds": env_int(
+            "VIRTUAL_ACP_CLAIM_STALE_SECONDS", default=7200, minimum=60
+        ),
+        "virtual_acp_concurrency": env_int(
+            "VIRTUAL_ACP_CONCURRENCY", default=5, minimum=1, maximum=20
+        ),
     }
 
     db = Database(dsn)
@@ -106,7 +119,7 @@ async def run_job() -> int:
         EthosHistoryStep(),
         EthosScoresStep(),
         Erc8183SatellitesStep(),
-        VirtualsAcpStep(),
+        VirtualAcpSatellitesStep(),
         OlasMarketplaceStep(),
     ]
 
