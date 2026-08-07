@@ -1,6 +1,6 @@
 # Wallet token contracts discovery
 
-> Project context: [AGENTS.md](../../AGENTS.md) · [Supabase map](../../docs/SUPABASE.md) · [Architecture](../../docs/ARCHITECTURE.md)
+> Project context: [AGENTS.md](../../AGENTS.md) · [Supabase map](../../docs/SUPABASE.md) · [Architecture](../../docs/ARCHITECTURE.md) · [Business rationale](../../docs/TOKEN_CONTRACTS_DISCOVERY_ALCHEMY.md)
 
 Claim worker that discovers ERC-20 contracts with **balance > 0** for each `erc_8004.wallet_transactions` row whose chain has `subdomain_alchemy` set. Stores addresses only (no balances) in `wallets.wallet_token_contracts`.
 

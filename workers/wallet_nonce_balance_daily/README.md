@@ -2,7 +2,7 @@
 
 > Project context: [AGENTS.md](../../AGENTS.md) · [Supabase map](../../docs/SUPABASE.md) · [Architecture](../../docs/ARCHITECTURE.md)
 
-Batch job that queries native balance and nonce across 8 EVM chains for wallets in `erc_8004.wallets`, persists JSON results, and applies the daily snapshot inline (`wallet_transactions`, `chain_nonces`, `Processed` status).
+Batch job that queries native balance and nonce across 8 EVM chains for wallets in `erc_8004.wallets`, persists JSON results, and applies the daily snapshot inline (`wallet_daily_metrics` + `Processed` status). Does **not** update `wallet_transactions` until a rollup exists.
 
 ## Eligibility (`import_nonce_and_balance_daily_next_eligible_at`)
 
@@ -107,4 +107,4 @@ WHERE is_valid_import_current_nonce_and_balance_daily IS TRUE
 1. Apply schema migrations (`daily_next_eligible_at`, `wallet_apply_daily_snapshot`, deprecate cron)
 2. Verify backfill: `null_valid = 0`
 3. Deploy worker and run `workflow_dispatch` on both matrix jobs (`worker-a`, `worker-b`)
-4. Confirm claims stay fast and wallets end in `Processed` with updated `wallet_transactions` / `chain_nonces`
+4. Confirm claims stay fast and wallets end in `Processed` with rows in `wallet_daily_metrics` for today's `snapshot_date` (UTC)
