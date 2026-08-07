@@ -1,5 +1,14 @@
 # Deprecation notes
 
+## Ethos enrich workflow (absorbed by on-demand backfill)
+
+| Legacy | Status |
+|---|---|
+| Workflow `ethos-enrich.yml` | **Removed** — replaced by `on-demand-backfill.yml` |
+| Worker folder `workers/ethos_enrich/` | Thin shim / reference only; live code in `workers/on_demand_backfill/` |
+
+Do **not** re-add a dedicated Ethos enrich cron. Steps `ethos_history` + `ethos_scores` run inside the orchestrator.
+
 ## pg_cron (do not re-enable)
 
 These jobs were replaced by **inline** `wallet_apply_*_snapshot` calls in the GitHub Actions workers. Functions may remain as no-op stubs; cron should stay **disabled**.

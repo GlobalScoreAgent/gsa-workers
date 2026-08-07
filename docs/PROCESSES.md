@@ -76,7 +76,7 @@ flowchart TB
 | 10 | [`agent_uri_resolve`](../workers/agent_uri_resolve/README.md) | Claim (agents / feedbacks) | 00:00, 12:00 | `is_uri_processed` / `is_feedback_processed` | direct SQL | `uri_documents` + `agent_manifest` |
 | 11 | [`agent_uri_reprocess`](../workers/agent_uri_reprocess/README.md) | Claim (manifest errors + docs) | 06:00, 18:00 | download errors / off-chain &gt;15d | direct SQL | retry + refresh `uri_documents` |
 | 12 | [`ai_agent_classifier`](../workers/ai_agent_classifier/README.md) | Claim (`web_dashboard.agents`) | 0/6/12/18 | `does_need_ai_category_process` | exact-hash copy or LLM | `ai_category_*` + `ai_category_input_hash` |
-| 13 | [`ethos_enrich`](../workers/ethos_enrich/README.md) | Claim (`ethos.profile_addresses`) + score sync | 0/6/12/18 | `needs_history_fetch` then linked wallets due TTL 15d | `complete_history_fetch` + `upsert_official_scores` | `ethos.*` señales + `ethos.official_scores` |
+| 13 | [`on_demand_backfill`](../workers/on_demand_backfill/README.md) | Orchestrator (Ethos + ERC-8183 + stubs) | 0/6/12/18 | `needs_history_fetch` → scores TTL 15d → `needs_satellite_backfill` | per-step claim/complete | `ethos.*` + `ethos.official_scores` + `bsc_erc_8183` satellites |
 
 Soft runtime budget for claim / enrich jobs: **`MAX_RUNTIME_SECONDS=19800`** (~5.5h). Empty queue → exit 0; next cron still fires.
 
@@ -201,24 +201,27 @@ Worker README: [`ai_agent_classifier`](../workers/ai_agent_classifier/README.md)
 | [PENDING_TOKEN_ACTIVITY_RPC.md](./PENDING_TOKEN_ACTIVITY_RPC.md) | Probe census 15d live under `workers/token_activity/probe`; enrich 15d TBD; ERC-1155 deferred |
 | Agent manifest **consume** | Not built — rewrite SQL readers to JOIN `uri_documents`, then GHA orchestrator; keep legacy pg_cron consume **off** |
 
-### 13. Ethos enrich (history + credibility)
+### 13. On-demand backfill (Ethos + ERC-8183 + stubs)
 
-**Live (schema must be deployed first).** Single worker, two sequential phases; empty queue → exit 0.
+**Live (schema claim 8183 must be deployed first).** Orchestrator with sequential plug-in steps; empty step → skip; step error → continue; global `MAX_RUNTIME_SECONDS`.
 
 ```
-Fase A: claim_history_fetch → Goldsky GraphQL (9 señales / profileId) → upsert ethos.* → complete_history_fetch
-Fase B: list_score_candidates → POST Ethos /score/addresses → upsert_official_scores (+15d)
+ethos_history → ethos_scores → erc8183_satellites → virtuals_acp (stub) → olas_marketplace (stub)
 ```
+
+| Step | Queue / action |
+|---|---|
+| `ethos_history` | `needs_history_fetch` → Goldsky Ethos → upsert → `complete_history_fetch` |
+| `ethos_scores` | linked wallets due TTL **15d** → Ethos API → `upsert_official_scores` |
+| `erc8183_satellites` | `needs_satellite_backfill` → Goldsky ERC-8183 ×4 → upsert → `complete_satellite_backfill` (even if 0 events) |
+| stubs | Virtuals ACP / Olas — log + skip until dedicated ADR |
 
 | Item | Detail |
 |---|---|
-| History queue | `needs_history_fetch` on `ethos.profile_addresses` (late link only) |
-| Score universe | GSA-linked wallets (`wallet_id IS NOT NULL`); TTL **15 days** |
-| Goldsky | `ethos-network-base/prod` (public endpoint) |
-| Ethos API | Free `X-Ethos-Client: gsa-ethos-enrich@1.0` |
-| Workflow | `ethos-enrich.yml` |
-
-Worker README: [`ethos_enrich`](../workers/ethos_enrich/README.md). Schema: `gsa-supabase-schema` `20260806010000_ethos_enrich_worker.sql`.
+| Workflow | `on-demand-backfill.yml` (replaces `ethos-enrich.yml`) |
+| Worker | [`on_demand_backfill`](../workers/on_demand_backfill/README.md) |
+| Schema Ethos | `20260806010000_ethos_enrich_worker.sql` |
+| Schema 8183 claim | `20260807010000_bsc_erc_8183_satellite_backfill_claim.sql` |
 
 ## Secrets cheat sheet
 

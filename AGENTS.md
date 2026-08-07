@@ -63,7 +63,7 @@ Token activity probe (public getLogs, live): [workers/token_activity/probe/READM
 | `agent_uri_resolve` | `agent-uri-resolve.yml` | direct SQL upsert | `uri_documents` + `agent_manifest` (ingest) |
 | `agent_uri_reprocess` | `agent-uri-reprocess.yml` | direct SQL upsert | error retry + off-chain `uri_documents` refresh |
 | `ai_agent_classifier` | `ai-agent-classifier.yml` | direct SQL | `web_dashboard.agents` AI category fields (`llm` config) |
-| `ethos_enrich` | `ethos-enrich.yml` | `claim/complete_history_fetch` + `upsert_official_scores` | `ethos.*` signals + `ethos.official_scores` (TTL 15d) |
+| `on_demand_backfill` | `on-demand-backfill.yml` | Ethos claim/complete + scores; `claim/complete_satellite_backfill` | `ethos.*` + `official_scores` + `bsc_erc_8183` satellites |
 
 LP 15-day refresh worker: **not built** — see [docs/PENDING_LP_POSITIONS.md](./docs/PENDING_LP_POSITIONS.md).  
 Agent manifest **consume** (profile / feedbacks / liveness / sentinel): **not built** — keep legacy consume off until readers JOIN `uri_documents`.

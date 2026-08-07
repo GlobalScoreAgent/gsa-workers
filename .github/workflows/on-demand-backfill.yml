@@ -1,4 +1,4 @@
-name: Ethos enrich
+name: On-demand backfill
 
 on:
   schedule:
@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: ethos-enrich
+  group: on-demand-backfill
   cancel-in-progress: false
 
 jobs:
@@ -32,19 +32,22 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        working-directory: workers/ethos_enrich
+        working-directory: workers/on_demand_backfill
         run: uv sync
 
-      - name: Run ethos enrich
-        working-directory: workers/ethos_enrich
+      - name: Run on-demand backfill
+        working-directory: workers/on_demand_backfill
         env:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
           MAX_RUNTIME_SECONDS: 19800
-          CONCURRENCY: 3
-          CLAIM_BATCH_SIZE: 10
-          CLAIM_STALE_SECONDS: 7200
+          WORKER_ID: backfill-a
+          ETHOS_CONCURRENCY: 3
+          ETHOS_CLAIM_BATCH_SIZE: 10
+          ETHOS_CLAIM_STALE_SECONDS: 7200
           SCORE_BATCH_SIZE: 50
           SCORE_TTL_DAYS: 15
           SCORE_THROTTLE_MS: 200
-          WORKER_ID: enrich-a
+          ERC8183_CLAIM_BATCH_SIZE: 100
+          ERC8183_CLAIM_STALE_SECONDS: 7200
+          ERC8183_CONCURRENCY: 5
         run: uv run python job.py
