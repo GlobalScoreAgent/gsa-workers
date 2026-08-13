@@ -49,27 +49,37 @@ async def main() -> int:
         if etherscan_key:
             es = EtherscanClient(client, etherscan_key)
             for chain_id in (1, 42161, 137, 42220):
-                try:
-                    latest = await es.latest_block(chain_id)
-                    raw = await es._get(
-                        {
-                            "chainid": chain_id,
-                            "module": "account",
-                            "action": "txlist",
-                            "address": SAMPLE,
-                            "startblock": max(0, latest - 100),
-                            "endblock": latest,
-                            "page": 1,
-                            "offset": 1,
-                            "sort": "desc",
-                        }
-                    )
-                    print(
-                        f"etherscan chain={chain_id} latest={latest} txlist={len(raw)} OK"
-                    )
-                except Exception as exc:
+                last_exc: Exception | None = None
+                for attempt in range(3):
+                    try:
+                        latest = await es.latest_block(chain_id)
+                        raw = await es._get(
+                            {
+                                "chainid": chain_id,
+                                "module": "account",
+                                "action": "txlist",
+                                "address": SAMPLE,
+                                "startblock": max(0, latest - 100),
+                                "endblock": latest,
+                                "page": 1,
+                                "offset": 1,
+                                "sort": "desc",
+                            }
+                        )
+                        print(
+                            f"etherscan chain={chain_id} latest={latest} txlist={len(raw)} OK"
+                        )
+                        last_exc = None
+                        break
+                    except Exception as exc:
+                        last_exc = exc
+                        if "rate limit" in str(exc).lower() and attempt < 2:
+                            await asyncio.sleep(1.5)
+                            continue
+                        break
+                if last_exc is not None:
                     failed += 1
-                    print(f"etherscan chain={chain_id} FAIL {exc}")
+                    print(f"etherscan chain={chain_id} FAIL {last_exc}")
         else:
             skipped += 1
             print("SKIP etherscan (no ETHERSCAN_API_KEY)")

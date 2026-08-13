@@ -22,7 +22,7 @@ ACTIONS = (
     ("token1155tx", "erc1155"),
 )
 PAGE_SIZE = 1000
-MIN_INTERVAL_S = 0.35
+MIN_INTERVAL_S = 0.45
 
 
 class EtherscanClient:
