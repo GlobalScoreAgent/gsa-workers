@@ -36,7 +36,7 @@ Entry point for AI agents (and humans) changing GitHub Actions batch workers.
 Ops / stuck wallets: [docs/OPS.md](./docs/OPS.md). Deprecations: [docs/DEPRECATION.md](./docs/DEPRECATION.md) (`ethos-enrich` absorbed by `on_demand_backfill`).  
 LP discovery is live; 15-day refresh still pending: [docs/PENDING_LP_POSITIONS.md](./docs/PENDING_LP_POSITIONS.md).  
 Token contracts + Alchemy Free design: [docs/TOKEN_CONTRACTS_DISCOVERY_ALCHEMY.md](./docs/TOKEN_CONTRACTS_DISCOVERY_ALCHEMY.md).  
-Token activity probe (public getLogs, live): [workers/token_activity/probe/README.md](./workers/token_activity/probe/README.md). Design notes: [docs/PENDING_TOKEN_ACTIVITY_RPC.md](./docs/PENDING_TOKEN_ACTIVITY_RPC.md) · [docs/token_activity/](./docs/token_activity/).
+15d activity ingest: [workers/wallet_activity_flows/README.md](./workers/wallet_activity_flows/README.md) → staging `wallets.wallet_activity_transfers`. Probe/enrich census removed ([DEPRECATION.md](./docs/DEPRECATION.md)).
 
 ## Hard rules
 
@@ -59,20 +59,21 @@ Token activity probe (public getLogs, live): [workers/token_activity/probe/READM
 | `wallet_token_contracts_discovery` | `wallet-token-contracts-discovery.yml` | `wallets.wallet_token_contracts_upsert` | `wallets.wallet_token_contracts` |
 | `wallet_token_portfolio_discovery` | `wallet-token-portfolio-discovery.yml` | `wallets.wallet_token_positions_insert` | `wallets.wallet_token_positions` (fungible) |
 | `wallet_lp_positions_discovery` | `wallet-lp-positions-discovery.yml` | `wallets.wallet_lp_positions_upsert` | `wallets.wallet_lp_positions` (NFT + classic LP) |
-| `token_activity/probe` (ex-`wallet_token_activity_scan`) | `wallet-token-activity-scan.yml` (7 cells: BSC×3+Base×2+ETH×1+`_rest`) | sets enrich on Transfer | Probe census 15d; native enrich via rollup (live); enrich worker TBD |
+| `wallet_activity_flows` | `wallet-activity-flows.yml` (matrix etherscan / alchemy_k1 / bsc / xlayer) | `wallets.wallet_activity_transfers_insert` | `wallets.wallet_activity_transfers` (staging INSERT-only) |
 | `agent_uri_resolve` | `agent-uri-resolve.yml` | direct SQL upsert | `uri_documents` + `agent_manifest` (ingest) |
 | `agent_uri_reprocess` | `agent-uri-reprocess.yml` | direct SQL upsert | error retry + off-chain `uri_documents` refresh |
 | `ai_agent_classifier` | `ai-agent-classifier.yml` | direct SQL | `web_dashboard.agents` AI category fields (`llm` config) |
 | `on_demand_backfill` | `on-demand-backfill.yml` | Ethos claim/complete + scores; 8183 + Virtual ACP + Olas Mech `claim/complete_satellite_backfill` | `ethos.*` + `official_scores` + `bsc_erc_8183` / `virtual_acp` / `olas_mech` satellites |
 
 LP 15-day refresh worker: **not built** — see [docs/PENDING_LP_POSITIONS.md](./docs/PENDING_LP_POSITIONS.md).  
-Agent manifest **consume** (profile / feedbacks / liveness / sentinel): **not built** — keep legacy consume off until readers JOIN `uri_documents`.
+Agent manifest **consume** (profile / feedbacks / liveness / sentinel): **not built** — keep legacy consume off until readers JOIN `uri_documents`.  
+Walcert consume of `wallet_activity_transfers` (normalize / `analyze_recent_flows` / DELETE staging): **not in this worker** — follow-up.
 
 ## How to validate a change
 
 1. Local: `cd workers/<name>`, `uv sync`, `uv run python job.py` with `SUPABASE_DB_URL` (+ Alchemy / Dune / CoinGecko / `PINATA_GATEWAY` / `SCRAPE_DO_TOKEN` / `GROQ` as needed). URI workers also need `uv run playwright install chromium`.
 2. Or GitHub Actions → workflow → **Run workflow** (`workflow_dispatch`).
-3. Logs: `Claimed batch`, reconnect/retry, snapshot failures (wallet claim), Dune tasks / chunk upserts, token-price enrich, discovery `Done wt_id=`, URI `Claimed agents` / `on-chain` / `Reprocess` / `Refresh`, classifier `Done agent_id=`, or on-demand backfill `Step done name=` / `skipped_empty` / `Claimed history` / `Claimed satellite`.
+3. Logs: `Claimed batch`, reconnect/retry, snapshot failures (wallet claim), Dune tasks / chunk upserts, token-price enrich, discovery `Done wt_id=`, activity flows `Done wt_id=`, URI `Claimed agents` / `on-chain` / `Reprocess` / `Refresh`, classifier `Done agent_id=`, or on-demand backfill `Step done name=` / `skipped_empty` / `Claimed history` / `Claimed satellite`.
 4. SQL: eligible counts in [docs/SUPABASE.md](./docs/SUPABASE.md) (wallets + URI + AI classifier sections); Ethos/8183 catch-up counts in worker README / vault Monitoreo.
 
 ## When to touch which repo

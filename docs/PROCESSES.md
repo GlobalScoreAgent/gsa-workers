@@ -18,7 +18,7 @@ flowchart TB
     portfolio[wallet_token_portfolio_discovery]
     prices[token_prices_import]
     lp[wallet_lp_positions_discovery]
-    tokenActivity[token_activity_probe]
+    activityFlows[wallet_activity_flows]
   end
   subgraph refdata [Other_reference]
     dune[dune_queries_import]
@@ -44,14 +44,12 @@ flowchart TB
   prices --> tpc[wallets.token_prices]
   portfolio --> lp
   lp --> wlp[wallets.wallet_lp_positions]
+  activityFlows --> wat[wallets.wallet_activity_transfers]
   dune --> cexT[wallets.cex_addresses]
   dune --> mixT[wallets.mixer_addresses]
   dune --> brT[wallets.bridge_addresses]
   dune --> ofacT[wallets.ofac_sanction_addresses]
   lpRefresh -.-> wlp
-  tokenActivity --> wtc
-  tokenActivity --> wnft[wallets.wallet_nft_contracts]
-  tokenActivity --> wxf[wallets.wallet_token_transfers]
   uriResolve --> ud[erc_8004.uri_documents]
   uriResolve --> am[erc_8004.agent_manifest]
   uriReprocess --> ud
@@ -64,7 +62,7 @@ flowchart TB
 
 | # | Process | Type | Schedule (UTC) | Queue / input | Persist via | Destination |
 |---|---|---|---|---|---|---|
-| 1 | [`wallet_nonce_balance_daily`](../workers/wallet_nonce_balance_daily/README.md) | Claim | 0/6/12/18 (matrix a/b) | `wallets` + daily flags | `wallet_apply_daily_snapshot` | `wallet_daily_metrics` (flat); rollup `wallet_rollup_daily_metrics` → `wallet_transactions` (+ native enrich flag) |
+| 1 | [`wallet_nonce_balance_daily`](../workers/wallet_nonce_balance_daily/README.md) | Claim | 0/6/12/18 (matrix a/b) | `wallets` + daily flags | `wallet_apply_daily_snapshot` | `wallet_daily_metrics` (flat); rollup `wallet_rollup_daily_metrics` → `wallet_transactions` |
 | 2 | [`owner_wallet_nonce_balance_monthly`](../workers/owner_wallet_nonce_balance_monthly/README.md) | Claim | 0/6/12/18 | monthly flags | `wallet_apply_monthly_snapshot` | `wallet_owner_details` |
 | 3 | [`owner_wallet_origin`](../workers/owner_wallet_origin/README.md) | Claim | 0/6/12/18 | history flags | `wallet_apply_owner_history_snapshot` | `wallet_owner_details.first_transaction_at` |
 | 4 | [`dune_queries_import`](../workers/dune_queries_import/README.md) | Reference | 18th 00:00 | Dune API (4 queries) | cex/mixer/bridge/ofac upserts (chunked) | `wallets.cex_addresses` + mixer/bridge/ofac tables |
@@ -72,7 +70,7 @@ flowchart TB
 | 6 | [`wallet_token_portfolio_discovery`](../workers/wallet_token_portfolio_discovery/README.md) | Claim (`wallet_transactions`) | 0/6/12/18 | `does_need_portfolio_discovery` | `wallet_token_positions_insert` | `wallets.wallet_token_positions` (wallet fungibles) |
 | 7 | [`token_prices_import`](../workers/token_prices_import/README.md) | Reference | 0/6/12/18 | unpriced ERC-20s (`has_price_error`) | `token_prices_upsert` + `apply_prices` + `mark_price_misses` | `token_prices` → positions |
 | 8 | [`wallet_lp_positions_discovery`](../workers/wallet_lp_positions_discovery/README.md) | Claim (`wallet_transactions`) | 0/6/12/18 | `does_need_lp_discovery` | `wallet_lp_positions_upsert` | `wallets.wallet_lp_positions` |
-| 9 | [`token_activity/probe`](../workers/token_activity/probe/README.md) | Claim (`wallet_transactions`, matrix 7) | 3/9/15/21 | `token_activity_next_eligible_at` + valid agents; skip enrich-pending | flags enrich on Transfer | Sensor getLogs; native enrich via rollup (live); enrich worker TBD |
+| 9 | [`wallet_activity_flows`](../workers/wallet_activity_flows/README.md) | Claim (`wallet_transactions`, matrix 4) | 1/15 00:00 + every 4h drain | `is_valid_activity_flows` + due clock + not `Dormant_*` + valid agent | `wallet_activity_transfers_insert` | Staging `wallets.wallet_activity_transfers` (INSERT-only) |
 | 10 | [`agent_uri_resolve`](../workers/agent_uri_resolve/README.md) | Claim (agents / feedbacks) | 00:00, 12:00 | `is_uri_processed` / `is_feedback_processed` | direct SQL | `uri_documents` + `agent_manifest` |
 | 11 | [`agent_uri_reprocess`](../workers/agent_uri_reprocess/README.md) | Claim (manifest errors + docs) | 06:00, 18:00 | download errors / off-chain &gt;15d | direct SQL | retry + refresh `uri_documents` |
 | 12 | [`ai_agent_classifier`](../workers/ai_agent_classifier/README.md) | Claim (`web_dashboard.agents`) | 0/6/12/18 | `does_need_ai_category_process` | exact-hash copy or LLM | `ai_category_*` + `ai_category_input_hash` |
@@ -130,28 +128,28 @@ Covered extractors: Ethereum / Base / Arbitrum UniV3 NFT; BNB Pancake V3 NFT; Ba
 
 Worker README: [`wallet_lp_positions_discovery`](../workers/wallet_lp_positions_discovery/README.md). 15-day refresh still pending: [PENDING_LP_POSITIONS.md](./PENDING_LP_POSITIONS.md).
 
-### 9. Token activity probe (census 15d, public getLogs)
+### 9. Wallet activity flows (15d staging ingest)
 
-**Live**. Matrix exacta **7** cells: BSC×3 + Base×2 + ETH×1 + `_rest` (`max-parallel: 7`, cron 3/9/15/21). Eth/Base/`_rest` pivotean a BSC helper al vaciar due. Código en `workers/token_activity/probe/`.
+**Live (schema must be applied first).** Matrix 4 cells by provider group. Cron days **1 and 15** 00:00 UTC plus drain every **4h** until the claim queue is empty (`exit 0`). INSERT-only into `wallets.wallet_activity_transfers`. Does not compute Walcert metrics or DELETE staging.
 
 ```
-claim (skip does_need_token_activity_enrich) →
-  eth_getLogs Transfer since last_scanned (catch-up ≤15d) →
-  if Transfer → enrich flag; mark probe done (+15d next_eligible)
+claim (no Dormant_*, valid agent) →
+  adapter (Etherscan / Alchemy / Ankr / OKX Data API) →
+  INSERT staging ON CONFLICT DO NOTHING →
+  next calendar cut (day 15 or day 1 next month, UTC)
 ```
 
 | Item | Detail |
 |---|---|
-| Cursor | `token_activity_last_scanned_block`; catch-up max **15d** |
-| Cadence | `next_eligible + 15 days` after success |
-| Runners | Matrix **7**: BSC×3 + Base×2 + ETH×1 + `_rest`; `CONCURRENCY=1`; pivot eth/base/rest → BSC helper |
-| Secrets | `SUPABASE_DB_URL` only |
-| Persist | **Sensor only** — no transfer/contract upserts |
-| Enrich | Transfer (probe) **or** native D vs D−1 (`wallet_rollup_daily_metrics`, live); consumer TBD — [token_activity/ENRICH.md](./token_activity/ENRICH.md) |
-| Queue seed | Existing rows **not** enqueued by migrate — see `wallet_token_activity_scan_seed_queue.sql` |
-| Workflow | `wallet-token-activity-scan.yml` |
+| Groups | `etherscan` (ETH/Arb/Polygon/Celo); `alchemy_k1` (Base/Gnosis); `bsc` (Alchemy key_2 on day-1 cut, Ankr on day-15 cut); `xlayer` (OKX Data API) |
+| Window | Last ~15 days; native + ERC-20/721/1155 |
+| Empty wallet | Completes OK with no INSERT |
+| Gnosis timestamps | Worker `eth_getBlockByNumber` + `erc_8004.block_cache` (Alchemy without `withMetadata`) |
+| Secrets | `ETHERSCAN_API_KEY`, `ALCHEMY_ACTIVITY_KEY_1`, `ALCHEMY_ACTIVITY_KEY_2` (dedicated Free app, not `ALCHEMY_FREE_KEY`), `ANKR_API_KEY`, OKX HMAC trio |
+| Workflow | `wallet-activity-flows.yml` |
+| Follow-up | Walcert `analyze_recent_flows` consume + DELETE staging — **not this worker** |
 
-Worker README: [`token_activity/probe`](../workers/token_activity/probe/README.md). Capacity: [token_activity/CAPACITY.md](./token_activity/CAPACITY.md).
+Worker README: [`wallet_activity_flows`](../workers/wallet_activity_flows/README.md). Schema: `gsa-supabase-schema` `20260813010000_wallet_activity_transfers.sql`. Probe/enrich census: [DEPRECATION.md](./DEPRECATION.md).
 
 ### 10. Agent URI resolve (ingest)
 
@@ -198,7 +196,7 @@ Worker README: [`ai_agent_classifier`](../workers/ai_agent_classifier/README.md)
 | Doc / work | Status |
 |---|---|
 | [PENDING_LP_POSITIONS.md](./PENDING_LP_POSITIONS.md) | Discovery **live**; only **15-day refresh** worker remains |
-| [PENDING_TOKEN_ACTIVITY_RPC.md](./PENDING_TOKEN_ACTIVITY_RPC.md) | Probe census 15d live under `workers/token_activity/probe`; enrich 15d TBD; ERC-1155 deferred |
+| Walcert consume of `wallet_activity_transfers` | Follow-up — normalize / `analyze_recent_flows` / DELETE staging; do not retarget in this worker |
 | Agent manifest **consume** | Not built — rewrite SQL readers to JOIN `uri_documents`, then GHA orchestrator; keep legacy pg_cron consume **off** |
 
 ### 13. On-demand backfill (Ethos + ERC-8183 + Virtual ACP + Olas Mech)

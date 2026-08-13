@@ -78,3 +78,17 @@ Dune daily dumps into `wallets.token_prices` are **retired** (table redesigned 2
 | Dune query `7526826` → old daily `wallets.token_prices` | Retired with spot-cache redesign |
 
 Repointing consumers that still read `walcert.token_prices` is a separate follow-up.
+
+## Token activity probe / enrich (replaced by wallet activity flows 15d)
+
+Census getLogs probe + enrich-flag pipeline was removed (ADR 2026-08-13). Do **not** revive it.
+
+| Legacy | Status |
+|---|---|
+| Workflow `wallet-token-activity-scan.yml` | **Removed** — replaced by `wallet-activity-flows.yml` |
+| Worker folder `workers/token_activity/` (probe; enrich never existed) | **Removed** |
+| Docs `docs/token_activity/` + `docs/PENDING_TOKEN_ACTIVITY_RPC.md` | **Removed** |
+| Columns `token_activity_*` / `does_need_token_activity_enrich` / `chains.token_activity_runner_count` | Dropped in schema migration `20260813010000_wallet_activity_transfers.sql` |
+| Rollup Fuente B (`does_need_token_activity_enrich` on D vs D−1) | Removed from `wallet_rollup_daily_metrics` |
+
+Live replacement: `workers/wallet_activity_flows/` → INSERT-only staging `wallets.wallet_activity_transfers`. Do not re-add probe getLogs, enrich flags, or Fuente B enqueue.

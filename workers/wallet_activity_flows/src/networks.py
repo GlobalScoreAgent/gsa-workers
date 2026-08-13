@@ -75,7 +75,7 @@ LOOKBACK_DAYS = 15
 
 
 def bsc_provider(utc_day: int) -> str:
-    """First cut of month (days 1–15) Alchemy key_2; second cut Ankr."""
-    if utc_day < 16:
+    """Day-1 cut (and drain while day < 15): Alchemy key_2. Day-15 cut onward: Ankr."""
+    if utc_day < 15:
         return "alchemy"
     return "ankr"

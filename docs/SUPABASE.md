@@ -91,35 +91,34 @@ Trigger `trg_wallet_transactions_portfolio_flag_bu` sets portfolio pending when 
 
 Trigger `trg_wallet_transactions_lp_flag_bu` sets LP pending when portfolio discovery completes successfully.
 
-### Token activity probe (`wallet_transactions` + public RPC census)
+### Activity flows 15d (`wallet_transactions` claim → staging)
 
 | Column | Role |
 |---|---|
-| `token_activity_next_eligible_at` | Probe claim clock (`NULL` = not queued). Success → **+15 days**. New inserts `-infinity` via BI |
-| `token_activity_last_scanned_block` | Inclusive getLogs cursor (scan from last+1, max 15d lookback) |
-| `token_activity_scanned_at` / `claimed_at` / `claimed_by` | Audit |
-| `has_token_activity_error` / `token_activity_message_error` | Last probe failure (requeue +1h) |
-| `does_need_token_activity_enrich` | Enrich queue; probe **skips** while TRUE |
-| `token_activity_enrich_queued_at` / `completed_at` / `next_eligible_at` / claim / error | Future enrich worker |
-| `chains.token_activity_runner_count` | GHA shards; budget BSC=3 Base=2 ETH=1 long-tail=0 + `_rest` flex (=7); `0` = omit from dedicated matrix |
+| `is_valid_activity_flows` | Chain is in the 15d map (ETH, Arb, Polygon, Celo, Base, Gnosis, BSC, X Layer) |
+| `activity_flows_next_eligible_at` | Claim clock. Success → next UTC cut (day 15 00:00, or day 1 next month). New inserts `-infinity` via BI |
+| `activity_flows_claimed_at` / `claimed_by` | Soft lock (`CLAIM_STALE_SECONDS`) |
+| `activity_flows_completed_at` | Last successful ingest (empty window still counts) |
+| `has_activity_flows_error` / `activity_flows_message_error` | Last failure (requeue +1h) |
 
-Eligibility: due probe clock + enrich flag not true + `agent_wallet_tx.is_valid` + agent `validation_realness_status='valid'`.
+Eligibility: `is_valid_activity_flows` + due clock + `wallet_category NOT LIKE 'Dormant_%'` + valid agent via `agent_wallet_tx`.
 
 ```sql
 SELECT
   count(*) FILTER (
-    WHERE token_activity_next_eligible_at IS NOT NULL
-      AND token_activity_next_eligible_at <= NOW()
-      AND does_need_token_activity_enrich IS NOT TRUE
-  ) AS probe_due,
-  count(*) FILTER (WHERE token_activity_next_eligible_at IS NULL) AS not_queued,
-  count(*) FILTER (WHERE does_need_token_activity_enrich) AS enrich_pending,
-  count(*) FILTER (WHERE has_token_activity_error IS TRUE) AS probe_errors
+    WHERE is_valid_activity_flows IS TRUE
+      AND activity_flows_next_eligible_at IS NOT NULL
+      AND activity_flows_next_eligible_at <= NOW()
+      AND COALESCE(wallet_category, '') NOT LIKE 'Dormant_%'
+  ) AS due_now,
+  count(*) FILTER (WHERE has_activity_flows_error IS TRUE) AS errors,
+  count(*) FILTER (WHERE activity_flows_completed_at IS NOT NULL) AS completed
 FROM erc_8004.wallet_transactions;
 ```
 
-Seed probe queue (ask first): `gsa-supabase-schema/supabase/scripts/wallet_token_activity_scan_seed_queue.sql`.  
-Census migration: `20260723010000_token_activity_probe_census_15d.sql`.
+Staging table: `wallets.wallet_activity_transfers` via `wallets.wallet_activity_transfers_insert`. PK `(wallet_id, chain_id, unique_id)`. `chain_id` is `erc_8004.chains.id`. Migration: `20260813010000_wallet_activity_transfers.sql`. Schema doc: `gsa-supabase-schema/supabase/docs/wallet-activity-transfers.md`.
+
+Probe/enrich census columns were dropped. Do not revive them ([DEPRECATION.md](./DEPRECATION.md)).
 
 ### URI ingest (`uri_documents` / `agent_manifest`)
 
@@ -202,7 +201,7 @@ Called inline by the worker after a successful `Completed` save:
 | Worker | Function | Writes |
 |---|---|---|
 | daily | `erc_8004.wallet_apply_daily_snapshot(p_wallet_id)` | `wallet_daily_metrics` (flat); status → `Processed`. Does **not** write `wallet_transactions` directly |
-| rollup | `erc_8004.wallet_rollup_daily_metrics(p_batch_size)` | Rebuilds `wallet_transactions` from metrics; sets `does_need_token_activity_enrich` on D vs D−1 nonce/balance (Fuente B) |
+| rollup | `erc_8004.wallet_rollup_daily_metrics(p_batch_size)` | Rebuilds `wallet_transactions` from metrics |
 | monthly | `erc_8004.wallet_apply_monthly_snapshot(p_wallet_id)` | `wallet_owner_details` (nonce/balance/type); status → `Processed` |
 | origin | `erc_8004.wallet_apply_owner_history_snapshot(p_wallet_id)` | `wallet_owner_details.first_transaction_at`; status → `Processed` |
 
@@ -222,7 +221,7 @@ Canonical SQL / migrations: `gsa-supabase-schema/supabase/migrations/` and `supa
 | token contracts discovery | `wallets.wallet_token_contracts_upsert(p_wallet_id, p_chain_id, p_rows jsonb)` | `wallets.wallet_token_contracts` (insert/update only; no delete) |
 | token portfolio discovery | `wallets.wallet_token_positions_insert(p_wallet_id, p_chain_id, p_rows jsonb)` | `wallets.wallet_token_positions` (INSERT … ON CONFLICT DO NOTHING) |
 | LP positions discovery | `wallets.wallet_lp_positions_upsert(p_wallet_id, p_chain_id, p_rows jsonb)` | `wallets.wallet_lp_positions` (DELETE+INSERT replace per wallet+chain; stamps `calculated_at`) |
-| token activity probe | sets enrich on Transfer hit | Sensor getLogs; native enrich via `wallet_rollup_daily_metrics` (live); enrich worker TBD |
+| activity flows 15d | `wallets.wallet_activity_transfers_insert(p_rows jsonb)` | Staging `wallets.wallet_activity_transfers` (INSERT … ON CONFLICT DO NOTHING) |
 
 Dune upserts: JSON arrays; empty array raises. Worker sends **chunks** (default 5000). Scripts: `wallets_cex_addresses_upsert.sql`, `wallets_dune_reference_tables.sql`. Docs: `gsa-supabase-schema/supabase/docs/wallets-dune-reference-tables.md`.
 
@@ -259,6 +258,7 @@ When `is_valid_*` becomes true, DB triggers set the matching `next_eligible_at` 
 - `trg_wallet_transactions_discovery_flag_bi` (sets `does_need_discovery_contracts` on insert from `chains.subdomain_alchemy`)
 - `trg_wallet_transactions_portfolio_flag_bu` (sets `does_need_portfolio_discovery` when contract discovery completes)
 - `trg_wallet_transactions_lp_flag_bu` (sets `does_need_lp_discovery` when portfolio discovery completes)
+- `trg_wallet_transactions_activity_flows_bi` (sets `is_valid_activity_flows` + `-infinity` clock on insert for mapped EVM chains)
 
 ## Claim pattern
 

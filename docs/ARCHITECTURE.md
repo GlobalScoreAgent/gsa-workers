@@ -79,7 +79,7 @@ stateDiagram-v2
 | `wallet_token_contracts_discovery` | `wallet-token-contracts-discovery.yml` | `wallet-token-contracts-discovery` | 1 runner |
 | `wallet_token_portfolio_discovery` | `wallet-token-portfolio-discovery.yml` | `wallet-token-portfolio-discovery` | 1 runner |
 | `wallet_lp_positions_discovery` | `wallet-lp-positions-discovery.yml` | `wallet-lp-positions-discovery` | 1 runner |
-| `token_activity/probe` | `wallet-token-activity-scan.yml` | per `chain-shard` + `_rest` | BSC×3+Base×2+ETH×1+`_rest` (=7); pivot→BSC helper; `max-parallel: 7`; cron 3/9/15/21 |
+| `wallet_activity_flows` | `wallet-activity-flows.yml` | per provider group | etherscan / alchemy_k1 / bsc / xlayer; `max-parallel: 4`; cron 1/15 + every 4h |
 | `agent_uri_resolve` | `agent-uri-resolve.yml` | `agent-uri-resolve` | 1 runner (00:00 / 12:00) |
 | `agent_uri_reprocess` | `agent-uri-reprocess.yml` | `agent-uri-reprocess` | 1 runner (06:00 / 18:00) |
 | `ai_agent_classifier` | `ai-agent-classifier.yml` | `ai-agent-classifier` | 1 runner (0/6/12/18) |
@@ -88,7 +88,8 @@ Claim wallet workers schedule: `0 0,6,12,18 * * *` UTC + `workflow_dispatch`.
 Dune queries import schedule: `0 0 18 * *` UTC + `workflow_dispatch` (18th monthly, after typical Dune billing reset ~17th; 4 tasks per run).  
 Token prices import schedule: `0 0,6,12,18 * * *` UTC + `workflow_dispatch`.  
 URI resolve: `0 0,12 * * *`; URI reprocess: `0 6,18 * * *` (split cadence by design).  
-AI classifier: `0 0,6,12,18 * * *` UTC + `workflow_dispatch`.
+AI classifier: `0 0,6,12,18 * * *` UTC + `workflow_dispatch`.  
+Activity flows 15d: `0 0 1,15 * *` + `0 */4 * * *` UTC + `workflow_dispatch`.
 
 ### What each worker does
 
@@ -102,7 +103,7 @@ AI classifier: `0 0,6,12,18 * * *` UTC + `workflow_dispatch`.
 | token contracts discovery | `wallet_transactions.does_need_discovery_contracts` + `chains.subdomain_alchemy` | Alchemy ERC-20 balances → `wallets.wallet_token_contracts` via `wallet_token_contracts_upsert` |
 | token portfolio discovery | `does_need_portfolio_discovery` after contract discovery | Alchemy amounts + DeFiLlama → fungible `wallet_token_positions_insert` |
 | LP positions discovery | `does_need_lp_discovery` after portfolio discovery | NFT + `lp_pools` → `wallet_lp_positions_upsert` |
-| token activity probe | `token_activity_next_eligible_at` + valid agents; skip enrich-pending; shard / helper / `_rest` | getLogs Transfer → enrich flag; +15d; native enrich → rollup |
+| activity flows 15d | `is_valid_activity_flows` + due clock + not `Dormant_*` + valid agent | Adapter → INSERT `wallets.wallet_activity_transfers`; empty OK |
 | agent URI resolve | agents / on-chain / external feedbacks pending | Resolve/materialize → `uri_documents` + `agent_manifest` |
 | agent URI reprocess | download errors (max 3) + off-chain docs &gt;15d | Retry + refresh; `is_processed` only if document changed |
 | AI agent classifier | `does_need_ai_category_process` | LLM → `ai_category_*` on `web_dashboard.agents`; rotate `llm.models` by daily cap |
@@ -285,12 +286,13 @@ Origin also has `scripts/check_pending.py` and `scripts/compare_smoke.py`. `wall
 | token contracts discovery | 10 | 50 | 7200 |
 | token portfolio discovery | 5 | 25 | 7200 |
 | LP positions discovery | 5 | 25 | 7200 |
+| activity flows 15d | 1 | 20 | 7200 |
 | agent URI resolve | 4 | 20 | n/a |
 | agent URI reprocess | 4 | 20 | n/a |
 | AI agent classifier | 1 | 20 | n/a |
 | on-demand backfill | Ethos 3 / satellites 5 | Ethos 10 / satellites 100 | 7200 |
 
-Secrets: `SUPABASE_DB_URL` (required), `ALCHEMY_KEY` (balance/nonce), `ALCHEMY_FREE_KEY` (contracts / portfolio / LP), `DUNE_KEY` (dune queries), `COINGECKO_KEY` (token prices), `PINATA_GATEWAY` / `SCRAPE_DO_TOKEN` (URI workers, optional), `GROQ` (AI classifier). Daily sets `WORKER_ID` from the matrix.
+Secrets: `SUPABASE_DB_URL` (required), `ALCHEMY_KEY` (balance/nonce), `ALCHEMY_FREE_KEY` (contracts / portfolio / LP), `ETHERSCAN_API_KEY` / `ALCHEMY_ACTIVITY_KEY_1` / `ALCHEMY_ACTIVITY_KEY_2` / `ANKR_API_KEY` / OKX HMAC (`OKX_API_KEY`, `OKX_SECRET_KEY`, `OKX_PASSPHRASE`) for activity flows (`ALCHEMY_ACTIVITY_KEY_2` is a dedicated Free app — do not reuse `ALCHEMY_FREE_KEY`), `DUNE_KEY` (dune queries), `COINGECKO_KEY` (token prices), `PINATA_GATEWAY` / `SCRAPE_DO_TOKEN` (URI workers, optional), `GROQ` (AI classifier). Daily sets `WORKER_ID` from the matrix.
 
 ## On-demand backfill (orchestrator)
 
@@ -315,6 +317,6 @@ See [PROCESSES.md](./PROCESSES.md) #13 and [`workers/on_demand_backfill/README.m
 - [PENDING_LP_POSITIONS.md](./PENDING_LP_POSITIONS.md) — LP 15-day refresh (pending)
 - [SUPABASE.md](./SUPABASE.md) — columns, RPCs, monitoring SQL (wallets + URI)
 - [OPS.md](./OPS.md) — operations / stuck states / URI runbook
-- [DEPRECATION.md](./DEPRECATION.md) — ethos-enrich absorbed
+- [DEPRECATION.md](./DEPRECATION.md) — ethos-enrich absorbed; token-activity probe/enrich removed
 - [AGENTS.md](../AGENTS.md) — agent entry point
-- Worker READMEs: `agent_uri_resolve`, `agent_uri_reprocess`, `on_demand_backfill`
+- Worker READMEs: `agent_uri_resolve`, `agent_uri_reprocess`, `on_demand_backfill`, `wallet_activity_flows`
