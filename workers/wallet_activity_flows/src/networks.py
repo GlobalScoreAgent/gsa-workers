@@ -1,0 +1,81 @@
+"""EVM chain metadata for wallet_activity_flows."""
+
+from __future__ import annotations
+
+from typing import Any
+
+# Keyed by EVM chain_id.
+CHAINS: dict[int, dict[str, Any]] = {
+    1: {
+        "slug": "ethereum",
+        "block_time_sec": 12.0,
+        "alchemy_subdomain": "eth-mainnet",
+        "group": "etherscan",
+        "provider": "etherscan",
+    },
+    42161: {
+        "slug": "arbitrum",
+        "block_time_sec": 0.25,
+        "alchemy_subdomain": "arb-mainnet",
+        "group": "etherscan",
+        "provider": "etherscan",
+    },
+    137: {
+        "slug": "polygon",
+        "block_time_sec": 2.0,
+        "alchemy_subdomain": "polygon-mainnet",
+        "group": "etherscan",
+        "provider": "etherscan",
+    },
+    42220: {
+        "slug": "celo",
+        "block_time_sec": 5.0,
+        "alchemy_subdomain": "celo-mainnet",
+        "group": "etherscan",
+        "provider": "etherscan",
+    },
+    8453: {
+        "slug": "base",
+        "block_time_sec": 2.0,
+        "alchemy_subdomain": "base-mainnet",
+        "group": "alchemy_k1",
+        "provider": "alchemy",
+    },
+    100: {
+        "slug": "gnosis",
+        "block_time_sec": 5.0,
+        "alchemy_subdomain": "gnosis-mainnet",
+        "group": "alchemy_k1",
+        "provider": "alchemy",
+    },
+    56: {
+        "slug": "bsc",
+        "block_time_sec": 3.0,
+        "alchemy_subdomain": "bnb-mainnet",
+        "group": "bsc",
+        "provider": "alchemy_or_ankr",
+    },
+    196: {
+        "slug": "xlayer",
+        "block_time_sec": 3.0,
+        "alchemy_subdomain": None,
+        "group": "xlayer",
+        "provider": "okx",
+    },
+}
+
+GROUP_EVM_IDS: dict[str, tuple[int, ...]] = {
+    "etherscan": (1, 42161, 137, 42220),
+    "alchemy_k1": (8453, 100),
+    "bsc": (56,),
+    "xlayer": (196,),
+}
+
+LOOKBACK_DAYS = 15
+
+
+def bsc_provider(utc_day: int) -> str:
+    """First cut of month (days 1–15) Alchemy key_2; second cut Ankr."""
+    if utc_day < 16:
+        return "alchemy"
+    return "ankr"

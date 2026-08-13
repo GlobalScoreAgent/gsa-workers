@@ -1,0 +1,39 @@
+name: Wallet activity flows smoke
+
+on:
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        working-directory: workers/wallet_activity_flows
+        run: uv sync
+
+      - name: Smoke all providers
+        working-directory: workers/wallet_activity_flows
+        env:
+          SMOKE_REQUIRE_ALL: "1"
+          ETHERSCAN_API_KEY: ${{ secrets.ETHERSCAN_API_KEY }}
+          ALCHEMY_ACTIVITY_KEY_1: ${{ secrets.ALCHEMY_ACTIVITY_KEY_1 }}
+          ALCHEMY_ACTIVITY_KEY_2: ${{ secrets.ALCHEMY_ACTIVITY_KEY_2 }}
+          ANKR_API_KEY: ${{ secrets.ANKR_API_KEY }}
+          OKX_API_KEY: ${{ secrets.OKX_API_KEY }}
+          OKX_SECRET_KEY: ${{ secrets.OKX_SECRET_KEY }}
+          OKX_PASSPHRASE: ${{ secrets.OKX_PASSPHRASE }}
+        run: uv run python scripts/smoke_providers.py
