@@ -1,0 +1,47 @@
+name: ERC-8257 tools import
+
+on:
+  schedule:
+    - cron: "0 4 * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Force full dump even if source synced_at unchanged"
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: erc8257-tools-import
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        working-directory: workers/erc8257_tools_import
+        run: uv sync
+
+      - name: Run ERC-8257 tools import
+        working-directory: workers/erc8257_tools_import
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          UPSERT_CHUNK_SIZE: "5000"
+          FORCE_FULL_SYNC: ${{ inputs.force && '1' || '0' }}
+        run: uv run python job.py

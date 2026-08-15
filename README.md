@@ -21,6 +21,7 @@ Unified Python batch workers for [Global Score Agent](https://www.globalscoreage
 | [`agent_uri_reprocess`](./workers/agent_uri_reprocess/README.md) | 06:00, 18:00 | download errors (max 3) + off-chain docs &gt;15d | Retry errors; refresh HTTP/IPFS; `is_processed` only if document changed |
 | [`ai_agent_classifier`](./workers/ai_agent_classifier/README.md) | 0, 6, 12, 18h | `web_dashboard.agents.does_need_ai_category_process` | LLM categories → `ai_category_*` (+ `llm.models_requests` rate limits) |
 | [`on_demand_backfill`](./workers/on_demand_backfill/README.md) | 0, 6, 12, 18h | per-step queues (Ethos history/scores, ERC-8183 + Virtual ACP + Olas Mech satellites) | Orchestrator catch-up after late wallet link |
+| [`erc8257_tools_import`](./workers/erc8257_tools_import/README.md) | 04:00 daily | n/a (reference data) | agenttoolindex dump → `erc_8257.tools` (+ sync_state watermark) |
 
 Pending: [LP 15-day refresh](./docs/PENDING_LP_POSITIONS.md). Manifest **consume** (entity SPs) not built yet. `ethos_enrich` → absorbed by `on_demand_backfill` ([DEPRECATION](./docs/DEPRECATION.md)).
 
@@ -33,7 +34,7 @@ claim (Pending, next_eligible_at += CLAIM_STALE_SECONDS)
   → wallet_apply_*_snapshot → Processed
 ```
 
-Reference-data: `dune_queries_import` (4 Dune queries → upserts); `token_prices_import` (Dex/CG enrich + miss mark). Full catalog: [docs/PROCESSES.md](./docs/PROCESSES.md). Column/RPC inventory: [docs/SUPABASE.md](./docs/SUPABASE.md).
+Reference-data: `dune_queries_import` (4 Dune queries → upserts); `token_prices_import` (Dex/CG enrich + miss mark); `erc8257_tools_import` (agenttoolindex → `erc_8257.tools`). Full catalog: [docs/PROCESSES.md](./docs/PROCESSES.md). Column/RPC inventory: [docs/SUPABASE.md](./docs/SUPABASE.md).
 
 ## Secrets
 
@@ -116,6 +117,9 @@ gsa-workers/
 │   ├── dune_queries_import/
 │   │   ├── job.py
 │   │   └── src/          # db, dune
+│   ├── erc8257_tools_import/
+│   │   ├── job.py
+│   │   └── src/          # db, agenttoolindex
 │   ├── token_prices_import/
 │   │   ├── job.py
 │   │   └── src/          # db, dexscreener, coingecko
@@ -145,6 +149,7 @@ gsa-workers/
     ├── owner-wallet-origin.yml
     ├── owner-wallet-nonce-balance-monthly.yml
     ├── dune-queries-import.yml
+    ├── erc8257-tools-import.yml
     ├── token-prices-import.yml
     ├── wallet-token-contracts-discovery.yml
     ├── wallet-token-portfolio-discovery.yml

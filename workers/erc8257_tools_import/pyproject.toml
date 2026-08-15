@@ -1,0 +1,12 @@
+[project]
+name = "erc8257-tools-import"
+version = "0.1.0"
+description = "Import ERC-8257 tools from agenttoolindex.xyz into erc_8257 schema for GSA"
+requires-python = ">=3.12"
+dependencies = [
+    "httpx>=0.28",
+    "psycopg[binary]>=3.2",
+]
+
+[dependency-groups]
+dev = []

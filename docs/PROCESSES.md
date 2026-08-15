@@ -22,6 +22,7 @@ flowchart TB
   end
   subgraph refdata [Other_reference]
     dune[dune_queries_import]
+    erc8257[erc8257_tools_import]
   end
   subgraph pending [Not_built_yet]
     lpRefresh[wallet_lp_positions_refresh_15d]
@@ -49,6 +50,7 @@ flowchart TB
   dune --> mixT[wallets.mixer_addresses]
   dune --> brT[wallets.bridge_addresses]
   dune --> ofacT[wallets.ofac_sanction_addresses]
+  erc8257 --> tools8257[erc_8257.tools]
   lpRefresh -.-> wlp
   uriResolve --> ud[erc_8004.uri_documents]
   uriResolve --> am[erc_8004.agent_manifest]
@@ -75,6 +77,7 @@ flowchart TB
 | 11 | [`agent_uri_reprocess`](../workers/agent_uri_reprocess/README.md) | Claim (manifest errors + docs) | 06:00, 18:00 | download errors / off-chain &gt;15d | direct SQL | retry + refresh `uri_documents` |
 | 12 | [`ai_agent_classifier`](../workers/ai_agent_classifier/README.md) | Claim (`web_dashboard.agents`) | 0/6/12/18 | `does_need_ai_category_process` | exact-hash copy or LLM | `ai_category_*` + `ai_category_input_hash` |
 | 13 | [`on_demand_backfill`](../workers/on_demand_backfill/README.md) | Orchestrator (Ethos + ERC-8183 + Virtual ACP + Olas Mech) | 0/6/12/18 | `needs_history_fetch` → scores TTL 15d → `needs_satellite_backfill` (8183 + Virtual ACP + Olas Mech) | per-step claim/complete | `ethos.*` + `official_scores` + `bsc_erc_8183` / `virtual_acp` / `olas_mech` satellites |
+| 14 | [`erc8257_tools_import`](../workers/erc8257_tools_import/README.md) | Reference | 04:00 daily | agenttoolindex REST (active+deregistered dump) | `erc_8257.tools_upsert` + `sync_state` watermark | `erc_8257.tools` (full catalog) |
 
 Soft runtime budget for claim / enrich jobs: **`MAX_RUNTIME_SECONDS=19800`** (~5.5h). Empty queue → exit 0; next cron still fires.
 
@@ -223,6 +226,25 @@ ethos_history → ethos_scores → erc8183_satellites → virtual_acp_satellites
 | Schema 8183 claim | `20260807010000_bsc_erc_8183_satellite_backfill_claim.sql` |
 | Schema Virtual ACP claim | `20260807140000_virtual_acp_satellite_backfill_claim.sql` |
 | Schema Olas Mech claim | `20260807154000_olas_mech_satellite_backfill_claim.sql` |
+
+### 14. ERC-8257 tools import (agenttoolindex)
+
+**Live (schema `erc_8257` must be applied).** Reference-data worker: full REST dump → upsert. No claim loop.
+
+```
+GET /api/stats → short-circuit if synced_at unchanged →
+  active + deregistered dumps → tools_upsert → sync_state
+```
+
+| Item | Detail |
+|---|---|
+| Source | `https://agenttoolindex.xyz` (no API key) |
+| PK | `(chain_id, tool_id)` |
+| Ingest | All chains from API; Base/Eth filter only in read metrics |
+| Watermark | `erc_8257.sync_state.source_synced_at` |
+| Force | `FORCE_FULL_SYNC=1` / workflow `force` |
+| Workflow | `erc8257-tools-import.yml` (`0 4 * * *` UTC) |
+| Schema | `20260815010000_erc_8257_schema.sql` + try_link |
 
 ## Secrets cheat sheet
 

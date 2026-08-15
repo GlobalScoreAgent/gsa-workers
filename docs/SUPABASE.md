@@ -1,6 +1,6 @@
 # Supabase / Postgres interaction
 
-Workers connect with **direct Postgres** via `SUPABASE_DB_URL` (`psycopg`), not supabase-js or Edge Functions. Schema of truth for wallet claim jobs: `erc_8004`. Reference-data imports (Dune queries, token prices) use schema `wallets`. URI ingest uses `erc_8004.uri_documents` + `erc_8004.agent_manifest`. AI agent classifier uses `web_dashboard.agents` + schema `llm` + `web_dashboard.agent_ai_categories`.
+Workers connect with **direct Postgres** via `SUPABASE_DB_URL` (`psycopg`), not supabase-js or Edge Functions. Schema of truth for wallet claim jobs: `erc_8004`. Reference-data imports (Dune queries, token prices) use schema `wallets`. ERC-8257 tools import uses schema `erc_8257`. URI ingest uses `erc_8004.uri_documents` + `erc_8004.agent_manifest`. AI agent classifier uses `web_dashboard.agents` + schema `llm` + `web_dashboard.agent_ai_categories`.
 
 Schema migrations and snapshot/upsert SQL live in the sibling repo **`gsa-supabase-schema`** (functions `wallet_apply_*_snapshot`, Dune reference / token_prices / discovery upserts, URI indexes + helpers, triggers). Code of truth for claim/save SQL in this repo: each worker’s `src/db.py`. Process catalog: [PROCESSES.md](./PROCESSES.md). LP refresh (15d) still pending: [PENDING_LP_POSITIONS.md](./PENDING_LP_POSITIONS.md).
 
@@ -20,7 +20,7 @@ Schema migrations and snapshot/upsert SQL live in the sibling repo **`gsa-supaba
 | `erc_8004.wallets` | Claim queue, JSON payloads, status, `next_eligible_at` |
 | `erc_8004.chains` | Active chains + `subdomain_alchemy` for Alchemy fallback |
 | `erc_8004.wallet_daily_metrics` | Daily flat nonce/balance per wallet×chain×date (written by daily snapshot). `snapshot_date` = Postgres `CURRENT_DATE` (DB timezone, typically UTC). |
-| `erc_8004.wallet_transactions` | Read model: current nonce/balance + 30d history + category. Updated by **`wallet_rollup_daily_metrics`** (not by daily snapshot). Claim queue for token/LP discovery + probe. |
+| `erc_8004.wallet_transactions` | Read model: current nonce/balance + 30d history + category. Updated by **`wallet_rollup_daily_metrics`** (not by daily snapshot). Claim queue for token/LP discovery + **activity flows 15d**. |
 | `erc_8004.chain_nonces` | Per-chain daily nonce totals (not written by current daily snapshot) |
 | `erc_8004.wallet_owner_details` | Monthly + origin snapshots: owner metrics / first tx |
 | `wallets.cex_addresses` | CEX address reference list (Dune import) |
@@ -41,6 +41,8 @@ Schema migrations and snapshot/upsert SQL live in the sibling repo **`gsa-supaba
 | `web_dashboard.agents` | Dashboard agent rows; AI classifier queue + results |
 | `web_dashboard.agent_ai_categories` | Active taxonomy for AI classification |
 | `llm.process` / `llm.llm_provider` / `llm.models` / `llm.procees_llm_providers` / `llm.models_requests` | LLM config + daily request counters |
+| `erc_8257.tools` | ERC-8257 tool catalog mirror (agenttoolindex); PK `(chain_id, tool_id)`; FK `creator_wallet_id` |
+| `erc_8257.sync_state` | Watermark `source_synced_at` for agenttoolindex sync short-circuit |
 
 ## Per-worker column map
 
@@ -105,6 +107,15 @@ Eligibility: `is_valid_activity_flows` + due clock + `wallet_category NOT LIKE '
 
 ```sql
 SELECT
+  count(*) FILTER (WHERE is_valid_activity_flows IS TRUE) AS seeded,
+  count(*) FILTER (
+    WHERE is_valid_activity_flows IS TRUE
+      AND COALESCE(wallet_category, '') LIKE 'Dormant_%'
+  ) AS dormant,
+  count(*) FILTER (
+    WHERE is_valid_activity_flows IS TRUE
+      AND COALESCE(wallet_category, '') NOT LIKE 'Dormant_%'
+  ) AS non_dormant,
   count(*) FILTER (
     WHERE is_valid_activity_flows IS TRUE
       AND activity_flows_next_eligible_at IS NOT NULL
@@ -115,6 +126,8 @@ SELECT
   count(*) FILTER (WHERE activity_flows_completed_at IS NOT NULL) AS completed
 FROM erc_8004.wallet_transactions;
 ```
+
+Control until the 15th cut: `dormant` should rise and `non_dormant` fall as `wallet_tx_rollup` reclassifies. `due_now` stays 0 while the queue is parked (`next_eligible_at = 2026-08-15 00:00 UTC`) and GHA `Wallet activity flows 15d` is `disabled_manually`. Baseline 2026-08-13: seeded 294 948 / dormant 77 159 / non_dormant 217 789. Same snapshot is required in skill `gsa-worker-health`.
 
 Staging table: `wallets.wallet_activity_transfers` via `wallets.wallet_activity_transfers_insert`. PK `(wallet_id, chain_id, unique_id)`. `chain_id` is `erc_8004.chains.id`. Migration: `20260813010000_wallet_activity_transfers.sql`. Schema doc: `gsa-supabase-schema/supabase/docs/wallet-activity-transfers.md`.
 
@@ -655,13 +668,33 @@ SELECT jsonb_build_object(
 | `virtual_acp_satellites` | `virtual_acp.jobs.needs_satellite_backfill` | Goldsky Virtual ACP Base |
 | `olas_mech_satellites` | `olas_mech.mechs.needs_satellite_backfill` | Autonolas Base + Gnosis |
 
+## Monitoring — ERC-8257 tools import (#14)
+
+```sql
+SELECT * FROM erc_8257.sync_state;
+
+SELECT chain_id, chain_name, status, count(*)
+FROM erc_8257.tools
+GROUP BY 1, 2, 3
+ORDER BY 1, 3;
+
+SELECT
+  count(*) AS tools,
+  count(*) FILTER (WHERE creator_wallet_id IS NOT NULL) AS linked,
+  count(DISTINCT creator) FILTER (WHERE creator_wallet_id IS NOT NULL) AS creators_in_gsa
+FROM erc_8257.tools
+WHERE chain_id IN (1, 8453)
+  AND status = 'active';
+```
+
 ## Related docs
 
 - [ARCHITECTURE.md](./ARCHITECTURE.md) — GHA pipeline and state machine
 - [OPS.md](./OPS.md) — stuck wallets, URI ops, logs
-- [PROCESSES.md](./PROCESSES.md) — live catalog (#10–11 URI ingest, **#13 on-demand backfill**)
+- [PROCESSES.md](./PROCESSES.md) — live catalog (#10–11 URI ingest, **#13 on-demand backfill**, **#14 ERC-8257**)
 - Worker READMEs under `workers/*/README.md`
 - Ethos linking (schema): sibling `gsa-supabase-schema` → `supabase/docs/ethos-erc8004-linking.md`
 - ERC-8183 catch-up: `supabase/docs/bsc-erc-8183-import.md` (Fase 3 = `on_demand_backfill`)
 - Virtual ACP catch-up: `supabase/docs/virtual-acp-import.md` (consumer = `on_demand_backfill` / `virtual_acp_satellites`)
 - Olas Mech catch-up: `supabase/docs/olas-mech-import.md` (consumer = `on_demand_backfill` / `olas_mech_satellites`)
+- ERC-8257 tools: `supabase/docs/erc-8257-tools-import.md`

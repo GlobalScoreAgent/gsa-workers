@@ -76,6 +76,7 @@ stateDiagram-v2
 | `owner_wallet_nonce_balance_monthly` | `owner-wallet-nonce-balance-monthly.yml` | `owner-wallet-nonce-balance-monthly` | 1 runner |
 | `dune_queries_import` | `dune-queries-import.yml` | `dune-queries-import` | 1 runner |
 | `token_prices_import` | `token-prices-import.yml` | `token-prices-import` | 1 runner |
+| `erc8257_tools_import` | `erc8257-tools-import.yml` | `erc8257-tools-import` | 1 runner |
 | `wallet_token_contracts_discovery` | `wallet-token-contracts-discovery.yml` | `wallet-token-contracts-discovery` | 1 runner |
 | `wallet_token_portfolio_discovery` | `wallet-token-portfolio-discovery.yml` | `wallet-token-portfolio-discovery` | 1 runner |
 | `wallet_lp_positions_discovery` | `wallet-lp-positions-discovery.yml` | `wallet-lp-positions-discovery` | 1 runner |
@@ -99,6 +100,7 @@ Activity flows 15d: `0 0 1,15 * *` + `0 */4 * * *` UTC + `workflow_dispatch`.
 | monthly | `is_valid_import_current_nonce_and_balance_monthly` | Balance/nonce JSON → `wallet_owner_details` (current metrics) |
 | origin | same monthly flag | First-activity history JSON → `wallet_owner_details.first_transaction_at` |
 | dune queries | n/a | 4 Dune queries → cex / mixer / bridge / ofac tables (paginated + chunked upserts) |
+| erc8257 tools | n/a | agenttoolindex dump → `erc_8257.tools` (+ `sync_state` watermark) |
 | token prices | n/a | Unpriced ERC-20s → Dex/CG → `token_prices` → apply hits / mark misses |
 | token contracts discovery | `wallet_transactions.does_need_discovery_contracts` + `chains.subdomain_alchemy` | Alchemy ERC-20 balances → `wallets.wallet_token_contracts` via `wallet_token_contracts_upsert` |
 | token portfolio discovery | `does_need_portfolio_discovery` after contract discovery | Alchemy amounts + DeFiLlama → fungible `wallet_token_positions_insert` |
@@ -147,11 +149,13 @@ flowchart LR
 
 ## Reference-data workers
 
-`dune_queries_import` and `token_prices_import` do **not** use claim / `next_eligible_at`.
+`dune_queries_import`, `token_prices_import`, and `erc8257_tools_import` do **not** use claim / `next_eligible_at`.
 
 **Dune queries:** For each of cex / mixers / bridges / ofac_sanction — paginated Dune fetch → fail task if zero rows → upsert in chunks (`UPSERT_CHUNK_SIZE`) via the matching `wallets.*_upsert` RPC. Tasks continue on failure; job exit 1 if any failed.
 
 **Token prices:** Load chain `subdomain_*` → distinct unpriced ERC-20s (`DISTINCT ON` chain+contract) → cache TTL → DexScreener → CoinGecko → `token_prices_upsert` (deduped PK) → per-chain `apply_prices` → `mark_price_misses` for unresolved contracts → final `apply_prices`.
+
+**ERC-8257 tools:** `GET /api/stats` watermark vs `erc_8257.sync_state` → if changed (or `FORCE_FULL_SYNC`), dump active+deregistered from agenttoolindex → `erc_8257.tools_upsert` (full catalog). Schedule `0 4 * * *` UTC.
 
 ```mermaid
 flowchart LR
@@ -168,6 +172,9 @@ flowchart LR
   dexCg --> upsertPrices["token_prices_upsert"]
   upsertPrices --> applyPos["apply_prices"]
   upsertPrices --> markMiss["mark_price_misses"]
+  gha8257[GHA_erc8257_tools] --> ati[agenttoolindex]
+  ati --> upsert8257["erc_8257.tools_upsert"]
+  upsert8257 --> tools8257[erc_8257.tools]
 ```
 
 ## LP positions discovery
