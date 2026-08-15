@@ -229,7 +229,7 @@ ethos_history → ethos_scores → erc8183_satellites → virtual_acp_satellites
 
 ### 14. ERC-8257 tools import (agenttoolindex)
 
-**Live (schema `erc_8257` must be applied).** Reference-data worker: full REST dump → upsert. No claim loop.
+**Live (validated 2026-08-15).** Reference-data worker: full REST dump → upsert. No claim loop.
 
 ```
 GET /api/stats → short-circuit if synced_at unchanged →
@@ -244,7 +244,8 @@ GET /api/stats → short-circuit if synced_at unchanged →
 | Watermark | `erc_8257.sync_state.source_synced_at` |
 | Force | `FORCE_FULL_SYNC=1` / workflow `force` |
 | Workflow | `erc8257-tools-import.yml` (`0 4 * * *` UTC) |
-| Schema | `20260815010000_erc_8257_schema.sql` + try_link |
+| Schema | `20260815010000`…`10200_erc_8257_*` |
+| Prod snapshot | 622 tools; 408 active Base+Eth; 207 linked; GHA [31860915582](https://github.com/GlobalScoreAgent/gsa-workers/actions/runs/31860915582) |
 
 ## Secrets cheat sheet
 

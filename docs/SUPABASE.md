@@ -670,6 +670,8 @@ SELECT jsonb_build_object(
 
 ## Monitoring — ERC-8257 tools import (#14)
 
+**Live.** Snapshot 2026-08-15: 622 tools · 408 active Base+Eth · 207 linked · 58 creators · 304 agents with owner publisher.
+
 ```sql
 SELECT * FROM erc_8257.sync_state;
 

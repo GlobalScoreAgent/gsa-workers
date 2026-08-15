@@ -2,8 +2,10 @@
 
 Sync the public [agenttoolindex.xyz](https://agenttoolindex.xyz) catalog into `erc_8257.tools`.
 
+**Status:** Live (2026-08-15). Validated GHA run: https://github.com/GlobalScoreAgent/gsa-workers/actions/runs/31860915582  
 **ADR:** vault `08 - Decisiones/2026-08-13 - Indexar ERC-8257 Base y Ethereum`  
-**Schema:** `gsa-supabase-schema` → `supabase/docs/erc-8257-tools-import.md`
+**Schema:** `gsa-supabase-schema` → `supabase/docs/erc-8257-tools-import.md`  
+**Vault ops:** `12 - Github Worker/ERC-8257 Tools/`
 
 ## Pipeline
 
@@ -49,6 +51,16 @@ cp .env.example .env   # set SUPABASE_DB_URL
 uv sync
 uv run python job.py
 ```
+
+## Coverage snapshot (prod, 2026-08-15)
+
+| Metric | Value |
+|--------|------:|
+| Tools | 622 |
+| Active Base+Eth | 408 |
+| Linked wallets | 207 |
+| Distinct GSA creators | 58 |
+| Agents with owner publisher | 304 |
 
 ## Monitoring SQL
 
