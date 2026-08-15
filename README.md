@@ -46,7 +46,7 @@ Reference-data: `dune_queries_import` (4 Dune queries → upserts); `token_price
 | `DUNE_KEY` | For CEX import | Dune Analytics API key |
 | `COINGECKO_KEY` | For token-prices enrich | CoinGecko Demo/Pro API key |
 | `PINATA_GATEWAY` | Optional (URI workers) | Paid IPFS gateway token (last resort) |
-| `SCRAPE_DO_TOKEN` | Optional (URI workers) | Scrape.do token (last HTTP fallback) |
+| `SCRAPING_ANT_KEY` | Optional (URI workers) | ScrapingAnt API key (last HTTP fallback) |
 | `GROQ` | For AI agent classifier | Groq API key (`llm.llm_provider.secret`) |
 | `ETHERSCAN_API_KEY` | For activity flows (ETH/Arb/Polygon/Celo) | Etherscan V2 Free |
 | `ALCHEMY_ACTIVITY_KEY_1` | For activity flows (Base + Gnosis) | Dedicated Transfers key — not `ALCHEMY_FREE_KEY` |

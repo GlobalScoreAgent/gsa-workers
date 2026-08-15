@@ -216,7 +216,7 @@ async def run_job() -> int:
         return 1
 
     pinata = env_str("PINATA_GATEWAY")
-    scrape_do = env_str("SCRAPE_DO_TOKEN")
+    scraping_ant = env_str("SCRAPING_ANT_KEY")
     claim_batch = env_int("CLAIM_BATCH_SIZE", 20, minimum=1, maximum=200)
     concurrency = env_int("CONCURRENCY", 4, minimum=1, maximum=20)
     max_runtime = env_int("MAX_RUNTIME_SECONDS", 19800, minimum=60)
@@ -239,7 +239,7 @@ async def run_job() -> int:
     try:
         async with httpx.AsyncClient() as http:
             resolver = UriResolver(
-                db, http, pinata_token=pinata, scrape_do_token=scrape_do
+                db, http, pinata_token=pinata, scraping_ant_key=scraping_ant
             )
             sem = asyncio.Semaphore(concurrency)
 

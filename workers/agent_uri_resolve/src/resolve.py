@@ -28,12 +28,12 @@ class UriResolver:
         db: Any,
         http: httpx.AsyncClient,
         pinata_token: str = "",
-        scrape_do_token: str = "",
+        scraping_ant_key: str = "",
     ):
         self.db = db
         self.http = http
         self.pinata_token = pinata_token
-        self.scrape_do_token = scrape_do_token
+        self.scraping_ant_key = scraping_ant_key
         self._mem: dict[str, ResolveResult] = {}
 
     async def resolve(
@@ -142,6 +142,6 @@ class UriResolver:
             return await fetch_ipfs(uri, self.http, self.pinata_token)
 
         if looks_like_http(uri):
-            return await fetch_http(uri, self.http, self.scrape_do_token)
+            return await fetch_http(uri, self.http, self.scraping_ant_key)
 
         return ResolveResult(ok=False, error="unsupported_uri_scheme")

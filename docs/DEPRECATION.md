@@ -61,6 +61,10 @@ Do **not** re-enable Edge URI batch processors or legacy manifest reprocess cron
 
 Ops may delete leftover URI Edge/cron artifacts in the schema repo; workers do not call those stubs.
 
+### Scrape.do → ScrapingAnt (2026-08-15)
+
+URI HTTP last-fallback moved from `SCRAPE_DO_TOKEN` / `scrape/scrape_do.py` to `SCRAPING_ANT_KEY` / `scrape/scraping_ant.py`. Do not reintroduce Scrape.do in workflows. Historical `source_gateway` values `scrape-do-*` remain in `uri_documents`; new successes use `scraping-ant-*`.
+
 ## Token prices (walcert → GHA → Dex/CoinGecko)
 
 Current: **`token_prices_import`** enriches unpriced `wallet_token_positions` via DexScreener → CoinGecko into spot cache `wallets.token_prices` (PK `chain_id`+`contract`), then `wallet_token_positions_apply_prices`.

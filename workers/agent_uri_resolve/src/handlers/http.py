@@ -9,7 +9,7 @@ import httpx
 from result import ResolveResult
 from scrape.deckard_http import fetch_deckard_clean
 from scrape.playwright_stealth import fetch_with_playwright
-from scrape.scrape_do import fetch_scrape_do
+from scrape.scraping_ant import fetch_scraping_ant
 
 logger = logging.getLogger("agent_uri_resolve.http")
 
@@ -23,7 +23,7 @@ def looks_like_http(uri: str) -> bool:
 async def fetch_http(
     uri: str,
     client: httpx.AsyncClient,
-    scrape_do_token: str = "",
+    scraping_ant_key: str = "",
 ) -> ResolveResult:
     try:
         resp = await client.get(
@@ -56,8 +56,8 @@ async def fetch_http(
     if deck.ok and deck.document is not None:
         return deck
 
-    if scrape_do_token.strip():
-        return await fetch_scrape_do(uri, scrape_do_token.strip(), client)
+    if scraping_ant_key.strip():
+        return await fetch_scraping_ant(uri, scraping_ant_key.strip(), client)
 
     return ResolveResult(
         ok=False,

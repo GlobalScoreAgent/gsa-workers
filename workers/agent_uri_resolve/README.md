@@ -31,7 +31,7 @@ Error-retry / off-chain refresh: sibling worker [`agent_uri_reprocess`](../agent
 |---|---|---|
 | `SUPABASE_DB_URL` | Yes | — |
 | `PINATA_GATEWAY` | No | — (paid IPFS last resort) |
-| `SCRAPE_DO_TOKEN` | No | — (last HTTP fallback) |
+| `SCRAPING_ANT_KEY` | No | — (last HTTP fallback; ScrapingAnt free tier) |
 | `CLAIM_BATCH_SIZE` | No | `20` |
 | `CLAIM_STALE_SECONDS` | No | `7200` |
 | `CONCURRENCY` | No | `4` |
@@ -46,3 +46,16 @@ uv sync
 uv run playwright install chromium
 uv run python job.py
 ```
+
+## Smoke ScrapingAnt
+
+Optional last-fallback provider. Requires `SCRAPING_ANT_KEY` in the environment (GitHub Actions secret or local env; do not commit).
+
+```powershell
+cd workers/agent_uri_resolve
+uv sync
+$env:SCRAPING_ANT_KEY = '...'   # local only
+uv run python scripts/smoke_scraping_ant.py
+```
+
+Expect `OK` with HTTP 200 and `Ant-credits-cost=10` when `browser=true`. In production, ScrapingAnt only runs after direct fetch, Playwright, and Deckard fail. Successes land in `uri_documents.source_gateway` as `scraping-ant-*`.

@@ -108,7 +108,7 @@ Worker details: [token_prices_import/README.md](../workers/token_prices_import/R
 
 ## Agent URI resolve / reprocess
 
-URI workers claim agents / feedbacks / `agent_manifest` / `uri_documents` (not wallet `Pending` status). Soft `MAX_RUNTIME_SECONDS=19800`. Optional secrets: `PINATA_GATEWAY`, `SCRAPE_DO_TOKEN`.
+URI workers claim agents / feedbacks / `agent_manifest` / `uri_documents` (not wallet `Pending` status). Soft `MAX_RUNTIME_SECONDS=19800`. Optional secrets: `PINATA_GATEWAY`, `SCRAPING_ANT_KEY`.
 
 ### Interpret logs
 

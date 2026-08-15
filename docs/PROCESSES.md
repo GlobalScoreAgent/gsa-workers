@@ -257,7 +257,7 @@ GET /api/stats → short-circuit if synced_at unchanged →
 | `DUNE_KEY` | Dune queries import |
 | `COINGECKO_KEY` | Token prices enrich |
 | `PINATA_GATEWAY` | URI resolve / reprocess (optional IPFS) |
-| `SCRAPE_DO_TOKEN` | URI resolve / reprocess (optional HTTP fallback) |
+| `SCRAPING_ANT_KEY` | URI resolve / reprocess (optional HTTP fallback) |
 | `GROQ` | AI agent classifier (Groq; name matches `llm.llm_provider.secret`) |
 
 ## When schema vs worker

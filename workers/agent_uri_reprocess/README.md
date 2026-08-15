@@ -23,7 +23,7 @@ Requires schema migration `00000000000069_uri_reprocess_refresh_indexes.sql`.
 |---|---|---|
 | `SUPABASE_DB_URL` | Yes | — |
 | `PINATA_GATEWAY` | No | — |
-| `SCRAPE_DO_TOKEN` | No | — |
+| `SCRAPING_ANT_KEY` | No | — |
 | `CLAIM_BATCH_SIZE` | No | `20` |
 | `CONCURRENCY` | No | `4` |
 | `MAX_RUNTIME_SECONDS` | No | `19800` |

@@ -218,7 +218,7 @@ flowchart LR
 
 | Worker | Role |
 |---|---|
-| [`agent_uri_resolve`](../workers/agent_uri_resolve/README.md) | First ingest: agents → on-chain feedbacks → external URI/endpoint; nested/DID; Pinata/Scrape.do scrapers |
+| [`agent_uri_resolve`](../workers/agent_uri_resolve/README.md) | First ingest: agents → on-chain feedbacks → external URI/endpoint; nested/DID; Pinata/ScrapingAnt scrapers |
 | [`agent_uri_reprocess`](../workers/agent_uri_reprocess/README.md) | Retry download errors (max 3); refresh HTTP/IPFS docs &gt;15d; reset `is_processed` only if document changed |
 
 Hex / on-chain synthetic docs are **not** TTL-refreshed — subgraph import requeues via flags into resolve. Manifest **entity consume** is still deferred.
@@ -299,7 +299,7 @@ Origin also has `scripts/check_pending.py` and `scripts/compare_smoke.py`. `wall
 | AI agent classifier | 1 | 20 | n/a |
 | on-demand backfill | Ethos 3 / satellites 5 | Ethos 10 / satellites 100 | 7200 |
 
-Secrets: `SUPABASE_DB_URL` (required), `ALCHEMY_KEY` (balance/nonce), `ALCHEMY_FREE_KEY` (contracts / portfolio / LP), `ETHERSCAN_API_KEY` / `ALCHEMY_ACTIVITY_KEY_1` / `ALCHEMY_ACTIVITY_KEY_2` / `ANKR_API_KEY` / OKX HMAC (`OKX_API_KEY`, `OKX_SECRET_KEY`, `OKX_PASSPHRASE`) for activity flows (`ALCHEMY_ACTIVITY_KEY_2` is a dedicated Free app — do not reuse `ALCHEMY_FREE_KEY`), `DUNE_KEY` (dune queries), `COINGECKO_KEY` (token prices), `PINATA_GATEWAY` / `SCRAPE_DO_TOKEN` (URI workers, optional), `GROQ` (AI classifier). Daily sets `WORKER_ID` from the matrix.
+Secrets: `SUPABASE_DB_URL` (required), `ALCHEMY_KEY` (balance/nonce), `ALCHEMY_FREE_KEY` (contracts / portfolio / LP), `ETHERSCAN_API_KEY` / `ALCHEMY_ACTIVITY_KEY_1` / `ALCHEMY_ACTIVITY_KEY_2` / `ANKR_API_KEY` / OKX HMAC (`OKX_API_KEY`, `OKX_SECRET_KEY`, `OKX_PASSPHRASE`) for activity flows (`ALCHEMY_ACTIVITY_KEY_2` is a dedicated Free app — do not reuse `ALCHEMY_FREE_KEY`), `DUNE_KEY` (dune queries), `COINGECKO_KEY` (token prices), `PINATA_GATEWAY` / `SCRAPING_ANT_KEY` (URI workers, optional), `GROQ` (AI classifier). Daily sets `WORKER_ID` from the matrix.
 
 ## On-demand backfill (orchestrator)
 
