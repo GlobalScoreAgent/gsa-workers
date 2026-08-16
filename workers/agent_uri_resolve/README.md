@@ -30,7 +30,7 @@ Error-retry / off-chain refresh: sibling worker [`agent_uri_reprocess`](../agent
 | Variable | Required | Default |
 |---|---|---|
 | `SUPABASE_DB_URL` | Yes | — |
-| `PINATA_GATEWAY` | No | — (paid IPFS last resort) |
+| `PINATA_GATEWAY` | No | — (Pinata dedicated gateway key; 2nd IPFS option after `ipfs.io`) |
 | `SCRAPING_ANT_KEY` | No | — (last HTTP fallback; ScrapingAnt free tier) |
 | `CLAIM_BATCH_SIZE` | No | `20` |
 | `CLAIM_STALE_SECONDS` | No | `7200` |

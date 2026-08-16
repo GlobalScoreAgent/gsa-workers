@@ -14,14 +14,18 @@ logger = logging.getLogger("agent_uri_resolve.ipfs")
 
 CID_RE = re.compile(r"([a-zA-Z0-9]{46,64})")
 
-FREE_GATEWAYS = [
-    ("ipfs-io", "https://ipfs.io/ipfs/"),
+# Primary free gateway. Dedicated Pinata (if PINATA_GATEWAY set) is tried second.
+PRIMARY_FREE_GATEWAY = ("ipfs-io", "https://ipfs.io/ipfs/")
+
+# Remaining free gateways after dedicated Pinata backup.
+SECONDARY_FREE_GATEWAYS = [
     ("pinata-gateway-public", "https://gateway.pinata.cloud/ipfs/"),
     ("cloudflare-ipfs", "https://cloudflare-ipfs.com/ipfs/"),
     ("dweb-link", "https://dweb.link/ipfs/"),
 ]
 
-PINATA_DEDICATED_BASE = "https://indigo-urban-flyingfish-439.mypinata.cloud/ipfs/"
+# Dedicated gateway host (Picnic). Token = secret PINATA_GATEWAY → x-pinata-gateway-token.
+PINATA_DEDICATED_BASE = "https://violet-efficient-aardwolf-922.mypinata.cloud/ipfs/"
 TIMEOUT_PUBLIC = 12.0
 TIMEOUT_DEDICATED = 20.0
 MAX_RETRIES = 2
@@ -38,17 +42,14 @@ def extract_cid(uri: str) -> str | None:
     return match.group(1) if match else None
 
 
-async def fetch_ipfs(
-    uri: str,
-    client: httpx.AsyncClient,
-    pinata_token: str = "",
-) -> ResolveResult:
-    cid = extract_cid(uri)
-    if not cid:
-        return ResolveResult(ok=False, error="No CID found in URI")
-
+def _gateway_entries(
+    cid: str,
+    pinata_token: str,
+) -> list[tuple[str, str, dict[str, str], float]]:
+    """Build IPFS cascade: ipfs.io → Pinata dedicated (backup) → other free gateways."""
+    name, base = PRIMARY_FREE_GATEWAY
     gateways: list[tuple[str, str, dict[str, str], float]] = [
-        (name, f"{base}{cid}", {}, TIMEOUT_PUBLIC) for name, base in FREE_GATEWAYS
+        (name, f"{base}{cid}", {}, TIMEOUT_PUBLIC)
     ]
     if pinata_token.strip():
         gateways.append(
@@ -59,6 +60,21 @@ async def fetch_ipfs(
                 TIMEOUT_DEDICATED,
             )
         )
+    for name, base in SECONDARY_FREE_GATEWAYS:
+        gateways.append((name, f"{base}{cid}", {}, TIMEOUT_PUBLIC))
+    return gateways
+
+
+async def fetch_ipfs(
+    uri: str,
+    client: httpx.AsyncClient,
+    pinata_token: str = "",
+) -> ResolveResult:
+    cid = extract_cid(uri)
+    if not cid:
+        return ResolveResult(ok=False, error="No CID found in URI")
+
+    gateways = _gateway_entries(cid, pinata_token)
 
     last_error = "ipfs_all_gateways_failed"
     for name, url, extra_headers, timeout in gateways:
