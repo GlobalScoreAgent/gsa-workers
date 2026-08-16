@@ -59,3 +59,15 @@ uv run python scripts/smoke_scraping_ant.py
 ```
 
 Expect `OK` with HTTP 200 and `Ant-credits-cost=10` when `browser=true`. In production, ScrapingAnt only runs after direct fetch, Playwright, and Deckard fail. Successes land in `uri_documents.source_gateway` as `scraping-ant-*`.
+
+## IPFS gateways
+
+Cascade in `handlers/ipfs.py`:
+
+1. `ipfs.io`
+2. `gateway.pinata.cloud` (public)
+3. Cloudflare IPFS
+4. dweb.link
+5. **Pinata dedicated** — only if `PINATA_GATEWAY` is set (Gateway Access Key → header `x-pinata-gateway-token`; host `violet-efficient-aardwolf-922.mypinata.cloud`)
+
+Dedicated successes use `source_gateway=pinata-dedicated`. Without the secret, steps 1–4 still run.

@@ -256,7 +256,7 @@ GET /api/stats → short-circuit if synced_at unchanged →
 | `ALCHEMY_FREE_KEY` | Contracts + portfolio + LP discovery |
 | `DUNE_KEY` | Dune queries import |
 | `COINGECKO_KEY` | Token prices enrich |
-| `PINATA_GATEWAY` | URI resolve / reprocess (optional IPFS) |
+| `PINATA_GATEWAY` | URI resolve / reprocess (optional; Pinata dedicated Gateway Key — last IPFS fallback after public gateways) |
 | `SCRAPING_ANT_KEY` | URI resolve / reprocess (optional HTTP fallback) |
 | `GROQ` | AI agent classifier (Groq; name matches `llm.llm_provider.secret`) |
 

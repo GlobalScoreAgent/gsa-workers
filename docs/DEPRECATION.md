@@ -65,6 +65,10 @@ Ops may delete leftover URI Edge/cron artifacts in the schema repo; workers do n
 
 URI HTTP last-fallback moved from `SCRAPE_DO_TOKEN` / `scrape/scrape_do.py` to `SCRAPING_ANT_KEY` / `scrape/scraping_ant.py`. Do not reintroduce Scrape.do in workflows. Historical `source_gateway` values `scrape-do-*` remain in `uri_documents`; new successes use `scraping-ant-*`.
 
+### Pinata dedicated gateway host (2026-08-15)
+
+IPFS cascade: public gateways first (`ipfs.io` → `gateway.pinata.cloud` → Cloudflare → dweb), then **Pinata dedicated** last if `PINATA_GATEWAY` is set. Host is `violet-efficient-aardwolf-922.mypinata.cloud` (replaces retired `indigo-urban-flyingfish-439`). Secret value is the **Gateway Key** (`x-pinata-gateway-token`), not Pinata API Key/Secret/JWT. Historical `pinata-dedicated` rows keep the old host in past fetches only via `source_gateway` label (same name).
+
 ## Token prices (walcert → GHA → Dex/CoinGecko)
 
 Current: **`token_prices_import`** enriches unpriced `wallet_token_positions` via DexScreener → CoinGecko into spot cache `wallets.token_prices` (PK `chain_id`+`contract`), then `wallet_token_positions_apply_prices`.

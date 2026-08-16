@@ -22,7 +22,7 @@ Requires schema migration `00000000000069_uri_reprocess_refresh_indexes.sql`.
 | Variable | Required | Default |
 |---|---|---|
 | `SUPABASE_DB_URL` | Yes | — |
-| `PINATA_GATEWAY` | No | — |
+| `PINATA_GATEWAY` | No | — (Pinata dedicated Gateway Key; last IPFS fallback) |
 | `SCRAPING_ANT_KEY` | No | — |
 | `CLAIM_BATCH_SIZE` | No | `20` |
 | `CONCURRENCY` | No | `4` |
