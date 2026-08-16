@@ -63,7 +63,8 @@ WITH candidates AS (
   WHERE ud.status = 'valid'
     AND ud.fetched_at < (NOW() - INTERVAL '15 days')
     AND ud.uri ~* '^(https?://|ipfs://)'
-    AND ud.uri NOT LIKE 'internal_on_chain_id_%'
+    -- psycopg3: escape LIKE wildcards as %% when using %(name)s params
+    AND ud.uri NOT LIKE 'internal_on_chain_id_%%'
   ORDER BY ud.fetched_at NULLS FIRST, ud.id
   LIMIT %(limit)s
   FOR UPDATE OF ud SKIP LOCKED

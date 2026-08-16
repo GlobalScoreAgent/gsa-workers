@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+import psycopg
 
 ROOT = Path(__file__).resolve().parent
 # Prefer local src (db) over sibling; sibling provides resolve/documents/handlers.
@@ -252,6 +253,9 @@ async def run_job() -> int:
                 try:
                     errors = db.claim_error_manifests(claim_batch)
                 except Exception as exc:
+                    # Only soft-retry transient DB errors; programming/SQL bugs must fail fast.
+                    if not isinstance(exc, (psycopg.OperationalError, psycopg.InterfaceError)):
+                        raise
                     logger.warning("Claim error manifests failed; retry: %s", exc)
                     await asyncio.sleep(CLAIM_RETRY_BASE_SECONDS)
                     continue
@@ -270,6 +274,8 @@ async def run_job() -> int:
                 try:
                     docs = db.claim_refresh_docs(claim_batch)
                 except Exception as exc:
+                    if not isinstance(exc, (psycopg.OperationalError, psycopg.InterfaceError)):
+                        raise
                     logger.warning("Claim refresh docs failed; retry: %s", exc)
                     await asyncio.sleep(CLAIM_RETRY_BASE_SECONDS)
                     continue
