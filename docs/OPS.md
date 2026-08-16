@@ -108,7 +108,7 @@ Worker details: [token_prices_import/README.md](../workers/token_prices_import/R
 
 ## Agent URI resolve / reprocess
 
-URI workers claim agents / feedbacks / `agent_manifest` / `uri_documents` (not wallet `Pending` status). Soft `MAX_RUNTIME_SECONDS=19800`. Optional secrets: `PINATA_GATEWAY` (dedicated gateway key → 2nd IPFS after `ipfs.io`; host `violet-efficient-aardwolf-922.mypinata.cloud`), `SCRAPING_ANT_KEY`.
+URI workers claim agents / feedbacks / `agent_manifest` / `uri_documents` (not wallet `Pending` status). Soft `MAX_RUNTIME_SECONDS=19800`. Optional secrets: `PINATA_GATEWAY` (dedicated gateway key → last IPFS fallback after public gateways; host `violet-efficient-aardwolf-922.mypinata.cloud`), `SCRAPING_ANT_KEY`.
 
 ### Interpret logs
 
