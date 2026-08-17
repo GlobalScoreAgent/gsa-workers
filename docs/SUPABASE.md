@@ -576,7 +576,7 @@ FROM erc_8004.uri_documents
 WHERE status = 'valid'
   AND fetched_at < NOW() - interval '15 days'
   AND uri ~* '^(https?://|ipfs://)'
-  AND uri NOT LIKE 'internal_on_chain_id_%';
+  AND NOT starts_with(uri, 'internal_on_chain_id_');
 
 SELECT COALESCE(reprocess_count, 0) AS n, count(*)
 FROM erc_8004.agent_manifest
