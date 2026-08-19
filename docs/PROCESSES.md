@@ -259,6 +259,7 @@ GET /api/stats → short-circuit if synced_at unchanged →
 | `PINATA_GATEWAY` | URI resolve / reprocess (optional; Pinata dedicated Gateway Key — last IPFS fallback after public gateways) |
 | `SCRAPING_ANT_KEY` | URI resolve / reprocess (optional HTTP fallback) |
 | `GROQ` | AI agent classifier (Groq; name matches `llm.llm_provider.secret`) |
+| `CEREBRAS` / `GEMINI` / `OPEN_ROUTER` / `TOKEN_ROUTER` / `NVIDIA` / `MISTRAL` | AI agent classifier (same: env name = `llm.llm_provider.secret`) |
 
 ## When schema vs worker
 

@@ -48,6 +48,8 @@ Reference-data: `dune_queries_import` (4 Dune queries → upserts); `token_price
 | `PINATA_GATEWAY` | Optional (URI workers) | Pinata dedicated gateway access token (last IPFS fallback after public gateways) |
 | `SCRAPING_ANT_KEY` | Optional (URI workers) | ScrapingAnt API key (last HTTP fallback) |
 | `GROQ` | For AI agent classifier | Groq API key (`llm.llm_provider.secret`) |
+| `NVIDIA` | Optional (classifier NIM) | Hosted NVIDIA NIM key (`llm.llm_provider.secret`) |
+| `MISTRAL` | Optional (classifier Mistral) | AI Studio / La Plateforme Experiment key (`llm.llm_provider.secret`) |
 | `ETHERSCAN_API_KEY` | For activity flows (ETH/Arb/Polygon/Celo) | Etherscan V2 Free |
 | `ALCHEMY_ACTIVITY_KEY_1` | For activity flows (Base + Gnosis) | Dedicated Transfers key — not `ALCHEMY_FREE_KEY` |
 | `ALCHEMY_ACTIVITY_KEY_2` | For activity flows BSC day-1 cut | Dedicated Alchemy **Free** app — not `ALCHEMY_FREE_KEY` |

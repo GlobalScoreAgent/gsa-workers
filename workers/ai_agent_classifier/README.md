@@ -35,7 +35,7 @@ Rate limits: sliding-window hardcaps use `request_per_minute` and `tokens_per_mi
 
 Transient transport failures (`ConnectTimeout`, `ReadTimeout`, `ConnectError`, `ReadError`, `PoolTimeout`, `RemoteProtocolError`) are retried up to `LLM_MAX_ATTEMPTS` (4) with linear backoff instead of failing on the first drop. Connect timeout is short (`LLM_CONNECT_TIMEOUT_SECONDS`, 10s) so an unreachable endpoint fails fast and retries cheaply.
 
-API keys come from GitHub Secrets / env vars named by `llm.llm_provider.secret` (`GROQ`, `CEREBRAS`, `GEMINI`, `OPEN_ROUTER`). Endpoint from `llm.llm_provider.base_url`.
+API keys come from GitHub Secrets / env vars named by `llm.llm_provider.secret` (`GROQ`, `CEREBRAS`, `GEMINI`, `OPEN_ROUTER`, `TOKEN_ROUTER`, `NVIDIA`, `MISTRAL`). Endpoint from `llm.llm_provider.base_url`.
 
 ## Environment
 
@@ -46,6 +46,9 @@ API keys come from GitHub Secrets / env vars named by `llm.llm_provider.secret` 
 | `CEREBRAS` | required (for Cerebras) | Cerebras API key (`llm.llm_provider.secret`) |
 | `GEMINI` | required (for Gemini) | Gemini API key (`llm.llm_provider.secret`) |
 | `OPEN_ROUTER` | required (for OpenRouter) | OpenRouter API key (`llm.llm_provider.secret`) |
+| `TOKEN_ROUTER` | required (for TokenRouter) | TokenRouter API key (provider currently off) |
+| `NVIDIA` | required (for NVIDIA NIM) | Hosted NIM key from build.nvidia.com (`llm.llm_provider.secret`) |
+| `MISTRAL` | required (for Mistral) | La Plateforme / AI Studio key (`llm.llm_provider.secret`) |
 | `CLAIM_BATCH_SIZE` | 20 | Agents claimed per loop **per provider worker** |
 | `CONCURRENCY` | 1 (local) / **2 in GHA** | Parallel LLM calls **per provider** (max 5; keep low for rpm) |
 | `PROVIDERS` | all active | Optional comma filter of `llm.llm_provider.name` (e.g. `Groq,GEMINI`) |
