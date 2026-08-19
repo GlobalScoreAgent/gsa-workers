@@ -53,10 +53,11 @@ jobs:
           GEMINI: ${{ secrets.GEMINI }}
           OPEN_ROUTER: ${{ secrets.OPEN_ROUTER }}
           TOKEN_ROUTER: ${{ secrets.TOKEN_ROUTER }}
+          NVIDIA: ${{ secrets.NVIDIA }}
           MAX_RUNTIME_SECONDS: ${{ inputs.max_runtime_seconds || '19800' }}
           PROVIDERS: ${{ inputs.providers }}
           CONCURRENCY: 2
           CLAIM_BATCH_SIZE: 20
           # Per-provider asyncio concurrency (2 helps drain Groq/Cerebras RPM).
-          # Optional PROVIDERS filter: Groq,Cerebras,GEMINI,OpenRouter,TokenRouter
+          # Optional PROVIDERS filter: Groq,Cerebras,GEMINI,OpenRouter,TokenRouter,NVIDIA
         run: uv run python job.py
