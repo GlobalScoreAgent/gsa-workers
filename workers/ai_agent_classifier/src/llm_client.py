@@ -1,4 +1,4 @@
-"""OpenAI-compatible chat completions client (Groq / Cerebras / Gemini compat)."""
+"""OpenAI-compatible chat completions client (Groq / Cerebras / Gemini / Cloudflare)."""
 
 from __future__ import annotations
 
@@ -68,6 +68,9 @@ async def chat_completion(
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
+    # Workers AI OpenAI-compat requires a gateway id on hosted @cf/ models.
+    if "api.cloudflare.com" in _normalize_base_url(base_url).lower():
+        headers["cf-aig-gateway-id"] = "default"
     resp = await client.post(url, headers=headers, json=body, timeout=timeout_seconds)
     if resp.status_code >= 400:
         snippet = (resp.text or "")[:500]

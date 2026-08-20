@@ -22,7 +22,7 @@ Another process sets the flag to `TRUE`. This worker sets it `FALSE` on success 
 6. Each worker claims agents with `FOR UPDATE SKIP LOCKED` and only uses models from its provider
 7. Fingerprint prompt inputs (`ai_category_input_hash`); if another agent already classified the same inputs, **copy** categories and skip the LLM
 8. Else pick a model from that provider with remaining daily capacity (`request_total` / `token_total` vs day caps)
-9. Call `{base_url}/chat/completions` with provider params (`temperature`, `max_completion_tokens`, `response_format`); if `llm.models.does_need_thinking_off_parameter` then also `reasoning_effort=none` (plus `clear_thinking=false` only for Cerebras)
+9. Call `{base_url}/chat/completions` with provider params (`temperature`, `max_completion_tokens`, `response_format`); if `llm.models.does_need_thinking_off_parameter` then also `reasoning_effort=none` (plus `clear_thinking=false` only for Cerebras). Cloudflare Workers AI also sends `cf-aig-gateway-id: default`.
 10. Upsert `llm.models_requests` (`request_total += 1`, `token_total += usage.total_tokens`) — not incremented on copy
 11. On success: write `ai_category_*`, `ai_category_input_hash`, `llm_model_id`, clear error cols, flag `FALSE`
 12. On failure: `has_ai_category_process_error=TRUE`, `ai_category_process_error_message`, flag `FALSE`
@@ -35,7 +35,7 @@ Rate limits: sliding-window hardcaps use `request_per_minute` and `tokens_per_mi
 
 Transient transport failures (`ConnectTimeout`, `ReadTimeout`, `ConnectError`, `ReadError`, `PoolTimeout`, `RemoteProtocolError`) are retried up to `LLM_MAX_ATTEMPTS` (4) with linear backoff instead of failing on the first drop. Connect timeout is short (`LLM_CONNECT_TIMEOUT_SECONDS`, 10s) so an unreachable endpoint fails fast and retries cheaply.
 
-API keys come from GitHub Secrets / env vars named by `llm.llm_provider.secret` (`GROQ`, `CEREBRAS`, `GEMINI`, `OPEN_ROUTER`, `TOKEN_ROUTER`, `NVIDIA`, `MISTRAL`). Endpoint from `llm.llm_provider.base_url`.
+API keys come from GitHub Secrets / env vars named by `llm.llm_provider.secret` (`GROQ`, `CEREBRAS`, `GEMINI`, `OPEN_ROUTER`, `TOKEN_ROUTER`, `NVIDIA`, `MISTRAL`, `CLOUDFLARE`). Endpoint from `llm.llm_provider.base_url`.
 
 ## Environment
 
@@ -49,6 +49,7 @@ API keys come from GitHub Secrets / env vars named by `llm.llm_provider.secret` 
 | `TOKEN_ROUTER` | required (for TokenRouter) | TokenRouter API key (provider currently off) |
 | `NVIDIA` | required (for NVIDIA NIM) | Hosted NIM key from build.nvidia.com (`llm.llm_provider.secret`) |
 | `MISTRAL` | required (for Mistral) | La Plateforme / AI Studio key (`llm.llm_provider.secret`) |
+| `CLOUDFLARE` | required (for Cloudflare) | Workers AI API token (`llm.llm_provider.secret`); Account ID lives in `base_url` |
 | `CLAIM_BATCH_SIZE` | 20 | Agents claimed per loop **per provider worker** |
 | `CONCURRENCY` | 1 (local) / **2 in GHA** | Parallel LLM calls **per provider** (max 5; keep low for rpm) |
 | `PROVIDERS` | all active | Optional comma filter of `llm.llm_provider.name` (e.g. `Groq,GEMINI`) |

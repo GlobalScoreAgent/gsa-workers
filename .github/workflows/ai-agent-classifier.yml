@@ -55,10 +55,11 @@ jobs:
           TOKEN_ROUTER: ${{ secrets.TOKEN_ROUTER }}
           NVIDIA: ${{ secrets.NVIDIA }}
           MISTRAL: ${{ secrets.MISTRAL }}
+          CLOUDFLARE: ${{ secrets.CLOUDFLARE }}
           MAX_RUNTIME_SECONDS: ${{ inputs.max_runtime_seconds || '19800' }}
           PROVIDERS: ${{ inputs.providers }}
           CONCURRENCY: 2
           CLAIM_BATCH_SIZE: 20
           # Per-provider asyncio concurrency (2 helps drain Groq/Cerebras RPM).
-          # Optional PROVIDERS filter: Groq,Cerebras,GEMINI,OpenRouter,TokenRouter,NVIDIA,Mistral
+          # Optional PROVIDERS filter: Groq,Cerebras,GEMINI,OpenRouter,TokenRouter,NVIDIA,Mistral,Cloudflare
         run: uv run python job.py
