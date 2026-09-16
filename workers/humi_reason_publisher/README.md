@@ -16,7 +16,9 @@ The worker is a **renderer, not an engine**: every `*_score` keeps being compute
 
 The lane has no stable finish time. It always starts at 18:00 UTC (`job_control.start_daily_index_pipeline`) but measured in `cron.job_run_details` it took 12 minutes on quiet days (Sep 4-8) and close to 24 hours on loaded ones (Sep 9, 11, 13). Anchoring the worker to that moment would miss by up to a day.
 
-The claim is idempotent and content-hashed, so running mid-lane is harmless: it drains whatever is flagged and the next run picks up the rest. Consequence: the narrative can lag the score by up to ~6 h, accepted silently (the UI shows the previous version, same as it already does between daily cycles).
+The claim is idempotent and content-hashed, so running mid-lane is harmless: it drains whatever is flagged and the next run picks up the rest. Consequence: the narrative lags the score, accepted silently (the UI shows the previous version, same as it already does between daily cycles).
+
+The cron interval puts that lag at 6 h on paper, but **measure it against reality, not the cron**. Scheduled runs on this account fire 3–5 h late across every workflow (see [OPS.md](../../docs/OPS.md#scheduled-runs-fire-hours-late)), which pushes the practical worst case closer to 10 h.
 
 ## Pipeline
 
@@ -111,22 +113,28 @@ FROM index_humi.index_humi_agent;
 
 Objects should track `published`. Add `(SELECT count(*) FROM storage.objects WHERE bucket_id = 'humi-reasons')` to compare.
 
-## First run (2026-09-16)
+## Initial backfill (2026-09-16)
 
-Backfill of all 503 034 agents, dispatched on run `35058416219`.
+Took three runs, not one. Every agent in the table ended up published, with zero errors and zero stale locks.
 
-| Metric | Value |
-|---|---|
-| Throughput | ~2 000 agents/min at `CONCURRENCY=16`, `CLAIM_BATCH_SIZE=500` |
-| Object size | ~20 kB average, so the full corpus lands around 10 GB of the 100 GB Storage allowance |
-| Failures | 0 in the first 23 500 |
-| Stale locks | 0 |
+| Run | Duration | Processed | Uploaded | Unchanged | Outcome |
+|---|---|---|---|---|---|
+| `35058416219` (dispatch) | 5h30m | 309 500 | 309 451 | 49 | hit `MAX_RUNTIME_SECONDS` |
+| `35085243105` (schedule) | 2h49m | 195 064 | 195 064 | 0 | drained the rest |
+| `35117566714` (schedule) | 13s | 0 | 0 | 0 | `queue empty` |
 
-Storage object count tracked the `reason_published_at` count exactly throughout. That equality is the check worth repeating: a persistent gap means uploads returned 200 but the matching `complete` never reached the DB.
+Final state: 504 428 agents, 504 428 objects, 9 810 MB — about 20 kB per object, roughly 10 % of the 100 GB Storage allowance.
 
-Parity was confirmed in prod, not just in the test: a published object was downloaded back and compared as `jsonb` against `index_humi_agent`, and all four pillars matched for a real agent with non-null data.
+**Throughput: ~1 030 agents/min sustained** (938/min on the first run, 1 230/min on the second) at `CONCURRENCY=16`, `CLAIM_BATCH_SIZE=500`. A ten-minute sample early in the first run showed ~2 000/min; that was a favourable window and not representative — size capacity off the sustained figure.
 
-The sha256 short-circuit could not be exercised during the backfill — every document was new. It shows up from the second run on, where most agents should log as `unchanged` and skip the upload entirely.
+The bottleneck is Storage round-trip latency, roughly 0.5 s per object, not the DB or CPU. Raising `CONCURRENCY` scales nearly linearly; raising `CLAIM_BATCH_SIZE` does nothing.
+
+### What the backfill proved
+
+- **Parity in prod, not just in the test.** A published object was downloaded back and compared as `jsonb` against `index_humi_agent`; all four pillars matched for a real agent with non-null data.
+- **The sha256 short-circuit fires.** 49 agents in the first run were re-flagged by the lane mid-run and skipped the upload because their text had not changed. Small sample, but the mechanism works, and the hash is persisted on all 504 428 rows.
+- **The flag path works.** The lane recalculated 62 359 agents that day; all ended up published after their recalculation, so `calculated_at > reason_published_at` returns zero rows.
+- Storage object count tracked `reason_published_at` exactly throughout. A persistent gap would mean uploads returned 200 but the matching `complete` never reached the DB.
 
 ## Stage 2 (not built)
 

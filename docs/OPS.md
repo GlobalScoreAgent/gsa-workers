@@ -212,6 +212,32 @@ Do not lower `CLAIM_STALE_SECONDS` too far: a slow RPC batch must finish before 
 - HTTP 500s from a public endpoint are normal; the client tries the next URL / Alchemy.
 - If Alchemy is missing, expect more `Error` wallets on flaky public RPCs.
 
+## Scheduled runs fire hours late
+
+**Account-wide, not worker-specific.** Measured 2026-09-16 on `MichBarbarian/gsa-workers`:
+
+| Workflow | Cron slot | Actual start (UTC) | Drift |
+|---|---|---|---|
+| `humi-reason-publisher` | 06:00 | 10:29 | +4h29 |
+| `humi-reason-publisher` | 12:00 | 15:46 | +3h46 |
+| `ethos-reviews-api` | 06:00 | 10:38 | +4h38 |
+| `ai-agent-classifier` | 06:00 | 11:03 | +5h03 |
+| `agent-endpoint-liveness` | 06:00 | 10:51 | +4h51 |
+
+Every worker is on `0 0,6,12,18` UTC, so ~18 workflows ask for runners at the same minute four times a day and GitHub releases them as capacity frees up. Nothing is broken and nothing is lost — each run still drains its queue — but **any freshness guarantee stated in cron terms is wrong by several hours**. A "worst case 6 h stale" claim is really closer to 10 h.
+
+Consequences worth keeping in mind:
+
+- Do not diagnose a "missing" run before checking `run_started_at`; it is usually late, not skipped.
+- Window-bounded workers (`wallet_activity_flows`, `wallet_funding_transfers`, UTC 18→12) can have a run land outside the window it was scheduled for.
+- If this starts to hurt, the fix is staggering the crons across the hour rather than adding retries. Not done yet.
+
+```powershell
+# Drift check for one workflow
+$r = gh api "repos/MichBarbarian/gsa-workers/actions/workflows/<name>.yml/runs?per_page=10" | ConvertFrom-Json
+$r.workflow_runs | Where-Object {$_.event -eq "schedule"} | Select-Object run_started_at,conclusion
+```
+
 ## Re-run a job
 
 GitHub → **Actions** → workflow name → **Run workflow** (`workflow_dispatch`).
@@ -229,7 +255,7 @@ Deploy order when both change: **schema → worker → workflow_dispatch**.
 
 ## Related
 
-- [PROCESSES.md](./PROCESSES.md) — live pipeline catalog (#9 activity flows, #9b funding transfers, #13 on-demand, **#16 Ethos reviews API**)
+- [PROCESSES.md](./PROCESSES.md) — live pipeline catalog (#9 activity flows, #9b funding transfers, #13 on-demand, **#16 Ethos reviews API**, **#17 HUMI reason publisher**)
 - [PENDING_LP_POSITIONS.md](./PENDING_LP_POSITIONS.md) — LP 15-day refresh (discovery already live)
 - [SUPABASE.md](./SUPABASE.md) — monitoring and backfill SQL
 - [ARCHITECTURE.md](./ARCHITECTURE.md) — pipeline and budgets
