@@ -87,6 +87,7 @@ stateDiagram-v2
 | `ai_agent_classifier` | `ai-agent-classifier.yml` | `ai-agent-classifier` | 1 runner (0/6/12/18) |
 | `agent_endpoint_liveness` | `agent-endpoint-liveness.yml` | `agent-endpoint-liveness` | 1 runner (0/6/12/18); empty queue exit 0 |
 | `ethos_reviews_api` | `ethos-reviews-api.yml` | `ethos-reviews-api` | 1 runner (0/6/12/18); empty queue exit 0 |
+| `humi_reason_publisher` | `humi-reason-publisher.yml` | `humi-reason-publisher` | 1 runner (0/6/12/18); empty queue exit 0 |
 
 Claim wallet workers schedule: `0 0,6,12,18 * * *` UTC + `workflow_dispatch`.  
 Dune queries import schedule: `0 0 18 * *` UTC + `workflow_dispatch` (18th monthly, after typical Dune billing reset ~17th; 4 tasks per run).  
@@ -96,7 +97,8 @@ AI classifier: `0 0,6,12,18 * * *` UTC + `workflow_dispatch`.
 Activity flows 15d: UTC window **18:00→12:00** — `0 0 1,15 * *` + `0 18,22,2,6,10 * * *` (+ soft-stop); closed 12–18.  
 Funding transfers: UTC window **18:00→12:00** — `0 18,0,6 * * *` (+ soft-stop); closed 12–18.  
 Endpoint liveness 15d: `0 0,6,12,18 * * *` UTC + `workflow_dispatch`.  
-Ethos reviews API: `0 0,6,12,18 * * *` UTC + `workflow_dispatch`.
+Ethos reviews API: `0 0,6,12,18 * * *` UTC + `workflow_dispatch`.  
+HUMI reason publisher: `0 0,6,12,18 * * *` UTC + `workflow_dispatch`; **not** tied to the HUMI lane, which has no stable finish time.
 
 ### What each worker does
 
@@ -118,6 +120,7 @@ Ethos reviews API: `0 0,6,12,18 * * *` UTC + `workflow_dispatch`.
 | AI agent classifier | `does_need_ai_category_process` | LLM → `ai_category_*` on `web_dashboard.agents`; rotate `llm.models` by daily cap |
 | endpoint liveness 15d | HTTP(s) locators due on `next_eligible_at` | HEAD/GET → `agent_endpoint_health`; view `agent_endpoint_status` |
 | Ethos reviews API | GSA-linked Claimed + `reviews_next_eligible_at` | Ethos v2 given/received → `ethos.reviews` |
+| HUMI reason publisher | `index_humi_agent.needs_reason_publish` | Assemble the 4 `pillar_*` reasons → private bucket `humi-reasons`, `humi/agent/{id}.json`. Only worker whose destination is Storage, not a table |
 
 ## Token contracts discovery
 
@@ -309,8 +312,9 @@ Origin also has `scripts/check_pending.py` and `scripts/compare_smoke.py`. `wall
 | AI agent classifier | 1 | 20 | n/a |
 | on-demand backfill | Ethos 3 / satellites 5 | Ethos 10 / satellites 100 | 7200 |
 | Ethos reviews API | 3 | 10 | 7200 |
+| HUMI reason publisher | 16 | 500 | 7200 |
 
-Secrets: `SUPABASE_DB_URL` (required), `ALCHEMY_KEY` (balance/nonce), `ALCHEMY_FREE_KEY` (contracts / portfolio / LP), `ETHERSCAN_API_KEY` / `ALCHEMY_ACTIVITY_KEY_1` / `ALCHEMY_ACTIVITY_KEY_2` / `ANKR_API_KEY` / OKX HMAC for activity flows, `ETHERSCAN_FUNDING_KEY` / `BLOCKSCOUT_FUNDING_KEY` / `ANKR_FUNDING_KEY` for funding transfers (do not reuse 15d Etherscan/Ankr keys), `DUNE_KEY`, `COINGECKO_KEY`, `PINATA_GATEWAY` / `SCRAPING_ANT_KEY`, `GROQ`. Daily sets `WORKER_ID` from the matrix.
+Secrets: `SUPABASE_DB_URL` (required), `ALCHEMY_KEY` (balance/nonce), `ALCHEMY_FREE_KEY` (contracts / portfolio / LP), `ETHERSCAN_API_KEY` / `ALCHEMY_ACTIVITY_KEY_1` / `ALCHEMY_ACTIVITY_KEY_2` / `ANKR_API_KEY` / OKX HMAC for activity flows, `ETHERSCAN_FUNDING_KEY` / `BLOCKSCOUT_FUNDING_KEY` / `ANKR_FUNDING_KEY` for funding transfers (do not reuse 15d Etherscan/Ankr keys), `DUNE_KEY`, `COINGECKO_KEY`, `PINATA_GATEWAY` / `SCRAPING_ANT_KEY`, `GROQ`, and `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` for the HUMI reason publisher (only worker that talks to the Storage API, not just Postgres). Daily sets `WORKER_ID` from the matrix.
 
 ## On-demand backfill (orchestrator)
 

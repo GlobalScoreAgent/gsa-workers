@@ -73,6 +73,21 @@ Daily also uses claim metadata:
 - `import_nonce_and_balance_daily_claimed_at`
 - `import_nonce_and_balance_daily_claimed_by` (`WORKER_ID`)
 
+### HUMI reason publisher (`index_humi.index_humi_agent`)
+
+| Column | Role |
+|---|---|
+| `needs_reason_publish` | Queue flag. `agent_index_humi_calculate` raises it on every recalculation |
+| `reason_published_at` | Last effective publish |
+| `reason_content_sha256` | Hash of the last uploaded document; drives the skip-upload short-circuit |
+| `reason_publish_claimed_at` / `reason_publish_claimed_by` | Soft lock (stale 2h), `humi_reason_publisher/gha:{WORKER_ID}` |
+
+RPCs `index_humi.claim_reason_publish(limit, worker_id, stale_seconds)` / `complete_reason_publish(jsonb)`. Destination is **not** a table: private bucket `humi-reasons`, object `humi/agent/{agent_id}.json`.
+
+`complete_reason_publish` takes the `version` captured at claim time and only clears the flag if it still matches. A recalculation mid-flight leaves the flag raised, so the stale object is republished next run instead of silently drifting.
+
+`release_reason_publish(bigint[])` exists but the worker never calls it — see [PROCESSES.md](./PROCESSES.md#17-humi-reason-publisher).
+
 ### Token contracts discovery (`wallet_transactions`)
 
 | Column | Role |
@@ -790,11 +805,41 @@ SELECT count(*) FROM ethos.reviews;
 
 Schema: sibling `gsa-supabase-schema` → `supabase/docs/ethos-reviews-api.md`.
 
+## Monitoring — HUMI reason publisher (#17)
+
+```sql
+-- Queue and throughput
+SELECT
+  count(*) FILTER (WHERE needs_reason_publish)                       AS pending,
+  count(*) FILTER (WHERE reason_published_at IS NOT NULL)            AS published,
+  count(*) FILTER (WHERE reason_publish_claimed_at IS NOT NULL)      AS in_flight,
+  count(*) FILTER (WHERE reason_published_at > now() - interval '1 minute') AS per_minute
+FROM index_humi.index_humi_agent;
+
+-- Objects must track `published`. A persistent gap means uploads returned 200
+-- but the matching `complete` never reached the DB.
+SELECT count(*), pg_size_pretty(sum((metadata->>'size')::bigint))
+FROM storage.objects WHERE bucket_id = 'humi-reasons';
+
+-- Narrative lag against the score. Up to ~6h is the 0/6/12/18 cron, not an incident.
+SELECT count(*) AS behind, max(calculated_at - reason_published_at) AS worst
+FROM index_humi.index_humi_agent
+WHERE reason_published_at IS NOT NULL AND calculated_at > reason_published_at;
+
+-- Stale locks: runs that died mid-batch. They self-heal on the next claim.
+SELECT reason_publish_claimed_by, count(*), min(reason_publish_claimed_at)
+FROM index_humi.index_humi_agent
+WHERE reason_publish_claimed_at < now() - interval '2 hours'
+GROUP BY 1 ORDER BY 2 DESC;
+```
+
+Schema: sibling `gsa-supabase-schema` → `supabase/docs/toast-cold-storage.md`.
+
 ## Related docs
 
 - [ARCHITECTURE.md](./ARCHITECTURE.md) — GHA pipeline and state machine
 - [OPS.md](./OPS.md) — stuck wallets, URI ops, logs
-- [PROCESSES.md](./PROCESSES.md) — live catalog (#10–11 URI ingest, **#13 on-demand backfill**, **#14 ERC-8257**, **#15 endpoint liveness**, **#16 Ethos reviews API**)
+- [PROCESSES.md](./PROCESSES.md) — live catalog (#10–11 URI ingest, **#13 on-demand backfill**, **#14 ERC-8257**, **#15 endpoint liveness**, **#16 Ethos reviews API**, **#17 HUMI reason publisher**)
 - Worker READMEs under `workers/*/README.md`
 - Ethos linking (schema): sibling `gsa-supabase-schema` → `supabase/docs/ethos-erc8004-linking.md`
 - ERC-8183 catch-up: `supabase/docs/bsc-erc-8183-import.md` (Fase 3 = `on_demand_backfill`)

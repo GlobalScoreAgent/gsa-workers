@@ -334,13 +334,15 @@ Worker README: [`ethos_reviews_api`](../workers/ethos_reviews_api/README.md).
 
 ### 17. HUMI reason publisher
 
-**Live after schema deploy.** Moves the ~12 kB narrative aggregate per agent out of `index_humi.index_humi_agent` (9.2 GB of TOAST, 290 395 rows rewritten in 7 days) into the private Storage bucket `humi-reasons`. SQL keeps computing every `*_score`; the worker only assembles and uploads.
+**Live since 2026-09-16.** Moves the ~12 kB narrative aggregate per agent out of `index_humi.index_humi_agent` (9.2 GB of TOAST, 290 395 rows rewritten in 7 days) into the private Storage bucket `humi-reasons`. SQL keeps computing every `*_score`; the worker only assembles and uploads.
 
 ```
 claim_reason_publish → read the 4 pillar_* rows → assemble → sha256
   → unchanged: clear flag, no upload · changed: PUT humi/agent/{id}.json
-  → complete_reason_publish (failures → release_reason_publish)
+  → complete_reason_publish
 ```
+
+Failed rows **keep** their soft-lock rather than being released. The claim orders by `reason_publish_claimed_at NULLS FIRST, agent_id`, so releasing them would hand the same batch back on the next claim and the run would spin instead of advancing; holding the lock lets it move on and the rows requeue when `CLAIM_STALE_SECONDS` expires. Three consecutive batches with zero successful rows abort the run (expired key, deleted bucket). `release_reason_publish` stays as a manual ops unlock.
 
 Not triggered by the HUMI lane: it has no stable finish time (12 min on quiet days, ~24 h on loaded ones, measured in `cron.job_run_details`). Fixed cron plus an idempotent content-hashed claim means running mid-lane is harmless, at the cost of up to ~6 h of narrative lag, accepted silently.
 

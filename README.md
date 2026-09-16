@@ -25,6 +25,7 @@ Unified Python batch workers for [Global Score Agent](https://www.globalscoreage
 | [`erc8257_tools_import`](./workers/erc8257_tools_import/README.md) | 04:00 daily | n/a (reference data) | agenttoolindex dump → `erc_8257.tools` (+ sync_state watermark) |
 | [`agent_endpoint_liveness`](./workers/agent_endpoint_liveness/README.md) | 0, 6, 12, 18h | HTTP(s) locators in `agent_metadata_services` due on 15d clock | HEAD/GET census → `erc_8004.agent_endpoint_health` |
 | [`ethos_reviews_api`](./workers/ethos_reviews_api/README.md) | 0, 6, 12, 18h | GSA-linked Claimed + `reviews_next_eligible_at` | Ethos v2 activities → `ethos.reviews` |
+| [`humi_reason_publisher`](./workers/humi_reason_publisher/README.md) | 0, 6, 12, 18h | `index_humi_agent.needs_reason_publish` | HUMI narrative aggregate → private bucket `humi-reasons`, `humi/agent/{id}.json` |
 
 Pending: [LP 15-day refresh](./docs/PENDING_LP_POSITIONS.md). Manifest **consume** (entity SPs) not built yet. `ethos_enrich` → absorbed by `on_demand_backfill` ([DEPRECATION](./docs/DEPRECATION.md)).
 
@@ -44,6 +45,8 @@ Reference-data: `dune_queries_import` (4 Dune queries → upserts); `token_price
 | Secret | Required | Role |
 |---|---|---|
 | `SUPABASE_DB_URL` | Yes | Postgres pooler DSN |
+| `SUPABASE_URL` | For HUMI reason publisher | Project REST base, e.g. `https://<ref>.supabase.co` |
+| `SUPABASE_SERVICE_ROLE_KEY` | For HUMI reason publisher | Storage writes to the private `humi-reasons` bucket. Bypasses RLS — GHA secret only |
 | `ALCHEMY_KEY` | Recommended | Alchemy fallback after public RPCs (claim workers) |
 | `ALCHEMY_FREE_KEY` | For token contracts / portfolio / LP discovery | Alchemy Token API + eth_call |
 | `DUNE_KEY` | For CEX import | Dune Analytics API key |

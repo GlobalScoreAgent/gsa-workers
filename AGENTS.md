@@ -69,7 +69,7 @@ Funding first-inflows: [workers/wallet_funding_transfers/README.md](./workers/wa
 | `erc8257_tools_import` | `erc8257-tools-import.yml` | `erc_8257.tools_upsert` + `sync_state` | `erc_8257.tools` (agenttoolindex full dump) |
 | `agent_endpoint_liveness` | `agent-endpoint-liveness.yml` | `agent_endpoint_health_sync` / `_claim` / `_complete_batch` | `erc_8004.agent_endpoint_health` (15d HTTP census) |
 | `ethos_reviews_api` | `ethos-reviews-api.yml` | `claim_reviews_fetch` / `complete_reviews_fetch` | `ethos.reviews` (Ethos API v2; GSA-linked Claimed) |
-| `humi_reason_publisher` | `humi-reason-publisher.yml` | `claim_reason_publish` / `complete_reason_publish` / `release_reason_publish` | Private Storage bucket `humi-reasons` → `humi/agent/{id}.json` (HUMI narrative out of `index_humi_agent`) |
+| `humi_reason_publisher` | `humi-reason-publisher.yml` | `claim_reason_publish` / `complete_reason_publish` | Private Storage bucket `humi-reasons` → `humi/agent/{id}.json` (HUMI narrative out of `index_humi_agent`) |
 
 LP 15-day refresh worker: **not built** — see [docs/PENDING_LP_POSITIONS.md](./docs/PENDING_LP_POSITIONS.md).  
 Agent manifest **consume** (profile / feedbacks / liveness / sentinel): **not built** — keep legacy consume off until readers JOIN `uri_documents`.  

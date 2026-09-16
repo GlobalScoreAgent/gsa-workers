@@ -109,18 +109,24 @@ SELECT
 FROM index_humi.index_humi_agent;
 ```
 
-Initial backfill is the full table (503 034 agents as of 2026-09-16), drained across several runs.
+Objects should track `published`. Add `(SELECT count(*) FROM storage.objects WHERE bucket_id = 'humi-reasons')` to compare.
 
-## Verified so far
+## First run (2026-09-16)
 
-Without GHA secrets in hand, these were checked against prod (`mezqyworblseixaypftg`, 2026-09-16):
+Backfill of all 503 034 agents, dispatched on run `35058416219`.
 
-- `claim_reason_publish` / `complete_reason_publish` / `release_reason_publish` behave as expected, including the stale-`version` branch that keeps the flag raised. State was restored afterwards (503 034 pending, 0 published, 0 locked).
-- The four generated pillar `SELECT`s parse and return rows.
-- `tests/test_spec_parity.py` passes against a real sample.
-- The Storage upload path was exercised end-to-end with the same URL, headers and mime type the worker uses (HTTP 200, object created then deleted).
+| Metric | Value |
+|---|---|
+| Throughput | ~2 000 agents/min at `CONCURRENCY=16`, `CLAIM_BATCH_SIZE=500` |
+| Object size | ~20 kB average, so the full corpus lands around 10 GB of the 100 GB Storage allowance |
+| Failures | 0 in the first 23 500 |
+| Stale locks | 0 |
 
-**Not yet run: the worker itself.** It needs `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` as repo secrets (only `SUPABASE_DB_URL` exists today), then a `workflow_dispatch`. Watch the first run for `Batch done uploaded=` lines and tune `CLAIM_BATCH_SIZE` / `CONCURRENCY`.
+Storage object count tracked the `reason_published_at` count exactly throughout. That equality is the check worth repeating: a persistent gap means uploads returned 200 but the matching `complete` never reached the DB.
+
+Parity was confirmed in prod, not just in the test: a published object was downloaded back and compared as `jsonb` against `index_humi_agent`, and all four pillars matched for a real agent with non-null data.
+
+The sha256 short-circuit could not be exercised during the backfill — every document was new. It shows up from the second run on, where most agents should log as `unchanged` and skip the upload entirely.
 
 ## Stage 2 (not built)
 
