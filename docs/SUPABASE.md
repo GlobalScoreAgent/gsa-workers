@@ -511,6 +511,31 @@ FROM erc_8004.wallet_transactions;
 
 429-only requeue (prod **after** unified worker is live and split crons are off): sibling `supabase/scripts/wallet_discovery_reset_alchemy_429.sql`. Do not TRUNCATE positions/LP for this.
 
+**Eligible now** — what the claim can actually take, across the three stages. Flag counts alone hide upstream blocks (`has_*_error` on the previous stage) and chains without `subdomain_alchemy`; a high pending with `eligible_now = 0` means stalled, not drained:
+
+```sql
+SELECT
+  count(*) AS eligible_now_rows,
+  count(DISTINCT wt.wallet_id) AS eligible_now_wallets
+FROM erc_8004.wallet_transactions wt
+JOIN erc_8004.chains c ON c.id = wt.chain_id
+WHERE c.subdomain_alchemy IS NOT NULL
+  AND btrim(c.subdomain_alchemy) <> ''
+  AND (
+    wt.does_need_discovery_contracts IS DISTINCT FROM FALSE
+    OR (
+      wt.does_need_portfolio_discovery IS DISTINCT FROM FALSE
+      AND wt.does_need_discovery_contracts = FALSE
+      AND COALESCE(wt.has_discovery_contracts_error, FALSE) IS NOT TRUE
+    )
+    OR (
+      wt.does_need_lp_discovery IS DISTINCT FROM FALSE
+      AND wt.does_need_portfolio_discovery = FALSE
+      AND COALESCE(wt.has_portfolio_discovery_error, FALSE) IS NOT TRUE
+    )
+  );
+```
+
 ### Token contracts discovery
 
 ```sql

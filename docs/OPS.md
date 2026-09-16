@@ -200,6 +200,60 @@ FROM erc_8004.wallet_transactions;
 
 Worker README: [`wallet_funding_transfers`](../workers/wallet_funding_transfers/README.md).
 
+## Wallet holdings discovery
+
+One worker, three stages per claimed row (contracts → portfolio → LP). Replaced the three split workers deleted 2026-09-16 ([DEPRECATION.md](./DEPRECATION.md)); do not recreate their workflows.
+
+### Interpreting logs
+
+| Line | Reading |
+|---|---|
+| `Contracts/Portfolio/LP done wt_id=` | Stage finished inside the same claim |
+| `Transient wt_id=… stage=` | Rate limit / timeout / malformed 200. Flag stays pending, retried next run. **Expected**, not a failure |
+| `Permanent wt_id=… stage=` | `has_*_error = TRUE`. Read the message before assuming it is unfixable |
+| `Alchemy … retrying in Xs` | Backoff honoring `Retry-After` |
+| `No more pending rows in this run.` | Queue drained for this run; exit 0 |
+
+### Pending is not the same as claimable
+
+A stage can be pending yet not claimable: the previous stage has `has_*_error`, or the chain has no `subdomain_alchemy` (X Layer). Runs then finish in seconds and the queue looks empty while the pipeline is actually stalled — this hid ~17 500 rows with incomplete inventory for two weeks. Use the eligible-now query in [SUPABASE.md](./SUPABASE.md), not the raw flag counts.
+
+### Rows burned by rate limit
+
+This must stay at zero. A 429 is transient and leaves the flag pending; if these counts grow, either the backoff broke or one of the deleted workflows was recreated.
+
+```sql
+SELECT
+  count(*) FILTER (
+    WHERE has_discovery_contracts_error IS TRUE
+      AND discovery_contracts_message_error ~* '(429|too many requests|rate.?limit)'
+  ) AS contracts_429,
+  count(*) FILTER (
+    WHERE has_portfolio_discovery_error IS TRUE
+      AND portfolio_discovery_message_error ~* '(429|too many requests|rate.?limit)'
+  ) AS portfolio_429,
+  count(*) FILTER (
+    WHERE has_lp_discovery_error IS TRUE
+      AND lp_discovery_message_error ~* '(429|too many requests|rate.?limit)'
+  ) AS lp_429
+FROM erc_8004.wallet_transactions;
+```
+
+Re-queue only after the worker handles the condition, otherwise the next burst burns the same rows: `gsa-supabase-schema/supabase/scripts/wallet_discovery_reset_alchemy_429.sql` (non-destructive, safe to re-run), then `workflow_dispatch`.
+
+### Misclassified errors
+
+Group `*_message_error` before re-queueing. Anything that would succeed on retry belongs in `AlchemyTransientError`, not in `has_*_error` — precedent: `Missing result from base-mainnet` (HTTP 200 with neither `result` nor `error`) was raised as permanent and burned 5 rows before being reclassified.
+
+```sql
+SELECT left(discovery_contracts_message_error, 180) AS err, count(*)
+FROM erc_8004.wallet_transactions
+WHERE has_discovery_contracts_error IS TRUE
+GROUP BY 1 ORDER BY count(*) DESC LIMIT 20;
+```
+
+Throughput: ~1 000–1 150 wallets/hour end-to-end with `CONCURRENCY=4`. To go faster raise `ALCHEMY_MAX_INFLIGHT` after checking free-tier CU usage, not before. Worker README: [`wallet_holdings_discovery`](../workers/wallet_holdings_discovery/README.md).
+
 ## Dual daily workers
 
 `wallet_nonce_balance_daily` runs **two** GHA jobs (`worker-a`, `worker-b`) with separate concurrency groups. They share the same claim SQL (`FOR UPDATE SKIP LOCKED`), so batches do not overlap. Both need the same secrets.
