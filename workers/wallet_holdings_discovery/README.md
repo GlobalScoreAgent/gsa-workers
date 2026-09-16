@@ -49,8 +49,8 @@ Triggers `trg_wallet_transactions_portfolio_flag_bu` / `_lp_flag_bu` still chain
 
 | Kind | Examples | Persist |
 |---|---|---|
-| Transient | HTTP 429/503/5xx, timeouts, JSON-RPC rate-limit / CUPS | Flag stays pending; `*_claimed_at = NOW()` (stale 2h). Log `Transient wt_id=` |
-| Permanent | HTTP 4xx other than rate-limit, malformed JSON-RPC, unsupported chain | `does_need_* = FALSE`, `has_*_error = TRUE`, message. Downstream stages stay blocked by existing triggers |
+| Transient | HTTP 429/503/5xx, timeouts, JSON-RPC rate-limit / CUPS, HTTP 200 with an unusable body (unparseable, not a JSON-RPC object, neither `result` nor `error`) | Flag stays pending; `*_claimed_at = NOW()` (stale 2h). Log `Transient wt_id=` |
+| Permanent | HTTP 4xx other than rate-limit, non-rate-limit JSON-RPC error, unsupported chain | `does_need_* = FALSE`, `has_*_error = TRUE`, message. Downstream stages stay blocked by existing triggers |
 
 `src/alchemy_rpc.py` is the single JSON-RPC door (Token API + `eth_call` / Multicall3). `AlchemyTransientError` is re-raised from LP NFT/classic steps so a 429 cannot complete as “no LP”.
 
