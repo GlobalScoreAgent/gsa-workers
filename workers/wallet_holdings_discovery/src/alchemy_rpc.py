@@ -1,8 +1,8 @@
 """Alchemy JSON-RPC with Retry-After / exponential backoff.
 
-Transient failures (429, 5xx, timeouts, JSON-RPC rate-limit) are retried in-process
-and raised as AlchemyTransientError if retries are exhausted. Those must NOT be
-persisted as has_*_error. Permanent failures raise AlchemyPermanentError.
+Transient failures (429, 5xx, timeouts, JSON-RPC rate-limit, malformed 200 bodies) are
+retried in-process and raised as AlchemyTransientError if retries are exhausted. Those
+must NOT be persisted as has_*_error. Permanent failures raise AlchemyPermanentError.
 """
 
 from __future__ import annotations
@@ -42,7 +42,7 @@ class AlchemyTransientError(AlchemyError):
 
 
 class AlchemyPermanentError(AlchemyError):
-    """Malformed response, 4xx other than rate-limit, or non-rate-limit JSON-RPC error."""
+    """4xx other than rate-limit, non-rate-limit JSON-RPC error, or unsupported chain."""
 
 
 def alchemy_url(subdomain: str, api_key: str) -> str:
@@ -152,13 +152,37 @@ async def _json_rpc_inner(
         if status >= 400:
             raise AlchemyPermanentError(f"HTTP {status} for {method}: {response.text[:300]}")
 
+        malformed: str | None = None
+        body: Any = None
         try:
             body = response.json()
         except Exception as exc:
-            raise AlchemyPermanentError(f"Invalid JSON for {method}: {exc}") from exc
+            malformed = f"invalid JSON: {exc}"
+        else:
+            if not isinstance(body, dict):
+                malformed = "body is not a JSON-RPC object"
+            elif "error" not in body and "result" not in body:
+                malformed = "neither result nor error in body"
 
-        if not isinstance(body, dict):
-            raise AlchemyPermanentError(f"Invalid JSON-RPC body for {method}")
+        # A 200 with an unusable body is a provider hiccup, not a request we can fix:
+        # retry it and leave the flag pending instead of burning the row.
+        if malformed is not None:
+            last_exc = AlchemyTransientError(f"{method} {malformed}")
+            if attempt >= RATE_LIMIT_MAX_RETRIES:
+                raise AlchemyTransientError(
+                    f"{method} malformed response after {attempt} attempts: {malformed}"
+                )
+            delay = _retry_after_seconds(response, attempt)
+            logger.warning(
+                "Alchemy %s attempt %s/%s malformed response (%s); retrying in %.1fs",
+                method,
+                attempt,
+                RATE_LIMIT_MAX_RETRIES,
+                malformed,
+                delay,
+            )
+            await asyncio.sleep(delay)
+            continue
 
         rpc_error = body.get("error")
         if rpc_error:

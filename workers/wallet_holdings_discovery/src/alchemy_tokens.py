@@ -8,7 +8,7 @@ from typing import Any
 import httpx
 
 from alchemy_rpc import (
-    AlchemyPermanentError,
+    AlchemyTransientError,
     alchemy_url,
     json_rpc,
 )
@@ -54,7 +54,7 @@ async def fetch_erc20_contracts_with_balance(
             timeout=30.0,
         )
         if not isinstance(result, dict):
-            raise AlchemyPermanentError(f"Missing result from {subdomain}")
+            raise AlchemyTransientError(f"Missing result from {subdomain}")
 
         token_balances = result.get("tokenBalances") or []
         for item in token_balances:
