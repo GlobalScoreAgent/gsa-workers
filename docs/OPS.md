@@ -20,7 +20,17 @@ WHERE is_valid_import_current_nonce_and_balance_daily IS TRUE
   AND import_nonce_and_balance_daily_last_status = 'Error';
 ```
 
-Adjust column names for monthly / origin ([SUPABASE.md](./SUPABASE.md)).
+Adjust column names for the owner monthly / origin lanes ([SUPABASE.md](./SUPABASE.md)).
+
+### Owner monthly: rate-limited wallets
+
+`owner_wallet_monthly` requeues rate-limited wallets on `TRANSIENT_REQUEUE_SECONDS` (1h) instead of marking them `Error`, so a 429 burst shows up as a clock that keeps moving in one-hour steps, not as a growing error count. Symptoms and knob:
+
+| Symptom | Action |
+|---|---|
+| Repeated `Transient wallet_id=` for the same wallets | Lower `ALCHEMY_MAX_INFLIGHT` (shared by both lanes); do not raise the per-lane concurrency |
+| `Partial transient` on many wallets | Public RPCs for that chain are failing; check the chain's endpoint list before blaming Alchemy |
+| Origin lane throughput looks low | Expected: binary search over historical blocks. Do not raise `ORIGIN_CONCURRENCY` above 5 without measuring |
 
 ## Interpreting worker logs
 
@@ -28,7 +38,7 @@ Adjust column names for monthly / origin ([SUPABASE.md](./SUPABASE.md)).
 
 | Log line | Meaning |
 |---|---|
-| `Claimed batch size=...` | Claim OK; RPC about to run |
+| `Claimed batch size=...` | Claim OK; RPC about to run. `owner_wallet_monthly` prefixes its lane: `Claimed batch lane=monthly size=...` |
 | `Reconnecting to Postgres after connection failure` | Transient SSL/DB drop; retry in progress |
 | `Claim failed; will retry next loop` | Claim exhausted retries; loop continues |
 | `Save/snapshot failed for batch; wallets stay Pending` | Batch not persisted; reclaim after stale window |
