@@ -128,7 +128,7 @@ claim (any pending stage) →
 | Workflow | `wallet-holdings-discovery.yml` (`CONCURRENCY=4`) |
 | Split token/LP discovery workers | Deleted 2026-09-16; [DEPRECATION.md](./DEPRECATION.md) |
 
-Business rationale: [TOKEN_CONTRACTS_DISCOVERY_ALCHEMY.md](./TOKEN_CONTRACTS_DISCOVERY_ALCHEMY.md). Worker README: [`wallet_holdings_discovery`](../workers/wallet_holdings_discovery/README.md). LP extractors: Ethereum / Base / Arbitrum UniV3 NFT; BNB Pancake V3 NFT; Base Aerodrome classic via `lp_pools`. 15-day LP refresh still pending: [PENDING_LP_POSITIONS.md](./PENDING_LP_POSITIONS.md). 429-row reset: schema `20260916140000_wallet_discovery_reset_alchemy_429.sql` **after** this worker is live.
+Business rationale: [TOKEN_CONTRACTS_DISCOVERY_ALCHEMY.md](./TOKEN_CONTRACTS_DISCOVERY_ALCHEMY.md). Worker README: [`wallet_holdings_discovery`](../workers/wallet_holdings_discovery/README.md). LP extractors: Ethereum / Base / Arbitrum UniV3 NFT; BNB Pancake V3 NFT; Base Aerodrome classic via `lp_pools`. 15-day LP refresh still pending: [PENDING_LP_POSITIONS.md](./PENDING_LP_POSITIONS.md). 429-row reset: schema `20260916183128_wallet_discovery_reset_alchemy_429.sql`, applied in prod 2026-09-16 (9 210 contracts + 8 339 portfolio requeued).
 
 ### 7. Token prices enrich
 

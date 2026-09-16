@@ -81,7 +81,7 @@ uv run python job.py
 
 ## Monitoring / 429 reset
 
-See [docs/SUPABASE.md](../../docs/SUPABASE.md). Rows previously burned by Alchemy 429 are requeued by schema migration `20260916140000_wallet_discovery_reset_alchemy_429.sql` — apply in prod **after** this worker is live and the three old crons are off.
+See [docs/SUPABASE.md](../../docs/SUPABASE.md). Rows previously burned by Alchemy 429 were requeued by schema migration `20260916183128_wallet_discovery_reset_alchemy_429.sql`, applied in prod on 2026-09-16 once this worker was live (9 210 contracts + 8 339 portfolio).
 
 ## Module layout
 

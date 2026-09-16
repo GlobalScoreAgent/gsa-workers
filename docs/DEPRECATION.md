@@ -129,5 +129,5 @@ ADR 2026-09-16. Live path is **`wallet_holdings_discovery`** (contracts → port
 
 Do not re-add them. If you need the old code, read it from git history (`git log -- workers/wallet_lp_positions_discovery`); the domain modules live in `workers/wallet_holdings_discovery/src/`.
 
-Do not reset 429-burned rows until the unified worker has run at least once with backoff. Schema: `20260916140000_wallet_discovery_reset_alchemy_429.sql`.
+429-burned rows were requeued only after the unified worker ran clean once: schema `20260916183128_wallet_discovery_reset_alchemy_429.sql` (prod 2026-09-16).
 
