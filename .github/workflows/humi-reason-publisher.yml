@@ -1,0 +1,47 @@
+name: HUMI reason publisher
+
+on:
+  schedule:
+    - cron: "0 0,6,12,18 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: humi-reason-publisher
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        working-directory: workers/humi_reason_publisher
+        run: uv sync
+
+      - name: Run HUMI reason publisher
+        working-directory: workers/humi_reason_publisher
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          HUMI_REASON_BUCKET: humi-reasons
+          MAX_RUNTIME_SECONDS: 19800
+          WORKER_ID: publisher-a
+          CONCURRENCY: 16
+          CLAIM_BATCH_SIZE: 500
+          CLAIM_STALE_SECONDS: 7200
+        run: uv run python job.py

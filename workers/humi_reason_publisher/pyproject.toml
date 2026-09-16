@@ -1,0 +1,12 @@
+[project]
+name = "humi-reason-publisher"
+version = "0.1.0"
+description = "HUMI pillar narrative aggregate → private Supabase Storage bucket humi-reasons"
+requires-python = ">=3.12"
+dependencies = [
+    "httpx>=0.28",
+    "psycopg[binary]>=3.2",
+]
+
+[dependency-groups]
+dev = []

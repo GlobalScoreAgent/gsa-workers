@@ -31,6 +31,9 @@ flowchart TB
   subgraph ethosApi [Ethos_API]
     reviewsApi[ethos_reviews_api]
   end
+  subgraph humiStorage [HUMI_reasons_to_Storage]
+    reasonPublisher[humi_reason_publisher]
+  end
   subgraph uriIngest [URI_ingest]
     uriResolve[agent_uri_resolve]
     uriReprocess[agent_uri_reprocess]
@@ -65,6 +68,8 @@ flowchart TB
   manifestConsume -.-> am
   classifier --> dashAgents[web_dashboard.agents]
   reviewsApi --> ethosReviews[ethos.reviews]
+  humiAgent["index_humi.index_humi_agent (needs_reason_publish)"] --> reasonPublisher
+  reasonPublisher --> humiBucket["Storage humi-reasons/humi/agent/{id}.json"]
 ```
 
 ## Live processes
@@ -88,6 +93,7 @@ flowchart TB
 | 14 | [`erc8257_tools_import`](../workers/erc8257_tools_import/README.md) | Reference | 04:00 daily | agenttoolindex REST (active+deregistered dump) | `erc_8257.tools_upsert` + `sync_state` watermark | `erc_8257.tools` (full catalog) |
 | 15 | [`agent_endpoint_liveness`](../workers/agent_endpoint_liveness/README.md) | Claim (`agent_endpoint_health`) | 0/6/12/18 | HTTP(s) locators from `agent_metadata_services` due on 15d clock | `agent_endpoint_health_sync` / `_claim` / `_complete_batch` | `erc_8004.agent_endpoint_health` + view `agent_endpoint_status` |
 | 16 | [`ethos_reviews_api`](../workers/ethos_reviews_api/README.md) | Claim (`ethos.profiles`) | 0/6/12/18 | GSA-linked Claimed + `reviews_next_eligible_at` | `claim_reviews_fetch` / `complete_reviews_fetch` | `ethos.reviews` |
+| 17 | [`humi_reason_publisher`](../workers/humi_reason_publisher/README.md) | Claim (`index_humi.index_humi_agent`) | 0/6/12/18 | `needs_reason_publish` | `claim_reason_publish` / `complete_reason_publish` / `release_reason_publish` | Private bucket `humi-reasons` → `humi/agent/{id}.json` |
 
 Soft runtime budget for claim / enrich jobs: **`MAX_RUNTIME_SECONDS=19800`** (~5.5h). Empty queue → exit 0; next cron still fires.
 
@@ -326,11 +332,35 @@ claim_reviews_fetch → POST received + given (filter review / review-archived)
 
 Worker README: [`ethos_reviews_api`](../workers/ethos_reviews_api/README.md).
 
+### 17. HUMI reason publisher
+
+**Live after schema deploy.** Moves the ~12 kB narrative aggregate per agent out of `index_humi.index_humi_agent` (9.2 GB of TOAST, 290 395 rows rewritten in 7 days) into the private Storage bucket `humi-reasons`. SQL keeps computing every `*_score`; the worker only assembles and uploads.
+
+```
+claim_reason_publish → read the 4 pillar_* rows → assemble → sha256
+  → unchanged: clear flag, no upload · changed: PUT humi/agent/{id}.json
+  → complete_reason_publish (failures → release_reason_publish)
+```
+
+Not triggered by the HUMI lane: it has no stable finish time (12 min on quiet days, ~24 h on loaded ones, measured in `cron.job_run_details`). Fixed cron plus an idempotent content-hashed claim means running mid-lane is harmless, at the cost of up to ~6 h of narrative lag, accepted silently.
+
+| Item | Detail |
+|---|---|
+| Bucket | `humi-reasons`, **private**, read server-side with service role |
+| Object | `humi/agent/{agent_id}.json` — no timestamp inside, or the sha short-circuit would never hit |
+| Concurrency guard | `complete` re-sends the claimed `version`; if the lane recalculated meanwhile the flag stays `true` |
+| Workflow | `humi-reason-publisher.yml` |
+| Schema | `20260916010000_humi_reason_publish_claim.sql`, `20260916010100_agent_index_humi_calculate_reason_publish_flag.sql` |
+| Stage 2 | Render the leaf `reason` text in Python and drop ~45 columns from `index_humi.pillar_*` (not built) |
+
+Worker README: [`humi_reason_publisher`](../workers/humi_reason_publisher/README.md).
+
 ## Secrets cheat sheet
 
 | Secret | Used by |
 |---|---|
 | `SUPABASE_DB_URL` | All |
+| `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` | HUMI reason publisher (Storage write on a private bucket) |
 | `ALCHEMY_KEY` | Balance/nonce claim workers (fallback RPC) |
 | `ALCHEMY_FREE_KEY` | Contracts + portfolio + LP discovery |
 | `DUNE_KEY` | Dune queries import |
