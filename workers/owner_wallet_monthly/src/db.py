@@ -1,33 +1,58 @@
-"""Supabase Postgres access for owner_wallet_nonce_balance_monthly job."""
+"""Supabase Postgres access for the owner_wallet_monthly job (monthly + origin lanes).
+
+One connection shared by both lanes under an asyncio lock in job.py. Each lane keeps
+its own clock, payload column, status column and snapshot RPC; the only thing they
+share here is the retry/reconnect machinery.
+"""
 
 from __future__ import annotations
 
 import logging
 import time
 from collections.abc import Callable
-from typing import Any, TypeVar
+from dataclasses import dataclass
+from typing import Any, Literal, TypeVar
 
 import psycopg
 from psycopg.rows import dict_row
 
-logger = logging.getLogger("owner_wallet_nonce_balance_monthly")
+logger = logging.getLogger("owner_wallet_monthly")
 
-ELIGIBLE_WHERE = """
+Lane = Literal["monthly", "origin"]
+
+CHAINS_ALCHEMY_SQL = """
+SELECT chain_id, subdomain_alchemy
+FROM erc_8004.chains
+WHERE is_active = TRUE
+"""
+
+MONTHLY_ELIGIBLE_WHERE = """
 w.is_valid_import_current_nonce_and_balance_monthly IS TRUE
   AND w.import_nonce_and_balance_monthly_next_eligible_at <= NOW()
 """
 
-COUNT_ELIGIBLE_SQL = f"""
-SELECT COUNT(*) AS count
-FROM erc_8004.wallets w
-WHERE {ELIGIBLE_WHERE}
+ORIGIN_ELIGIBLE_WHERE = """
+w.is_valid_import_current_nonce_and_balance_monthly IS TRUE
+  AND w.import_wallet_history_next_eligible_at <= NOW()
 """
 
-CLAIM_WALLETS_SQL = f"""
+MONTHLY_COUNT_ELIGIBLE_SQL = f"""
+SELECT COUNT(*) AS count
+FROM erc_8004.wallets w
+WHERE {MONTHLY_ELIGIBLE_WHERE}
+"""
+
+ORIGIN_COUNT_ELIGIBLE_SQL = f"""
+SELECT COUNT(*) AS count
+FROM erc_8004.wallets w
+WHERE {ORIGIN_ELIGIBLE_WHERE}
+"""
+
+MONTHLY_CLAIM_SQL = f"""
 WITH candidates AS (
   SELECT w.id
   FROM erc_8004.wallets w
-  WHERE {ELIGIBLE_WHERE}
+  WHERE {MONTHLY_ELIGIBLE_WHERE}
   ORDER BY w.import_nonce_and_balance_monthly_next_eligible_at, w.id
   LIMIT %(limit)s
   FOR UPDATE SKIP LOCKED
@@ -43,34 +68,93 @@ WHERE w.id = c.id
 RETURNING w.id, w.address
 """
 
-CHAINS_ALCHEMY_SQL = """
-SELECT chain_id, subdomain_alchemy
-FROM erc_8004.chains
-WHERE is_active = TRUE
+ORIGIN_CLAIM_SQL = f"""
+WITH candidates AS (
+  SELECT w.id
+  FROM erc_8004.wallets w
+  WHERE {ORIGIN_ELIGIBLE_WHERE}
+  ORDER BY w.import_wallet_history_next_eligible_at, w.id
+  LIMIT %(limit)s
+  FOR UPDATE SKIP LOCKED
+)
+UPDATE erc_8004.wallets w
+SET
+  import_wallet_history_status = 'Pending',
+  updated_at = NOW(),
+  import_wallet_history_next_eligible_at =
+    NOW() + make_interval(secs => %(stale_seconds)s)
+FROM candidates c
+WHERE w.id = c.id
+RETURNING w.id, w.address
 """
 
-UPDATE_WALLET_SQL = """
+MONTHLY_SAVE_SQL = """
 UPDATE erc_8004.wallets
 SET
   import_current_nonce_and_balance_monthly_json = %(payload)s::jsonb,
   import_nonce_and_balance_monthly_last_status = %(status)s,
   import_nonce_and_balance_monthly_at = NOW(),
-  import_nonce_and_balance_monthly_next_eligible_at = NOW() + INTERVAL '30 days',
+  import_nonce_and_balance_monthly_next_eligible_at =
+    NOW() + make_interval(secs => %(next_seconds)s),
   updated_at = NOW()
 WHERE id = %(wallet_id)s
 """
 
-APPLY_MONTHLY_SNAPSHOT_SQL = """
+ORIGIN_SAVE_SQL = """
+UPDATE erc_8004.wallets
+SET
+  import_wallet_history_data = %(payload)s::jsonb,
+  import_wallet_history_status = %(status)s,
+  import_wallet_history_at = NOW(),
+  import_wallet_history_next_eligible_at =
+    NOW() + make_interval(secs => %(next_seconds)s),
+  updated_at = NOW()
+WHERE id = %(wallet_id)s
+"""
+
+MONTHLY_REQUEUE_TRANSIENT_SQL = """
+UPDATE erc_8004.wallets
+SET
+  import_nonce_and_balance_monthly_next_eligible_at =
+    NOW() + make_interval(secs => %(next_seconds)s),
+  updated_at = NOW()
+WHERE id = %(wallet_id)s
+"""
+
+ORIGIN_REQUEUE_TRANSIENT_SQL = """
+UPDATE erc_8004.wallets
+SET
+  import_wallet_history_next_eligible_at =
+    NOW() + make_interval(secs => %(next_seconds)s),
+  updated_at = NOW()
+WHERE id = %(wallet_id)s
+"""
+
+MONTHLY_APPLY_SNAPSHOT_SQL = """
 SELECT erc_8004.wallet_apply_monthly_snapshot(%(wallet_id)s)
 """
 
-MARK_SNAPSHOT_ERROR_SQL = """
+ORIGIN_APPLY_SNAPSHOT_SQL = """
+SELECT erc_8004.wallet_apply_owner_history_snapshot(%(wallet_id)s)
+"""
+
+MONTHLY_MARK_SNAPSHOT_ERROR_SQL = """
 UPDATE erc_8004.wallets
 SET
   import_nonce_and_balance_monthly_last_status = 'Error',
   updated_at = NOW()
 WHERE id = %(wallet_id)s
 """
+
+ORIGIN_MARK_SNAPSHOT_ERROR_SQL = """
+UPDATE erc_8004.wallets
+SET
+  import_wallet_history_status = 'Error',
+  updated_at = NOW()
+WHERE id = %(wallet_id)s
+"""
+
+DEFAULT_NEXT_SECONDS = 30 * 24 * 3600
 
 CLAIM_MAX_ATTEMPTS = 3
 CLAIM_RETRY_BASE_SECONDS = 2.0
@@ -81,6 +165,39 @@ _NO_RECONNECT_EXCEPTIONS = (
 )
 
 T = TypeVar("T")
+
+
+@dataclass(frozen=True)
+class LaneSql:
+    name: str
+    count_eligible: str
+    claim: str
+    save: str
+    requeue_transient: str
+    apply_snapshot: str
+    mark_snapshot_error: str
+
+
+LANES: dict[str, LaneSql] = {
+    "monthly": LaneSql(
+        name="monthly",
+        count_eligible=MONTHLY_COUNT_ELIGIBLE_SQL,
+        claim=MONTHLY_CLAIM_SQL,
+        save=MONTHLY_SAVE_SQL,
+        requeue_transient=MONTHLY_REQUEUE_TRANSIENT_SQL,
+        apply_snapshot=MONTHLY_APPLY_SNAPSHOT_SQL,
+        mark_snapshot_error=MONTHLY_MARK_SNAPSHOT_ERROR_SQL,
+    ),
+    "origin": LaneSql(
+        name="origin",
+        count_eligible=ORIGIN_COUNT_ELIGIBLE_SQL,
+        claim=ORIGIN_CLAIM_SQL,
+        save=ORIGIN_SAVE_SQL,
+        requeue_transient=ORIGIN_REQUEUE_TRANSIENT_SQL,
+        apply_snapshot=ORIGIN_APPLY_SNAPSHOT_SQL,
+        mark_snapshot_error=ORIGIN_MARK_SNAPSHOT_ERROR_SQL,
+    ),
+}
 
 
 class Database:
@@ -168,58 +285,94 @@ class Database:
 
         return self._run_with_db_retry("load_alchemy_subdomains", _load)
 
-    def count_eligible_wallets(self, stale_seconds: int) -> int:
+    def count_eligible_wallets(self, lane: Lane) -> int:
+        sql = LANES[lane]
+
         def _count() -> int:
             assert self._conn is not None
             with self._conn.cursor() as cur:
-                cur.execute(COUNT_ELIGIBLE_SQL, {"stale_seconds": stale_seconds})
+                cur.execute(sql.count_eligible)
                 row = cur.fetchone()
             return int(row["count"]) if row else 0
 
-        return self._run_with_db_retry("count_eligible", _count)
+        return self._run_with_db_retry(f"count_eligible[{lane}]", _count)
 
-    def claim_wallets(self, limit: int, stale_seconds: int) -> list[dict[str, Any]]:
+    def claim_wallets(
+        self,
+        lane: Lane,
+        limit: int,
+        stale_seconds: int,
+    ) -> list[dict[str, Any]]:
+        sql = LANES[lane]
+
         def _claim() -> list[dict[str, Any]]:
             assert self._conn is not None
             with self._conn.cursor() as cur:
-                cur.execute(
-                    CLAIM_WALLETS_SQL,
-                    {"limit": limit, "stale_seconds": stale_seconds},
-                )
+                cur.execute(sql.claim, {"limit": limit, "stale_seconds": stale_seconds})
                 rows = list(cur.fetchall())
             self._conn.commit()
             return rows
 
-        return self._run_with_db_retry("claim", _claim)
+        return self._run_with_db_retry(f"claim[{lane}]", _claim)
 
-    def save_wallet_result(self, wallet_id: int, payload: str, status: str) -> None:
-        self.save_wallet_results_batch([(wallet_id, payload, status)])
-
-    def save_wallet_results_batch(
+    def save_results_batch(
         self,
-        results: list[tuple[int, str, str]],
+        lane: Lane,
+        results: list[tuple[int, str, str, int]],
     ) -> None:
+        """Persist payload + status. Each row carries its own next-eligibility window."""
         if not results:
             return
 
+        sql = LANES[lane]
         params = [
-            {"wallet_id": wallet_id, "payload": payload, "status": status}
-            for wallet_id, payload, status in results
+            {
+                "wallet_id": wallet_id,
+                "payload": payload,
+                "status": status,
+                "next_seconds": next_seconds,
+            }
+            for wallet_id, payload, status, next_seconds in results
         ]
 
         def _save() -> None:
             assert self._conn is not None
             with self._conn.cursor() as cur:
-                cur.executemany(UPDATE_WALLET_SQL, params)
+                cur.executemany(sql.save, params)
             self._conn.commit()
 
-        self._run_with_db_retry("save_batch", _save)
+        self._run_with_db_retry(f"save_batch[{lane}]", _save)
 
-    def apply_monthly_snapshots(self, wallet_ids: list[int]) -> list[int]:
-        """Run wallet_apply_monthly_snapshot; return wallet ids that failed."""
+    def requeue_transient(
+        self,
+        lane: Lane,
+        wallet_ids: list[int],
+        next_seconds: int,
+    ) -> None:
+        """Short-requeue wallets whose chains all failed on rate limit: no payload, no Error."""
+        if not wallet_ids:
+            return
+
+        sql = LANES[lane]
+        params = [
+            {"wallet_id": wallet_id, "next_seconds": next_seconds}
+            for wallet_id in wallet_ids
+        ]
+
+        def _requeue() -> None:
+            assert self._conn is not None
+            with self._conn.cursor() as cur:
+                cur.executemany(sql.requeue_transient, params)
+            self._conn.commit()
+
+        self._run_with_db_retry(f"requeue_transient[{lane}]", _requeue)
+
+    def apply_snapshots(self, lane: Lane, wallet_ids: list[int]) -> list[int]:
+        """Run the lane snapshot RPC; return wallet ids that failed."""
         if not wallet_ids:
             return []
 
+        sql = LANES[lane]
         failed: list[int] = []
 
         for wallet_id in wallet_ids:
@@ -229,17 +382,15 @@ class Database:
                     self.ensure_connected()
                     assert self._conn is not None
                     with self._conn.cursor() as cur:
-                        cur.execute(
-                            APPLY_MONTHLY_SNAPSHOT_SQL,
-                            {"wallet_id": wallet_id},
-                        )
+                        cur.execute(sql.apply_snapshot, {"wallet_id": wallet_id})
                     applied = True
                     break
                 except RETRYABLE_DB_EXCEPTIONS as exc:
                     self._safe_rollback()
                     if attempt >= CLAIM_MAX_ATTEMPTS:
                         logger.warning(
-                            "Snapshot failed for wallet id=%s after %s retries: %s",
+                            "Snapshot[%s] failed for wallet id=%s after %s retries: %s",
+                            lane,
                             wallet_id,
                             CLAIM_MAX_ATTEMPTS,
                             exc,
@@ -249,7 +400,8 @@ class Database:
                     delay = CLAIM_RETRY_BASE_SECONDS * attempt
                     if isinstance(exc, _NO_RECONNECT_EXCEPTIONS):
                         logger.warning(
-                            "Snapshot wallet id=%s attempt %s/%s %s; retrying in %.1fs",
+                            "Snapshot[%s] wallet id=%s attempt %s/%s %s; retrying in %.1fs",
+                            lane,
                             wallet_id,
                             attempt,
                             CLAIM_MAX_ATTEMPTS,
@@ -259,7 +411,9 @@ class Database:
                         time.sleep(delay)
                     else:
                         logger.warning(
-                            "Snapshot wallet id=%s attempt %s/%s connection error; reconnecting in %.1fs",
+                            "Snapshot[%s] wallet id=%s attempt %s/%s connection error; "
+                            "reconnecting in %.1fs",
+                            lane,
                             wallet_id,
                             attempt,
                             CLAIM_MAX_ATTEMPTS,
@@ -270,7 +424,8 @@ class Database:
                 except Exception as exc:
                     self._safe_rollback()
                     logger.warning(
-                        "Snapshot failed for wallet id=%s: %s",
+                        "Snapshot[%s] failed for wallet id=%s: %s",
+                        lane,
                         wallet_id,
                         exc,
                     )
@@ -281,21 +436,22 @@ class Database:
                 failed.append(wallet_id)
 
         if failed:
-            self._mark_snapshot_errors(failed)
+            self._mark_snapshot_errors(lane, failed)
 
         def _commit() -> None:
             assert self._conn is not None
             self._conn.commit()
 
-        self._run_with_db_retry("snapshot_commit", _commit)
+        self._run_with_db_retry(f"snapshot_commit[{lane}]", _commit)
         return failed
 
-    def _mark_snapshot_errors(self, wallet_ids: list[int]) -> None:
+    def _mark_snapshot_errors(self, lane: Lane, wallet_ids: list[int]) -> None:
+        sql = LANES[lane]
         params = [{"wallet_id": wallet_id} for wallet_id in wallet_ids]
 
         def _mark() -> None:
             assert self._conn is not None
             with self._conn.cursor() as cur:
-                cur.executemany(MARK_SNAPSHOT_ERROR_SQL, params)
+                cur.executemany(sql.mark_snapshot_error, params)
 
-        self._run_with_db_retry("mark_snapshot_errors", _mark)
+        self._run_with_db_retry(f"mark_snapshot_errors[{lane}]", _mark)

@@ -1,4 +1,4 @@
-name: Owner wallet nonce balance monthly
+name: Owner wallet monthly
 
 on:
   schedule:
@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: owner-wallet-nonce-balance-monthly
+  group: owner-wallet-monthly
   cancel-in-progress: false
 
 jobs:
@@ -32,17 +32,21 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        working-directory: workers/owner_wallet_nonce_balance_monthly
+        working-directory: workers/owner_wallet_monthly
         run: uv sync
 
-      - name: Run owner wallet nonce balance monthly job
-        working-directory: workers/owner_wallet_nonce_balance_monthly
+      - name: Run owner wallet monthly job
+        working-directory: workers/owner_wallet_monthly
         env:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
           ALCHEMY_KEY: ${{ secrets.ALCHEMY_KEY }}
           MAX_RUNTIME_SECONDS: 19800
-          CONCURRENCY: 20
-          CLAIM_BATCH_SIZE: 200
+          MONTHLY_CONCURRENCY: 20
+          MONTHLY_CLAIM_BATCH_SIZE: 200
+          ORIGIN_CONCURRENCY: 4
+          ORIGIN_CLAIM_BATCH_SIZE: 50
+          ALCHEMY_MAX_INFLIGHT: 8
           CLAIM_STALE_SECONDS: 7200
+          TRANSIENT_REQUEUE_SECONDS: 3600
           SKIP_ELIGIBLE_COUNT: "1"
         run: uv run python job.py

@@ -1,4 +1,4 @@
-"""Query wallet balance and nonce across all configured chains."""
+"""Query wallet balance and nonce across all configured chains (monthly lane)."""
 
 from __future__ import annotations
 
@@ -8,8 +8,11 @@ from typing import Mapping
 import httpx
 
 from alchemy import mask_alchemy_endpoint, query_balance_and_nonce
+from backoff import RpcTransientError
 from networks import CHAIN_ORDER, NETWORKS
-from rpc import RpcError, eth_rpc, hex_to_int, wei_to_eth
+from rpc import LATEST_TIMEOUT, RpcError, eth_rpc, hex_to_int, wei_to_eth
+
+STATUS_TRANSIENT = "transient"
 
 
 def _error_result(chain_key: str, error: str, status: str = "error") -> dict:
@@ -43,11 +46,23 @@ async def query_single_network(
     for rpc in net["rpcs"]:
         try:
             balance_hex, nonce_hex = await asyncio.gather(
-                eth_rpc(client, rpc, "eth_getBalance", [address, "latest"]),
-                eth_rpc(client, rpc, "eth_getTransactionCount", [address, "latest"]),
+                eth_rpc(
+                    client,
+                    rpc,
+                    "eth_getBalance",
+                    [address, "latest"],
+                    timeout=LATEST_TIMEOUT,
+                ),
+                eth_rpc(
+                    client,
+                    rpc,
+                    "eth_getTransactionCount",
+                    [address, "latest"],
+                    timeout=LATEST_TIMEOUT,
+                ),
             )
-            balance = wei_to_eth(hex_to_int(balance_hex))
-            nonce = hex_to_int(nonce_hex)
+            balance = wei_to_eth(hex_to_int(str(balance_hex)))
+            nonce = hex_to_int(str(nonce_hex))
             active = balance > 0 or nonce > 0
 
             return {
@@ -90,7 +105,18 @@ async def query_single_network(
                 "rpc_source": "alchemy",
                 "error": None,
             }
+        except RpcTransientError as exc:
+            return _error_result(
+                chain_key,
+                f"Alchemy rate limit / transient failure: {exc}",
+                status=STATUS_TRANSIENT,
+            )
         except (RpcError, httpx.HTTPError, ValueError, TypeError) as exc:
+            return _error_result(
+                chain_key,
+                f"Alchemy fallback failed: {exc}",
+            )
+        except Exception as exc:
             return _error_result(
                 chain_key,
                 f"Alchemy fallback failed: {exc}",

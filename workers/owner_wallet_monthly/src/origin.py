@@ -9,6 +9,7 @@ from typing import Protocol
 import httpx
 
 from alchemy import AlchemyRpc, mask_alchemy_endpoint
+from backoff import RpcTransientError
 from networks import CHAIN_ORDER, NETWORKS
 from rpc import (
     eth_block_number,
@@ -17,8 +18,9 @@ from rpc import (
     eth_get_code_at_block,
     eth_get_nonce_at_block,
     has_contract_code,
-    is_prune_error,
 )
+
+STATUS_TRANSIENT = "transient"
 
 
 class BlockRpc(Protocol):
@@ -176,12 +178,7 @@ async def _query_with_rpc(
     rpc_source: str,
 ) -> dict:
     net = NETWORKS[chain_key]
-    try:
-        block_num, activity_type = await find_first_activity_block(rpc, address)
-    except Exception as exc:
-        if is_prune_error(exc):
-            raise
-        raise
+    block_num, activity_type = await find_first_activity_block(rpc, address)
 
     if block_num is None:
         return {
@@ -238,14 +235,23 @@ async def query_single_chain_origin(
 
     subdomain = alchemy_subdomains.get(net["chain_id"])
     if subdomain and alchemy_key:
+        endpoint = mask_alchemy_endpoint(subdomain)
         try:
-            rpc = AlchemyRpc(client, subdomain, alchemy_key)
-            endpoint = mask_alchemy_endpoint(subdomain)
-            return await _query_with_rpc(rpc, chain_key, address, endpoint, "alchemy")
+            alchemy_rpc = AlchemyRpc(client, subdomain, alchemy_key)
+            return await _query_with_rpc(alchemy_rpc, chain_key, address, endpoint, "alchemy")
+        except RpcTransientError as exc:
+            return _error_result(
+                chain_key,
+                f"Alchemy rate limit / transient failure: {exc}",
+                status=STATUS_TRANSIENT,
+                rpc_endpoint=endpoint,
+                rpc_source="alchemy",
+            )
         except Exception as exc:
             return _error_result(
                 chain_key,
                 f"Alchemy fallback failed: {exc}",
+                rpc_endpoint=endpoint,
                 rpc_source="alchemy",
             )
 

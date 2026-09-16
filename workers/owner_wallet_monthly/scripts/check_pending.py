@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Print eligible wallet count for owner_wallet_origin queue checks."""
+"""Print eligible wallet counts for both owner_wallet_monthly lanes."""
 
 from __future__ import annotations
 
@@ -22,11 +22,14 @@ def main() -> None:
     db = Database(dsn)
     db.connect()
     try:
-        eligible = db.count_eligible_wallets()
+        eligible = {
+            "monthly": db.count_eligible_wallets("monthly"),
+            "origin": db.count_eligible_wallets("origin"),
+        }
     finally:
         db.close()
 
-    print(json.dumps({"eligible": eligible}))
+    print(json.dumps(eligible))
 
 
 if __name__ == "__main__":

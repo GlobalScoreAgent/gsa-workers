@@ -18,8 +18,8 @@ These jobs were replaced by **inline** `wallet_apply_*_snapshot` calls in the Gi
 | Cron job name | Replaced by |
 |---|---|
 | `wallet_update_transactions` | `wallet_nonce_balance_daily` → `wallet_apply_daily_snapshot` |
-| `wallet_owner_update_transactions` | `owner_wallet_nonce_balance_monthly` → `wallet_apply_monthly_snapshot` |
-| `wallet_owner_update_first_transactions` | `owner_wallet_origin` → `wallet_apply_owner_history_snapshot` |
+| `wallet_owner_update_transactions` | `owner_wallet_monthly` lane `monthly` → `wallet_apply_monthly_snapshot` |
+| `wallet_owner_update_first_transactions` | `owner_wallet_monthly` lane `origin` → `wallet_apply_owner_history_snapshot` |
 
 `wallet_hourly_process` no longer toggles those OwnerTx / daily snapshot crons.
 
@@ -40,12 +40,20 @@ After `wallet_nonce_balance_daily` is validated in production:
 
 Only remove components after confirming no external consumers depend on them.
 
-## Owner wallet origin (future)
+## Split owner wallet workers (replaced by owner_wallet_monthly, 2026-09-16)
 
-After `owner_wallet_origin` is validated in production, consider deprecating:
+`owner_wallet_nonce_balance_monthly` and `owner_wallet_origin` were merged into the single worker **`owner_wallet_monthly`**, which runs both tasks as concurrent lanes (ADR *Unificar workers owner wallet monthly y origin*). Same gate, same 30-day cadence, same `ALCHEMY_KEY`; the data model is unchanged (two clocks, two payloads, two snapshots).
 
-- Standalone `query_wallet_origin.py` CLI tool (replaced by this worker)
-- Any manual origin-import scripts or one-off jobs writing `import_wallet_history_data`
+| Legacy | Status |
+|---|---|
+| Workflow `owner-wallet-nonce-balance-monthly.yml` | **Deleted** — replaced by `owner-wallet-monthly.yml` |
+| Workflow `owner-wallet-origin.yml` | **Deleted** — replaced by `owner-wallet-monthly.yml` |
+| Worker folder `workers/owner_wallet_nonce_balance_monthly/` | **Deleted** |
+| Worker folder `workers/owner_wallet_origin/` | **Deleted** |
+| Standalone `query_wallet_origin.py` CLI tool | Superseded by the `origin` lane |
+| Manual origin-import scripts writing `import_wallet_history_data` | Superseded by the `origin` lane |
+
+Do **not** restore the two workflows or folders while `owner-wallet-monthly` is live: three jobs claiming the same wallets on the same two clocks would double-spend the Alchemy budget and reintroduce the uncoordinated 429 bursts the merge was meant to fix.
 
 ## Agent URI ingest (Edge → GHA)
 

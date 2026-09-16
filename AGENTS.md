@@ -53,8 +53,7 @@ Funding first-inflows: [workers/wallet_funding_transfers/README.md](./workers/wa
 | Folder | Workflow | Snapshot / upsert RPC | Destination |
 |---|---|---|---|
 | `wallet_nonce_balance_daily` | `wallet-nonce-balance-daily.yml` (matrix a/b) | `wallet_apply_daily_snapshot` | `wallet_daily_metrics` (flat); **not** `wallet_transactions` yet (rollup TBD) |
-| `owner_wallet_nonce_balance_monthly` | `owner-wallet-nonce-balance-monthly.yml` | `wallet_apply_monthly_snapshot` | `wallet_owner_details` |
-| `owner_wallet_origin` | `owner-wallet-origin.yml` | `wallet_apply_owner_history_snapshot` | `wallet_owner_details.first_transaction_at` |
+| `owner_wallet_monthly` | `owner-wallet-monthly.yml` (lanes monthly + origin) | `wallet_apply_monthly_snapshot` + `wallet_apply_owner_history_snapshot` | `wallet_owner_details` (current metrics + `first_transaction_at`). Split owner workers deleted 2026-09-16 |
 | `dune_queries_import` | `dune-queries-import.yml` | `cex` / `mixer` / `bridge` / `ofac_sanction` upserts | `wallets.cex_addresses`, `mixer_addresses`, `bridge_addresses`, `ofac_sanction_addresses` |
 | `token_prices_import` | `token-prices-import.yml` | `token_prices_upsert` + `apply_prices` + `mark_price_misses` | `wallets.token_prices` → positions |
 | `wallet_holdings_discovery` | `wallet-holdings-discovery.yml` | `wallet_token_contracts_upsert` + `wallet_token_positions_insert` + `wallet_lp_positions_upsert` | contracts + fungible positions + LP (one run per wallet). Split workers deleted 2026-09-16 |

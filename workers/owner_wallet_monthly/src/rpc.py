@@ -1,28 +1,20 @@
-"""JSON-RPC helpers for EVM chain queries (including historical block tags)."""
+"""JSON-RPC helpers for public EVM endpoints (latest and historical block tags).
+
+Public endpoints are tried in order and a failure just moves on to the next one,
+so there is no backoff here. Alchemy is the last resort and goes through
+`backoff.py` instead.
+"""
 
 from __future__ import annotations
 
 import httpx
 
+LATEST_TIMEOUT = 5.0
 HISTORICAL_TIMEOUT = 10.0
-
-PRUNE_KEYWORDS = (
-    "prune",
-    "trie",
-    "history",
-    "not available",
-    "missing",
-    "height is too low",
-)
 
 
 class RpcError(Exception):
     """Raised when an RPC endpoint returns an error or invalid payload."""
-
-
-def is_prune_error(exc: BaseException) -> bool:
-    msg = str(exc).lower()
-    return any(keyword in msg for keyword in PRUNE_KEYWORDS)
 
 
 def block_to_hex(block_num: int) -> str:
@@ -35,6 +27,11 @@ def hex_to_int(hex_value: str) -> int:
     if not isinstance(hex_value, str):
         raise RpcError("Invalid hex value type")
     return int(hex_value, 16)
+
+
+def wei_to_eth(wei: int) -> float:
+    """Convert wei to ether as a float."""
+    return wei / 10**18
 
 
 def has_contract_code(code_hex: str) -> bool:

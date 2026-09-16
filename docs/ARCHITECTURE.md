@@ -72,8 +72,7 @@ stateDiagram-v2
 | Worker | Workflow | Concurrency group | Parallelism |
 |---|---|---|---|
 | `wallet_nonce_balance_daily` | `wallet-nonce-balance-daily.yml` | per `worker-a` / `worker-b` | Matrix: 2 runners |
-| `owner_wallet_origin` | `owner-wallet-origin.yml` | `owner-wallet-origin` | 1 runner |
-| `owner_wallet_nonce_balance_monthly` | `owner-wallet-nonce-balance-monthly.yml` | `owner-wallet-nonce-balance-monthly` | 1 runner |
+| `owner_wallet_monthly` | `owner-wallet-monthly.yml` | `owner-wallet-monthly` | 1 runner; 2 concurrent lanes (`monthly` 20, `origin` 4) sharing `ALCHEMY_MAX_INFLIGHT` |
 | `dune_queries_import` | `dune-queries-import.yml` | `dune-queries-import` | 1 runner |
 | `token_prices_import` | `token-prices-import.yml` | `token-prices-import` | 1 runner |
 | `erc8257_tools_import` | `erc8257-tools-import.yml` | `erc8257-tools-import` | 1 runner |
@@ -103,8 +102,8 @@ HUMI reason publisher: `0 0,6,12,18 * * *` UTC + `workflow_dispatch`; **not** ti
 | Worker | Input flag | Output |
 |---|---|---|
 | daily | `is_valid_import_current_nonce_and_balance_daily` | Balance/nonce JSON → `wallet_daily_metrics` (flat); `Processed` |
-| monthly | `is_valid_import_current_nonce_and_balance_monthly` | Balance/nonce JSON → `wallet_owner_details` (current metrics) |
-| origin | same monthly flag | First-activity history JSON → `wallet_owner_details.first_transaction_at` |
+| owner monthly, lane `monthly` | `is_valid_import_current_nonce_and_balance_monthly` + monthly clock | Balance/nonce JSON → `wallet_owner_details` (current metrics) |
+| owner monthly, lane `origin` | same flag + history clock | First-activity history JSON → `wallet_owner_details.first_transaction_at` |
 | dune queries | n/a | 4 Dune queries → cex / mixer / bridge / ofac tables (paginated + chunked upserts) |
 | erc8257 tools | n/a | agenttoolindex dump → `erc_8257.tools` (+ `sync_state` watermark) |
 | token prices | n/a | Unpriced ERC-20s → Dex/CG → `token_prices` → apply hits / mark misses |
@@ -117,6 +116,30 @@ HUMI reason publisher: `0 0,6,12,18 * * *` UTC + `workflow_dispatch`; **not** ti
 | endpoint liveness 15d | HTTP(s) locators due on `next_eligible_at` | HEAD/GET → `agent_endpoint_health`; view `agent_endpoint_status` |
 | Ethos reviews API | GSA-linked Claimed + `reviews_next_eligible_at` | Ethos v2 given/received → `ethos.reviews` |
 | HUMI reason publisher | `index_humi_agent.needs_reason_publish` | Assemble the 4 `pillar_*` reasons → private bucket `humi-reasons`, `humi/agent/{id}.json`. Only worker whose destination is Storage, not a table |
+
+## Owner monthly (two lanes)
+
+`owner_wallet_monthly` replaced the two split owner workers on 2026-09-16. One process, one workflow, two concurrent asyncio lanes on `erc_8004.wallets` ([README](../workers/owner_wallet_monthly/README.md)):
+
+```mermaid
+flowchart LR
+  subgraph proc [owner_wallet_monthly]
+    laneM[lane_monthly]
+    laneO[lane_origin]
+  end
+  laneM --> claimM["claim monthly clock"]
+  laneO --> claimO["claim history clock"]
+  claimM --> rpcM["balance + nonce at latest"]
+  claimO --> rpcO["binary search first activity"]
+  rpcM --> snapM["wallet_apply_monthly_snapshot"]
+  rpcO --> snapO["wallet_apply_owner_history_snapshot"]
+  snapM --> details["erc_8004.wallet_owner_details"]
+  snapO --> details
+```
+
+Shared: process, workflow, Postgres connection (serialized by an asyncio lock), HTTP client, Alchemy inflight budget and time budget. Not shared: claim, clock, payload column, status column, batch size, concurrency, snapshot RPC.
+
+A lane only writes its own clock, so a wallet due on one clock is processed for that task alone. Alchemy rate limits surface as `RpcTransientError` (`src/backoff.py`) and requeue the wallet on `TRANSIENT_REQUEUE_SECONDS` instead of burning the 30-day window; they never set status `Error`.
 
 ## Holdings discovery
 
@@ -224,7 +247,7 @@ Secrets: env name = `llm.llm_provider.secret` (Groq → `GROQ`, NVIDIA → `NVID
 | GHA `timeout-minutes` | 360 (claim workers / token-prices), 90 (dune queries) |
 | `MAX_RUNTIME_SECONDS` | 19800 (~5.5h) — soft stop inside claim / enrich `job.py` |
 | Postgres `statement_timeout` | 300s |
-| HTTP client timeout | ~10s (daily/monthly), ~30s (origin), ~120s (Dune), **120s** (AI classifier LLM read) |
+| HTTP client timeout | ~10s (daily), 30s client on owner monthly with per-call 5s `latest` / 10s historical / 15s Alchemy, ~120s (Dune), **120s** (AI classifier LLM read) |
 
 ## Resilience
 
@@ -260,15 +283,14 @@ workers/<name>/
     └── address.py
 ```
 
-Origin also has `scripts/check_pending.py` and `scripts/compare_smoke.py`. `wallet_holdings_discovery` uses Alchemy Token API + `eth_call` / Multicall3 (httpx) via `alchemy_rpc.py`. `agent_uri_reprocess` does not duplicate resolve/handlers — it adds claim SQL for errors/refresh and imports the sibling resolve package.
+`owner_wallet_monthly` also has `scripts/check_pending.py` and `scripts/compare_smoke.py`, plus `src/backoff.py` for the Alchemy `Retry-After` client shared by both lanes. `wallet_holdings_discovery` uses Alchemy Token API + `eth_call` / Multicall3 (httpx) via `alchemy_rpc.py`. `agent_uri_reprocess` does not duplicate resolve/handlers — it adds claim SQL for errors/refresh and imports the sibling resolve package.
 
 ## CI env defaults (workflows)
 
 | Worker | CONCURRENCY | CLAIM_BATCH_SIZE | CLAIM_STALE_SECONDS |
 |---|---|---|---|
 | daily | 20 | 200 | 7200 |
-| origin | 4 | 50 | 7200 |
-| monthly | 20 | 200 | 7200 |
+| owner monthly | lane `monthly` 20 / lane `origin` 4 (`ALCHEMY_MAX_INFLIGHT` 8) | 200 / 50 | 7200 |
 | dune queries | n/a | n/a | n/a |
 | token prices | n/a | n/a | n/a |
 | holdings discovery | 4 | 15 | 7200 |

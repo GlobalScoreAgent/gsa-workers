@@ -9,8 +9,7 @@ Unified Python batch workers for [Global Score Agent](https://www.globalscoreage
 | Worker | Schedule (UTC) | Eligibility | Description |
 |---|---|---|---|
 | [`wallet_nonce_balance_daily`](./workers/wallet_nonce_balance_daily/README.md) | 0, 6, 12, 18h (matrix `worker-a`/`worker-b`) | `is_valid_..._daily` + `import_nonce_and_balance_daily_next_eligible_at` | Balance + nonce → daily JSON → `wallet_apply_daily_snapshot` → `wallet_daily_metrics` |
-| [`owner_wallet_origin`](./workers/owner_wallet_origin/README.md) | 0, 6, 12, 18h | monthly `is_valid` + `import_wallet_history_next_eligible_at` | First on-chain activity → history JSON → `wallet_apply_owner_history_snapshot` |
-| [`owner_wallet_nonce_balance_monthly`](./workers/owner_wallet_nonce_balance_monthly/README.md) | 0, 6, 12, 18h | `is_valid_..._monthly` + `import_nonce_and_balance_monthly_next_eligible_at` | Balance + nonce (30d) → monthly JSON → `wallet_apply_monthly_snapshot` |
+| [`owner_wallet_monthly`](./workers/owner_wallet_monthly/README.md) | 0, 6, 12, 18h | `is_valid_..._monthly` + either `import_nonce_and_balance_monthly_next_eligible_at` (lane `monthly`) or `import_wallet_history_next_eligible_at` (lane `origin`) | Two concurrent lanes: balance + nonce (30d) → `wallet_apply_monthly_snapshot`, and first on-chain activity → `wallet_apply_owner_history_snapshot`. Replaces the two split owner workers |
 | [`dune_queries_import`](./workers/dune_queries_import/README.md) | 18th 00:00 (monthly; post Dune billing reset) | n/a (reference data) | 4 Dune queries → cex/mixer/bridge/ofac upserts |
 | [`token_prices_import`](./workers/token_prices_import/README.md) | 0, 6, 12, 18h | n/a (reference data) | Dex/CG → `token_prices` → apply / mark known-unknown misses |
 | [`wallet_holdings_discovery`](./workers/wallet_holdings_discovery/README.md) | 0, 6, 12, 18h | any pending contracts / portfolio / LP flag + `chains.subdomain_alchemy` | Sequential contracts → portfolio → LP (Alchemy 429 backoff). Replaces the three split discovery workers |
@@ -120,13 +119,10 @@ gsa-workers/
 │   │   ├── README.md
 │   │   ├── pyproject.toml
 │   │   └── src/          # db, query, rpc, alchemy, networks, address
-│   ├── owner_wallet_origin/
-│   │   ├── job.py
+│   ├── owner_wallet_monthly/
+│   │   ├── job.py        # lanes monthly + origin
 │   │   ├── scripts/
-│   │   └── src/          # db, origin, ...
-│   ├── owner_wallet_nonce_balance_monthly/
-│   │   ├── job.py
-│   │   └── src/
+│   │   └── src/          # db (lane SQL), query, origin, backoff, alchemy
 │   ├── dune_queries_import/
 │   │   ├── job.py
 │   │   └── src/          # db, dune
@@ -156,8 +152,7 @@ gsa-workers/
 │       └── src/          # db (errors + refresh claims)
 └── .github/workflows/
     ├── wallet-nonce-balance-daily.yml
-    ├── owner-wallet-origin.yml
-    ├── owner-wallet-nonce-balance-monthly.yml
+    ├── owner-wallet-monthly.yml
     ├── dune-queries-import.yml
     ├── erc8257-tools-import.yml
     ├── token-prices-import.yml

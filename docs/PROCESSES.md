@@ -10,8 +10,7 @@ Sibling schema repo: **`gsa-supabase-schema`**.
 flowchart TB
   subgraph claimBalance [Balance_nonce_claim]
     daily[wallet_nonce_balance_daily]
-    monthly[owner_wallet_nonce_balance_monthly]
-    origin[owner_wallet_origin]
+    ownerMonthly["owner_wallet_monthly (lanes monthly + origin)"]
   end
   subgraph discovery [Token_discovery]
     holdings[wallet_holdings_discovery]
@@ -73,8 +72,7 @@ flowchart TB
 | # | Process | Type | Schedule (UTC) | Queue / input | Persist via | Destination |
 |---|---|---|---|---|---|---|
 | 1 | [`wallet_nonce_balance_daily`](../workers/wallet_nonce_balance_daily/README.md) | Claim | 0/6/12/18 (matrix a/b) | `wallets` + daily flags | `wallet_apply_daily_snapshot` | `wallet_daily_metrics` (flat); rollup `wallet_rollup_daily_metrics` → `wallet_transactions` |
-| 2 | [`owner_wallet_nonce_balance_monthly`](../workers/owner_wallet_nonce_balance_monthly/README.md) | Claim | 0/6/12/18 | monthly flags | `wallet_apply_monthly_snapshot` | `wallet_owner_details` |
-| 3 | [`owner_wallet_origin`](../workers/owner_wallet_origin/README.md) | Claim | 0/6/12/18 | history flags | `wallet_apply_owner_history_snapshot` | `wallet_owner_details.first_transaction_at` |
+| 2 | [`owner_wallet_monthly`](../workers/owner_wallet_monthly/README.md) | Claim (2 lanes) | 0/6/12/18 | lane `monthly`: monthly clock · lane `origin`: history clock | `wallet_apply_monthly_snapshot` + `wallet_apply_owner_history_snapshot` | `wallet_owner_details` current metrics + `first_transaction_at` |
 | 4 | [`dune_queries_import`](../workers/dune_queries_import/README.md) | Reference | 18th 00:00 | Dune API (4 queries) | cex/mixer/bridge/ofac upserts (chunked) | `wallets.cex_addresses` + mixer/bridge/ofac tables |
 | 5 | [`wallet_holdings_discovery`](../workers/wallet_holdings_discovery/README.md) | Claim (`wallet_transactions`) | 0/6/12/18 | any pending contracts / portfolio / LP flag + Alchemy subdomain | stage RPCs in succession | `wallet_token_contracts` + `wallet_token_positions` + `wallet_lp_positions` |
 | 7 | [`token_prices_import`](../workers/token_prices_import/README.md) | Reference | 0/6/12/18 | unpriced ERC-20s (`has_price_error`) | `token_prices_upsert` + `apply_prices` + `mark_price_misses` | `token_prices` → positions |
@@ -93,7 +91,7 @@ Soft runtime budget for claim / enrich jobs: **`MAX_RUNTIME_SECONDS=19800`** (~5
 
 ## Process details
 
-### 1–3. Balance / nonce / origin (claim on `erc_8004.wallets`)
+### 1–2. Balance / nonce / origin (claim on `erc_8004.wallets`)
 
 ```
 claim → multi-chain RPC → save JSON + status → wallet_apply_*_snapshot → Processed
@@ -102,6 +100,17 @@ claim → multi-chain RPC → save JSON + status → wallet_apply_*_snapshot →
 Eligibility: `is_valid_*` + `*_next_eligible_at <= NOW()`. Soft lock via `next_eligible_at += CLAIM_STALE_SECONDS`.
 
 **Daily only:** snapshot destination is `erc_8004.wallet_daily_metrics`. Rollup in-DB (`wallet_rollup_daily_metrics`, job_control) rebuilds `wallet_transactions` series/currents and **enqueues native enrich** on D vs D−1 nonce/balance delta.
+
+**Owner (#2) runs two lanes in one process** since 2026-09-16 (ADR *Unificar workers owner wallet monthly y origin*). Both lanes share the gate `is_valid_import_current_nonce_and_balance_monthly`, the 30-day cadence and `ALCHEMY_KEY`, but keep separate clocks, payloads, status columns and snapshots:
+
+| Lane | Clock | Payload | Snapshot |
+|---|---|---|---|
+| `monthly` | `import_nonce_and_balance_monthly_next_eligible_at` | `import_current_nonce_and_balance_monthly_json` | `wallet_apply_monthly_snapshot` |
+| `origin` | `import_wallet_history_next_eligible_at` | `import_wallet_history_data` | `wallet_apply_owner_history_snapshot` |
+
+A lane never touches the other lane's clock. They run concurrently rather than in sequence because `origin` binary-searches historical blocks (observed up to 131 min in one run) while `monthly` reads `latest` in 5–20 min; sequential lanes would starve `monthly` inside the shared `MAX_RUNTIME_SECONDS`.
+
+Rate limits are not errors: public endpoints fall through to the next URL, and Alchemy (last resort) goes through a `Retry-After` backoff. A chain still rate-limited after retries is reported `status="transient"` — partial data is saved with the clock shortened to `TRANSIENT_REQUEUE_SECONDS` (1h), and a wallet where no chain succeeded and at least one was rate-limited is requeued with no payload and no `Error`. Split owner workers were deleted 2026-09-16 ([DEPRECATION.md](./DEPRECATION.md)).
 
 ### 4. Dune queries (reference)
 

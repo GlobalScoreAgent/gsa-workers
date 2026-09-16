@@ -1,7 +1,7 @@
 [project]
-name = "owner-wallet-origin"
+name = "owner-wallet-monthly"
 version = "0.1.0"
-description = "One-shot owner wallet origin/activation import across 8 EVM chains for GSA"
+description = "Monthly owner wallet balance/nonce and origin history across 8 EVM chains for GSA"
 requires-python = ">=3.12"
 dependencies = [
     "httpx>=0.28",

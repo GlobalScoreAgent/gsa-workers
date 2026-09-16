@@ -54,8 +54,10 @@ Schema migrations and snapshot/upsert SQL live in the sibling repo **`gsa-supaba
 | Worker | Valid flag | Schedule column | Payload | Status column | Timestamp |
 |---|---|---|---|---|---|
 | **daily** | `is_valid_import_current_nonce_and_balance_daily` | `import_nonce_and_balance_daily_next_eligible_at` | `import_current_nonce_and_balance_daily_json` | `import_nonce_and_balance_daily_last_status` | `import_nonce_and_balance_daily_at` |
-| **monthly** | `is_valid_import_current_nonce_and_balance_monthly` | `import_nonce_and_balance_monthly_next_eligible_at` | `import_current_nonce_and_balance_monthly_json` | `import_nonce_and_balance_monthly_last_status` | `import_nonce_and_balance_monthly_at` |
-| **origin** | `is_valid_import_current_nonce_and_balance_monthly` | `import_wallet_history_next_eligible_at` | `import_wallet_history_data` | `import_wallet_history_status` | `import_wallet_history_at` |
+| **owner monthly**, lane `monthly` | `is_valid_import_current_nonce_and_balance_monthly` | `import_nonce_and_balance_monthly_next_eligible_at` | `import_current_nonce_and_balance_monthly_json` | `import_nonce_and_balance_monthly_last_status` | `import_nonce_and_balance_monthly_at` |
+| **owner monthly**, lane `origin` | `is_valid_import_current_nonce_and_balance_monthly` | `import_wallet_history_next_eligible_at` | `import_wallet_history_data` | `import_wallet_history_status` | `import_wallet_history_at` |
+
+Both owner lanes live in the single worker `owner_wallet_monthly` and each one only ever writes its own clock, payload and status. A wallet due on one clock is processed for that task alone. Rate-limited chains shorten the clock to `TRANSIENT_REQUEUE_SECONDS` (1h) instead of the usual 30 days and never set `Error`.
 
 ### Ethos reviews API (`ethos.profiles`)
 
@@ -281,8 +283,8 @@ Called inline by the worker after a successful `Completed` save:
 |---|---|---|
 | daily | `erc_8004.wallet_apply_daily_snapshot(p_wallet_id)` | `wallet_daily_metrics` (flat); status → `Processed`. Does **not** write `wallet_transactions` directly |
 | rollup | `erc_8004.wallet_rollup_daily_metrics(p_batch_size)` | Rebuilds `wallet_transactions` from metrics |
-| monthly | `erc_8004.wallet_apply_monthly_snapshot(p_wallet_id)` | `wallet_owner_details` (nonce/balance/type); status → `Processed` |
-| origin | `erc_8004.wallet_apply_owner_history_snapshot(p_wallet_id)` | `wallet_owner_details.first_transaction_at`; status → `Processed` |
+| owner monthly, lane `monthly` | `erc_8004.wallet_apply_monthly_snapshot(p_wallet_id)` | `wallet_owner_details` (nonce/balance/type); status → `Processed` |
+| owner monthly, lane `origin` | `erc_8004.wallet_apply_owner_history_snapshot(p_wallet_id)` | `wallet_owner_details.first_transaction_at`; status → `Processed` |
 
 Canonical SQL / migrations: `gsa-supabase-schema/supabase/migrations/` and `supabase/scripts/wallet_apply_*.sql`.
 
@@ -370,7 +372,7 @@ RETURNING w.id, w.address
 | Worker | Next eligibility |
 |---|---|
 | daily | Midnight UTC of the **next calendar day** |
-| monthly / origin | `NOW() + 30 days` |
+| owner monthly (both lanes) | `NOW() + 30 days`, or `NOW() + TRANSIENT_REQUEUE_SECONDS` (1h) if any chain was rate-limited |
 
 ## Chains / Alchemy
 
@@ -461,7 +463,7 @@ WHERE is_valid_import_current_nonce_and_balance_daily IS TRUE
   AND import_nonce_and_balance_daily_last_status = 'Error';
 ```
 
-(Adjust column names for monthly / origin.)
+(Adjust column names for the owner monthly / origin lanes.)
 
 ### Dune reference tables
 
