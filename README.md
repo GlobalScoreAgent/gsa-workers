@@ -13,9 +13,7 @@ Unified Python batch workers for [Global Score Agent](https://www.globalscoreage
 | [`owner_wallet_nonce_balance_monthly`](./workers/owner_wallet_nonce_balance_monthly/README.md) | 0, 6, 12, 18h | `is_valid_..._monthly` + `import_nonce_and_balance_monthly_next_eligible_at` | Balance + nonce (30d) → monthly JSON → `wallet_apply_monthly_snapshot` |
 | [`dune_queries_import`](./workers/dune_queries_import/README.md) | 18th 00:00 (monthly; post Dune billing reset) | n/a (reference data) | 4 Dune queries → cex/mixer/bridge/ofac upserts |
 | [`token_prices_import`](./workers/token_prices_import/README.md) | 0, 6, 12, 18h | n/a (reference data) | Dex/CG → `token_prices` → apply / mark known-unknown misses |
-| [`wallet_token_contracts_discovery`](./workers/wallet_token_contracts_discovery/README.md) | 0, 6, 12, 18h | `wallet_transactions.does_need_discovery_contracts` + `chains.subdomain_alchemy` | Alchemy ERC-20 balances → `wallet_token_contracts_upsert` |
-| [`wallet_token_portfolio_discovery`](./workers/wallet_token_portfolio_discovery/README.md) | 0, 6, 12, 18h | portfolio discovery flag after contract discovery | Alchemy amounts + DeFiLlama → fungible `wallet_token_positions` |
-| [`wallet_lp_positions_discovery`](./workers/wallet_lp_positions_discovery/README.md) | 0, 6, 12, 18h | LP flag after portfolio discovery | UniV3 NFT + `lp_pools` classic → `wallet_lp_positions` |
+| [`wallet_holdings_discovery`](./workers/wallet_holdings_discovery/README.md) | 0, 6, 12, 18h | any pending contracts / portfolio / LP flag + `chains.subdomain_alchemy` | Sequential contracts → portfolio → LP (Alchemy 429 backoff). Replaces the three split discovery workers |
 | [`wallet_activity_flows`](./workers/wallet_activity_flows/README.md) | UTC 18:00→12:00 (cuts 1/15 + drain 18,22,2,6,10; closed 12–18) | `is_valid_activity_flows` + not `Dormant_*` | 15d transfers → staging `wallets.wallet_activity_transfers` |
 | [`wallet_funding_transfers`](./workers/wallet_funding_transfers/README.md) | UTC 18:00→12:00 (drain 18,0,6; closed 12–18) | `is_valid_funding_transfers` (non-Dormant first) | First ~500 incoming → `wallets.wallet_funding_transfers` |
 | [`agent_uri_resolve`](./workers/agent_uri_resolve/README.md) | 00:00, 12:00 | agents / `feedback_on_chain` / external feedbacks pending | Resolve/materialize → `uri_documents` + `agent_manifest` |
@@ -141,15 +139,9 @@ gsa-workers/
 │   ├── token_prices_import/
 │   │   ├── job.py
 │   │   └── src/          # db, dexscreener, coingecko
-│   ├── wallet_token_contracts_discovery/
+│   ├── wallet_holdings_discovery/
 │   │   ├── job.py
-│   │   └── src/          # db, alchemy_tokens
-│   ├── wallet_token_portfolio_discovery/
-│   │   ├── job.py
-│   │   └── src/          # db, portfolio_calc, networks
-│   ├── wallet_lp_positions_discovery/
-│   │   ├── job.py
-│   │   └── src/          # db, nft_lp, classic_lp, pricing, univ3_math
+│   │   └── src/          # alchemy_rpc, contracts + portfolio + LP stages
 │   ├── ai_agent_classifier/
 │   │   ├── job.py
 │   │   └── src/          # db, llm_client, prompt
@@ -169,9 +161,7 @@ gsa-workers/
     ├── dune-queries-import.yml
     ├── erc8257-tools-import.yml
     ├── token-prices-import.yml
-    ├── wallet-token-contracts-discovery.yml
-    ├── wallet-token-portfolio-discovery.yml
-    ├── wallet-lp-positions-discovery.yml
+    ├── wallet-holdings-discovery.yml
     ├── ai-agent-classifier.yml
     ├── on-demand-backfill.yml
     ├── agent-uri-resolve.yml

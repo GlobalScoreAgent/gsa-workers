@@ -9,7 +9,7 @@ import httpx
 
 from networks import CHAIN_META
 
-logger = logging.getLogger("wallet_lp_positions_discovery")
+logger = logging.getLogger("wallet_holdings_discovery")
 
 
 async def fetch_defillama_prices(
@@ -26,7 +26,7 @@ async def fetch_defillama_prices(
         try:
             response = await client.get(
                 url,
-                headers={"User-Agent": "gsa-workers/wallet_lp_positions_discovery"},
+                headers={"User-Agent": "gsa-workers/wallet_holdings_discovery"},
                 timeout=15.0,
             )
             response.raise_for_status()

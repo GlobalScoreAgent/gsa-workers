@@ -34,7 +34,7 @@ Alchemy ofrece un endpoint de Token API (`alchemy_getTokenBalances` con tipo `"e
 | **Objetivo correcto** | Preguntamos “¿qué tiene **ahora**?”, no “¿todo lo que alguna vez tocó?” — es lo que necesitamos para un snapshot de portafolio |
 | **Coste vs alternativas** | Paginar todo el historial de Transfer (`getAssetTransfers`) o unir N explorers es más lento, más caro y más frágil; para el goal comercial del fill inicial no aporta |
 
-En la práctica: un worker claim (`wallet_token_contracts_discovery`) recorre `wallet_transactions` elegibles, llama Alchemy Free por chain, y guarda solo las **addresses** con balance > 0 en `wallets.wallet_token_contracts`. Eso es el inventario; no todavía el precio.
+En la práctica: un worker unificado (`wallet_holdings_discovery`) recorre `wallet_transactions` elegibles, llama Alchemy Free por chain, guarda las **addresses** con balance > 0 en `wallets.wallet_token_contracts`, y en la misma corrida arma montos y LP. Eso es el inventario; el fallback Dex/CG de precio sigue en `token_prices_import`.
 
 La key Free se **separa** del `ALCHEMY_KEY` de los workers de nonce/balance para no mezclar cuota de RPC de producción con el volumen alto del discovery de tokens.
 
@@ -44,7 +44,7 @@ Tener el contrato **no alcanza**: el producto necesita **USD** (o saber que no h
 
 ### Origen primario — DeFiLlama (al armar el portafolio)
 
-Cuando descubrimos montos (`wallet_token_portfolio_discovery`), el primer precio viene de **DeFiLlama**.
+Cuando descubrimos montos (etapa portfolio de `wallet_holdings_discovery`), el primer precio viene de **DeFiLlama**.
 
 - Si Llama responde con precio usable → posición `priced`
 - Si no → dejamos la fila marcada como pendiente de precio (`has_price_error`), clasificando spam vs unpriced
@@ -94,7 +94,6 @@ Con eso el producto pasa de “solo native / lista corta” a **portafolio fungi
 
 | Tema | Doc / código |
 |---|---|
-| Worker inventory | [`wallet_token_contracts_discovery`](../workers/wallet_token_contracts_discovery/README.md) |
-| Worker montos + Llama | [`wallet_token_portfolio_discovery`](../workers/wallet_token_portfolio_discovery/README.md) |
+| Worker unificado (contracts + montos + LP) | [`wallet_holdings_discovery`](../workers/wallet_holdings_discovery/README.md) |
 | Worker Dex/CG | [`token_prices_import`](../workers/token_prices_import/README.md) |
 | Pipelines / cron / secrets | [PROCESSES.md](./PROCESSES.md), [ARCHITECTURE.md](./ARCHITECTURE.md), [SUPABASE.md](./SUPABASE.md) |

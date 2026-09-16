@@ -2,7 +2,7 @@
 
 Workers connect with **direct Postgres** via `SUPABASE_DB_URL` (`psycopg`), not supabase-js or Edge Functions. Schema of truth for wallet claim jobs: `erc_8004`. Reference-data imports (Dune queries, token prices) use schema `wallets`. ERC-8257 tools import uses schema `erc_8257`. URI ingest uses `erc_8004.uri_documents` + `erc_8004.agent_manifest`. AI agent classifier uses `web_dashboard.agents` + schema `llm` + `web_dashboard.agent_ai_categories`.
 
-Schema migrations and snapshot/upsert SQL live in the sibling repo **`gsa-supabase-schema`** (functions `wallet_apply_*_snapshot`, Dune reference / token_prices / discovery upserts, URI indexes + helpers, triggers). Code of truth for claim/save SQL in this repo: each worker’s `src/db.py`. Process catalog: [PROCESSES.md](./PROCESSES.md). LP refresh (15d) still pending: [PENDING_LP_POSITIONS.md](./PENDING_LP_POSITIONS.md).
+Schema migrations and snapshot/upsert SQL live in the sibling repo **`gsa-supabase-schema`** (functions `wallet_apply_*_snapshot`, Dune reference / token_prices / discovery upserts, URI indexes + helpers, triggers). Code of truth for claim/save SQL in this repo: each worker’s `src/db.py`. Process catalog: [PROCESSES.md](./PROCESSES.md). Live token/LP fill is **`wallet_holdings_discovery`** (the three split workers were deleted 2026-09-16). LP refresh (15d) still pending: [PENDING_LP_POSITIONS.md](./PENDING_LP_POSITIONS.md).
 
 ## Connection
 
@@ -90,23 +90,27 @@ RPCs `index_humi.claim_reason_publish(limit, worker_id, stale_seconds)` / `compl
 
 ### Token contracts discovery (`wallet_transactions`)
 
+Live consumer: **`wallet_holdings_discovery`** (stage 1). Split worker schedule is off.
+
 | Column | Role |
 |---|---|
 | `does_need_discovery_contracts` | `NULL`/`true` = pending; `false` = attempted (success or error) |
 | `discovery_contracts_claimed_at` | In-flight claim lock; after attempt kept as last-attempt timestamp (`NOW()`) |
-| `discovery_contracts_claimed_by` | Audit id `wallet_token_contracts_discovery/gha:{WORKER_ID}` (kept after attempt) |
+| `discovery_contracts_claimed_by` | Audit id `wallet_holdings_discovery/gha:{WORKER_ID}` (legacy prefix `wallet_token_contracts_discovery/gha:`) |
 | `has_discovery_contracts_error` | `TRUE` if last attempt failed |
 | `discovery_contracts_message_error` | Last error text; `NULL` on success |
 
-Eligibility: flag pending **and** `chains.subdomain_alchemy` non-empty. New `wallet_transactions` inserts get the flag from trigger `trg_wallet_transactions_discovery_flag_bi`. On process error the worker sets flag `FALSE` and fills the error columns so the queue does not re-claim the same row forever.
+Eligibility: flag pending **and** `chains.subdomain_alchemy` non-empty. New `wallet_transactions` inserts get the flag from trigger `trg_wallet_transactions_discovery_flag_bi`. On process error the worker sets flag `FALSE` and fills the error columns so the queue does not re-claim the same row forever. **HTTP 429 / timeouts / 5xx are not this path** — `wallet_holdings_discovery` leaves the flag pending (`release_transient`).
 
 ### Token portfolio discovery (`wallet_transactions`)
+
+Live consumer: **`wallet_holdings_discovery`** (stage 2, same run after contracts OK).
 
 | Column | Role |
 |---|---|
 | `does_need_portfolio_discovery` | Pending after contract discovery done |
 | `portfolio_discovery_claimed_at` | Claim lock / last attempt |
-| `portfolio_discovery_claimed_by` | `wallet_token_portfolio_discovery/gha:{WORKER_ID}` |
+| `portfolio_discovery_claimed_by` | Audit id `wallet_holdings_discovery/gha:{WORKER_ID}` (legacy prefix `wallet_token_portfolio_discovery/gha:`) |
 | `has_portfolio_discovery_error` | Last attempt failed |
 | `portfolio_discovery_message_error` | Error text |
 
@@ -114,11 +118,13 @@ Trigger `trg_wallet_transactions_portfolio_flag_bu` sets portfolio pending when 
 
 ### LP positions discovery (`wallet_transactions`)
 
+Live consumer: **`wallet_holdings_discovery`** (stage 3, same run after portfolio OK).
+
 | Column | Role |
 |---|---|
 | `does_need_lp_discovery` | Pending after portfolio discovery done |
 | `lp_discovery_claimed_at` | Claim lock / last attempt |
-| `lp_discovery_claimed_by` | `wallet_lp_positions_discovery/gha:{WORKER_ID}` |
+| `lp_discovery_claimed_by` | Audit id `wallet_holdings_discovery/gha:{WORKER_ID}` (legacy prefix `wallet_lp_positions_discovery/gha:`) |
 | `has_lp_discovery_error` | Last attempt failed |
 | `lp_discovery_message_error` | Error text |
 
@@ -481,6 +487,30 @@ FROM erc_8004.chains
 ORDER BY id;
 ```
 
+### Holdings discovery (unified, live)
+
+```sql
+SELECT
+  count(*) FILTER (WHERE does_need_discovery_contracts IS DISTINCT FROM FALSE) AS contracts_pending,
+  count(*) FILTER (WHERE does_need_portfolio_discovery IS DISTINCT FROM FALSE) AS portfolio_pending,
+  count(*) FILTER (WHERE does_need_lp_discovery IS DISTINCT FROM FALSE) AS lp_pending,
+  count(*) FILTER (
+    WHERE has_discovery_contracts_error IS TRUE
+      AND discovery_contracts_message_error ~* '(429|too many requests|rate.?limit)'
+  ) AS contracts_429,
+  count(*) FILTER (
+    WHERE has_portfolio_discovery_error IS TRUE
+      AND portfolio_discovery_message_error ~* '(429|too many requests|rate.?limit)'
+  ) AS portfolio_429,
+  count(*) FILTER (
+    WHERE has_lp_discovery_error IS TRUE
+      AND lp_discovery_message_error ~* '(429|too many requests|rate.?limit)'
+  ) AS lp_429
+FROM erc_8004.wallet_transactions;
+```
+
+429-only requeue (prod **after** unified worker is live and split crons are off): sibling `supabase/scripts/wallet_discovery_reset_alchemy_429.sql`. Do not TRUNCATE positions/LP for this.
+
 ### Token contracts discovery
 
 ```sql
@@ -538,7 +568,7 @@ GROUP BY 1
 ORDER BY 1;
 ```
 
-**Full rediscovery** (after pricing/quality code changes): deploy schema + worker, then run `gsa-supabase-schema/supabase/scripts/wallet_token_portfolio_discovery_reset.sql`, then `workflow_dispatch` `wallet-token-portfolio-discovery`.
+**Full rediscovery** (after pricing/quality code changes): deploy schema + worker, then run `gsa-supabase-schema/supabase/scripts/wallet_token_portfolio_discovery_reset.sql`, then `workflow_dispatch` `wallet-holdings-discovery`.
 
 ### LP positions discovery
 
@@ -579,7 +609,7 @@ FROM wallets.wallet_lp_positions
 WHERE calculated_at < NOW() - interval '15 days';
 ```
 
-**Full rediscovery** (ask before TRUNCATE): `wallet_lp_positions_discovery_reset.sql` then `workflow_dispatch` `wallet-lp-positions-discovery`.
+**Full rediscovery** (ask before TRUNCATE): `wallet_lp_positions_discovery_reset.sql` then `workflow_dispatch` `wallet-holdings-discovery`.
 
 ### Agent URI resolve (pending queues)
 

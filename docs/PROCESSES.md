@@ -14,10 +14,8 @@ flowchart TB
     origin[owner_wallet_origin]
   end
   subgraph discovery [Token_discovery]
-    contracts[wallet_token_contracts_discovery]
-    portfolio[wallet_token_portfolio_discovery]
+    holdings[wallet_holdings_discovery]
     prices[token_prices_import]
-    lp[wallet_lp_positions_discovery]
     activityFlows[wallet_activity_flows]
   end
   subgraph refdata [Other_reference]
@@ -43,14 +41,12 @@ flowchart TB
   end
   daily --> metrics[erc_8004.wallet_daily_metrics]
   metrics -->|wallet_rollup_daily_metrics| wt[erc_8004.wallet_transactions]
-  wt --> contracts
-  contracts --> wtc[wallets.wallet_token_contracts]
-  wtc --> portfolio
-  portfolio --> wtp[wallets.wallet_token_positions]
+  wt --> holdings
+  holdings --> wtc[wallets.wallet_token_contracts]
+  holdings --> wtp[wallets.wallet_token_positions]
+  holdings --> wlp[wallets.wallet_lp_positions]
   prices --> wtp
   prices --> tpc[wallets.token_prices]
-  portfolio --> lp
-  lp --> wlp[wallets.wallet_lp_positions]
   activityFlows --> wat[wallets.wallet_activity_transfers]
   fundingTransfers[wallet_funding_transfers] --> wft[wallets.wallet_funding_transfers]
   dune --> cexT[wallets.cex_addresses]
@@ -80,10 +76,8 @@ flowchart TB
 | 2 | [`owner_wallet_nonce_balance_monthly`](../workers/owner_wallet_nonce_balance_monthly/README.md) | Claim | 0/6/12/18 | monthly flags | `wallet_apply_monthly_snapshot` | `wallet_owner_details` |
 | 3 | [`owner_wallet_origin`](../workers/owner_wallet_origin/README.md) | Claim | 0/6/12/18 | history flags | `wallet_apply_owner_history_snapshot` | `wallet_owner_details.first_transaction_at` |
 | 4 | [`dune_queries_import`](../workers/dune_queries_import/README.md) | Reference | 18th 00:00 | Dune API (4 queries) | cex/mixer/bridge/ofac upserts (chunked) | `wallets.cex_addresses` + mixer/bridge/ofac tables |
-| 5 | [`wallet_token_contracts_discovery`](../workers/wallet_token_contracts_discovery/README.md) | Claim (`wallet_transactions`) | 0/6/12/18 | `does_need_discovery_contracts` | `wallet_token_contracts_upsert` | `wallets.wallet_token_contracts` |
-| 6 | [`wallet_token_portfolio_discovery`](../workers/wallet_token_portfolio_discovery/README.md) | Claim (`wallet_transactions`) | 0/6/12/18 | `does_need_portfolio_discovery` | `wallet_token_positions_insert` | `wallets.wallet_token_positions` (wallet fungibles) |
+| 5 | [`wallet_holdings_discovery`](../workers/wallet_holdings_discovery/README.md) | Claim (`wallet_transactions`) | 0/6/12/18 | any pending contracts / portfolio / LP flag + Alchemy subdomain | stage RPCs in succession | `wallet_token_contracts` + `wallet_token_positions` + `wallet_lp_positions` |
 | 7 | [`token_prices_import`](../workers/token_prices_import/README.md) | Reference | 0/6/12/18 | unpriced ERC-20s (`has_price_error`) | `token_prices_upsert` + `apply_prices` + `mark_price_misses` | `token_prices` → positions |
-| 8 | [`wallet_lp_positions_discovery`](../workers/wallet_lp_positions_discovery/README.md) | Claim (`wallet_transactions`) | 0/6/12/18 | `does_need_lp_discovery` | `wallet_lp_positions_upsert` | `wallets.wallet_lp_positions` |
 | 9 | [`wallet_activity_flows`](../workers/wallet_activity_flows/README.md) | Claim (`wallet_transactions`, matrix 4) | UTC window **18:00→12:00**: cuts 1/15 00:00 + drain `18,22,2,6,10`; closed 12–18 | `is_valid_activity_flows` + `activity_flows_agent_ok` + due clock + not `Dormant_*` + address ≠ `0x0` | `wallet_activity_transfers_insert` | Staging `wallets.wallet_activity_transfers` (INSERT-only) |
 | 9b | [`wallet_funding_transfers`](../workers/wallet_funding_transfers/README.md) | Claim (`wallet_transactions`, matrix 4) | UTC window **18:00→12:00**: drain `18,0,6`; closed 12–18 | `is_valid_funding_transfers` + due clock; non-`Dormant_*` first | `wallet_funding_transfers_insert` | `wallets.wallet_funding_transfers` (first ~500 incoming, INSERT-only) |
 | 10 | [`agent_uri_resolve`](../workers/agent_uri_resolve/README.md) | Claim (agents / feedbacks) | 00:00, 12:00 | `is_uri_processed` / `is_feedback_processed` | direct SQL | `uri_documents` + `agent_manifest` |
@@ -113,39 +107,32 @@ Eligibility: `is_valid_*` + `*_next_eligible_at <= NOW()`. Soft lock via `next_e
 
 Four tasks per run (cex / mixers / bridges / ofac): paginated Dune fetch → fail task on empty → chunked `*_upsert`. No claim loop. Continue on per-task failure; exit 1 if any failed.
 
-### 5. Token contracts discovery
+### 5. Holdings discovery (contracts + portfolio + LP)
 
-Claims `wallet_transactions` where discovery is pending and Alchemy subdomain exists → `alchemy_getTokenBalances` → upsert contracts → mark flag done (even on error, with error columns). Business rationale (why ERC-20 inventory, Alchemy Free volume, price fallbacks): [TOKEN_CONTRACTS_DISCOVERY_ALCHEMY.md](./TOKEN_CONTRACTS_DISCOVERY_ALCHEMY.md).
-
-### 6. Token portfolio discovery (fungible `wallet` positions)
-
-After contracts OK → Alchemy amounts + **DeFiLlama only** → INSERT positions (`native` + ERC-20). Sets `token_quality` / `has_price_error`. Does **not** discover LP positions (see #8).
-
-### 7. Token prices enrich
-
-Distinct unpriced ERC-20s → cache TTL → DexScreener → CoinGecko → upsert spot cache → apply priced hits → **mark Dex+CG misses** as known-unknown (`quality_reason=unknown_token_dex_coingecko_defillama`, `has_price_error=false`) so they leave the enrich queue.
-
-### 8. LP positions discovery
-
-**Live.** Claims `wallet_transactions` after portfolio discovery succeeds.
+**Live.** One worker claims any pending stage and runs the rest in succession in the same process. Alchemy 429 / 5xx / timeouts retry with `Retry-After`; exhausted retries leave the flag pending (`AlchemyTransientError`) instead of `has_*_error`.
 
 ```
-claim → NFT (UniV3/Pancake) + classic (lp_pools) → price → wallet_lp_positions_upsert → mark done
+claim (any pending stage) →
+  contracts (getTokenBalances → wallet_token_contracts_upsert) →
+  portfolio (Alchemy amounts + DeFiLlama → wallet_token_positions_insert) →
+  LP (NFT + lp_pools → wallet_lp_positions_upsert)
 ```
 
 | Item | Detail |
 |---|---|
-| Flag | `does_need_lp_discovery` (+ claim / error columns) |
-| Destination | `wallets.wallet_lp_positions` (PK + FKs; `calculated_at`) |
-| Classic registry | `wallets.lp_pools` (`active`); Aerodrome Base seeded |
-| Empty wallet | Completes OK with `inserted=0` (most wallets) |
-| Pricing | DeFiLlama first, then `wallets.token_prices` |
-| WAMI | Not computed in worker |
-| Workflow | `wallet-lp-positions-discovery.yml` |
+| Flags | `does_need_discovery_contracts` / `_portfolio_discovery` / `_lp_discovery` (triggers still chain after mark_done) |
+| Destinations | `wallets.wallet_token_contracts`, `wallet_token_positions`, `wallet_lp_positions` |
+| Empty wallet | Completes OK (`inserted=0` on contracts/LP) |
+| Pricing (portfolio) | DeFiLlama only; Dex/CG stays in #7 |
+| Pricing (LP) | DeFiLlama first, then `wallets.token_prices` |
+| Workflow | `wallet-holdings-discovery.yml` (`CONCURRENCY=4`) |
+| Split token/LP discovery workers | Deleted 2026-09-16; [DEPRECATION.md](./DEPRECATION.md) |
 
-Covered extractors: Ethereum / Base / Arbitrum UniV3 NFT; BNB Pancake V3 NFT; Base Aerodrome classic via `lp_pools`. Other Alchemy chains are still claimed and finish empty until coverage is added.
+Business rationale: [TOKEN_CONTRACTS_DISCOVERY_ALCHEMY.md](./TOKEN_CONTRACTS_DISCOVERY_ALCHEMY.md). Worker README: [`wallet_holdings_discovery`](../workers/wallet_holdings_discovery/README.md). LP extractors: Ethereum / Base / Arbitrum UniV3 NFT; BNB Pancake V3 NFT; Base Aerodrome classic via `lp_pools`. 15-day LP refresh still pending: [PENDING_LP_POSITIONS.md](./PENDING_LP_POSITIONS.md). 429-row reset: schema `20260916140000_wallet_discovery_reset_alchemy_429.sql` **after** this worker is live.
 
-Worker README: [`wallet_lp_positions_discovery`](../workers/wallet_lp_positions_discovery/README.md). 15-day refresh still pending: [PENDING_LP_POSITIONS.md](./PENDING_LP_POSITIONS.md).
+### 7. Token prices enrich
+
+Distinct unpriced ERC-20s → cache TTL → DexScreener → CoinGecko → upsert spot cache → apply priced hits → **mark Dex+CG misses** as known-unknown (`quality_reason=unknown_token_dex_coingecko_defillama`, `has_price_error=false`) so they leave the enrich queue.
 
 ### 9. Wallet activity flows (15d staging ingest)
 
@@ -366,7 +353,7 @@ Worker README: [`humi_reason_publisher`](../workers/humi_reason_publisher/README
 | `SUPABASE_DB_URL` | All |
 | `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` | HUMI reason publisher (Storage write on a private bucket) |
 | `ALCHEMY_KEY` | Balance/nonce claim workers (fallback RPC) |
-| `ALCHEMY_FREE_KEY` | Contracts + portfolio + LP discovery |
+| `ALCHEMY_FREE_KEY` | Holdings discovery (`wallet_holdings_discovery`) |
 | `DUNE_KEY` | Dune queries import |
 | `COINGECKO_KEY` | Token prices enrich |
 | `PINATA_GATEWAY` | URI resolve / reprocess (optional; Pinata dedicated Gateway Key — last IPFS fallback after public gateways) |

@@ -1,7 +1,7 @@
 [project]
-name = "wallet-lp-positions-discovery"
+name = "wallet-holdings-discovery"
 version = "0.1.0"
-description = "LP positions discovery (UniV3 NFT + classic pools) via Alchemy + DeFiLlama"
+description = "Unified token contracts + portfolio + LP discovery with Alchemy 429 backoff"
 requires-python = ">=3.12"
 dependencies = [
     "httpx>=0.28",

@@ -8,11 +8,12 @@ from typing import Any
 import httpx
 from eth_utils import to_checksum_address
 
+from alchemy_rpc import AlchemyTransientError
 from networks import FACTORY_FALLBACK, NFPM_BY_CHAIN
-from rpc import encode_call, eth_call, multicall3, parse_uint
+from rpc import decode_result, encode_call, eth_call, multicall3, parse_uint
 from univ3_math import amounts_for_liquidity
 
-logger = logging.getLogger("wallet_lp_positions_discovery")
+logger = logging.getLogger("wallet_holdings_discovery")
 
 POSITIONS_TYPES = [
     "uint96",
@@ -39,8 +40,6 @@ async def _call_decode(
     args: list[Any],
     out_types: list[str],
 ) -> tuple[Any, ...] | None:
-    from rpc import decode_result
-
     data = encode_call(sig, arg_types, args)
     raw = await eth_call(client, url, to, data)
     if not raw:
@@ -74,6 +73,8 @@ async def extract_nft_positions(
                 [wallet],
                 ["uint256"],
             )
+        except AlchemyTransientError:
+            raise
         except Exception as exc:
             logger.warning(
                 "NFPM balanceOf failed chain=%s protocol=%s: %s",
@@ -110,6 +111,8 @@ async def extract_nft_positions(
             )
         try:
             token_results = await multicall3(client, url, token_calls)
+        except AlchemyTransientError:
+            raise
         except Exception as exc:
             logger.warning(
                 "tokenOfOwnerByIndex multicall failed chain=%s: %s",
@@ -135,6 +138,8 @@ async def extract_nft_positions(
         ]
         try:
             pos_results = await multicall3(client, url, pos_calls)
+        except AlchemyTransientError:
+            raise
         except Exception as exc:
             logger.warning("positions multicall failed chain=%s: %s", chain_id, exc)
             continue
@@ -145,8 +150,6 @@ async def extract_nft_positions(
             if not success or not data:
                 continue
             try:
-                from rpc import decode_result
-
                 decoded = decode_result(POSITIONS_TYPES, "0x" + data.hex())
             except Exception as exc:
                 logger.warning("decode positions token_id=%s: %s", tid, exc)
@@ -226,6 +229,8 @@ async def _resolve_factory(
         )
         if row and row[0]:
             return to_checksum_address(row[0])
+    except AlchemyTransientError:
+        raise
     except Exception:
         pass
     fallback = FACTORY_FALLBACK.get(f"{protocol}:{chain_id}")
@@ -258,6 +263,8 @@ async def _resolve_pool(
         if addr in ("", "0x0000000000000000000000000000000000000000"):
             return None
         return addr
+    except AlchemyTransientError:
+        raise
     except Exception as exc:
         logger.warning("getPool failed: %s", exc)
         return None
@@ -269,19 +276,17 @@ async def _slot0_sqrt(
     pool: str,
 ) -> int | None:
     try:
-        # slot0 returns many fields; first is sqrtPriceX96
         data = encode_call("slot0()", [], [])
         raw = await eth_call(client, url, pool, data)
         if not raw:
             return None
-        from rpc import decode_result
-
-        # Uniswap V3: sqrtPriceX96, tick, ...
         decoded = decode_result(
             ["uint160", "int24", "uint16", "uint16", "uint16", "uint8", "bool"],
             raw,
         )
         return int(decoded[0])
+    except AlchemyTransientError:
+        raise
     except Exception as exc:
         logger.warning("slot0 failed pool=%s: %s", pool, exc)
         return None
@@ -307,5 +312,7 @@ async def _decimals(
         val = int(row[0])
         _decimals_cache[key] = val
         return val
+    except AlchemyTransientError:
+        raise
     except Exception:
         return 18

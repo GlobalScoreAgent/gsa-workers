@@ -1,7 +1,4 @@
-"""Fungible portfolio calculation: Alchemy balances + DeFiLlama prices.
-
-Decoupled from the claim loop so a future 15-day updater can reuse this module.
-"""
+"""Fungible portfolio calculation: Alchemy balances + DeFiLlama prices."""
 
 from __future__ import annotations
 
@@ -11,14 +8,14 @@ from typing import Any
 
 import httpx
 
+from alchemy_rpc import AlchemyPermanentError, AlchemyTransientError, alchemy_url, json_rpc
 from networks import CHAIN_META
 
-logger = logging.getLogger("wallet_token_portfolio_discovery")
+logger = logging.getLogger("wallet_holdings_discovery")
 
 NATIVE_SENTINEL = "native"
 CHUNK_SIZE = 80
 
-# Heuristic spam markers in ERC-20 symbols (case-insensitive).
 _SPAM_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"t\.me", re.I), "telegram_in_symbol"),
     (re.compile(r"https?://", re.I), "url_in_symbol"),
@@ -47,10 +44,6 @@ def classify_token_quality(
     return "unpriced", "no_defillama_price"
 
 
-def _alchemy_url(subdomain: str, api_key: str) -> str:
-    return f"https://{subdomain}.g.alchemy.com/v2/{api_key}"
-
-
 def _parse_hex_int(raw: str | None) -> int:
     if raw is None or raw in ("", "0x", "0x0"):
         return 0
@@ -66,15 +59,7 @@ async def _rpc(
     method: str,
     params: list[Any],
 ) -> Any:
-    payload = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
-    response = await client.post(url, json=payload, timeout=45.0)
-    response.raise_for_status()
-    body = response.json()
-    if not isinstance(body, dict):
-        raise RuntimeError(f"Invalid RPC body for {method}")
-    if body.get("error"):
-        raise RuntimeError(f"RPC {method} error: {body['error']}")
-    return body.get("result")
+    return await json_rpc(client, url, method, params, timeout=45.0)
 
 
 async def fetch_defillama_prices(
@@ -84,7 +69,6 @@ async def fetch_defillama_prices(
     """Fetch USD prices from DeFiLlama. coins like 'ethereum:0x...' or 'coingecko:ethereum'."""
     if not coins_list:
         return {}
-    # API limits long URLs; chunk
     prices: dict[str, float] = {}
     for i in range(0, len(coins_list), 50):
         chunk = coins_list[i : i + 50]
@@ -93,7 +77,7 @@ async def fetch_defillama_prices(
         try:
             response = await client.get(
                 url,
-                headers={"User-Agent": "gsa-workers/wallet_token_portfolio_discovery"},
+                headers={"User-Agent": "gsa-workers/wallet_holdings_discovery"},
                 timeout=15.0,
             )
             response.raise_for_status()
@@ -220,9 +204,9 @@ async def calculate_fungible_positions(
     """
     meta = CHAIN_META.get(chain_id)
     if meta is None:
-        raise RuntimeError(f"Unsupported chain_id={chain_id} for portfolio calc")
+        raise AlchemyPermanentError(f"Unsupported chain_id={chain_id} for portfolio calc")
 
-    url = _alchemy_url(subdomain, alchemy_key)
+    url = alchemy_url(subdomain, alchemy_key)
     address = wallet_address.strip().lower()
     contracts = [c.strip().lower() for c in contracts if c and c.strip().lower().startswith("0x")]
 
@@ -233,11 +217,12 @@ async def calculate_fungible_positions(
 
     positive_contracts = [c for c, bal in balances.items() if bal > 0]
 
-    # Metadata for positive balances (bounded concurrency via sequential chunks)
     metadata: dict[str, dict[str, Any]] = {}
     for contract in positive_contracts:
         try:
             metadata[contract] = await fetch_token_metadata(client, url=url, contract=contract)
+        except AlchemyTransientError:
+            raise
         except Exception as exc:
             logger.warning("metadata failed %s: %s", contract[:12], exc)
             metadata[contract] = {}

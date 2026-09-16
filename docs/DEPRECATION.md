@@ -115,3 +115,19 @@ First-inflow ingest is **`wallet_funding_transfers`** (Etherscan / Blockscout / 
 | `walcert.wallet_fund_origins` | Historical analyze output; **not** written by v1 worker |
 
 Analyze / WAMI Origins consume of the new staging table is a follow-up. Keep using `ETHERSCAN_FUNDING_KEY` / `BLOCKSCOUT_FUNDING_KEY` / `ANKR_FUNDING_KEY`, not the 15d activity keys.
+
+## Split token/LP discovery workers (replaced by holdings discovery)
+
+ADR 2026-09-16. Live path is **`wallet_holdings_discovery`** (contracts → portfolio → LP in one run, Alchemy 429 backoff). Do **not** re-enable the three split crons while the unified worker is live — they compete for `ALCHEMY_FREE_KEY` and treat 429 as permanent `has_*_error`.
+
+| Legacy | Status |
+|---|---|
+| Workflow `wallet-token-contracts-discovery.yml` | **Deleted** 2026-09-16 |
+| Workflow `wallet-token-portfolio-discovery.yml` | **Deleted** 2026-09-16 |
+| Workflow `wallet-lp-positions-discovery.yml` | **Deleted** 2026-09-16 |
+| Folders `workers/wallet_token_contracts_discovery/`, `wallet_token_portfolio_discovery/`, `wallet_lp_positions_discovery/` | **Deleted** 2026-09-16; code of truth is `workers/wallet_holdings_discovery/` |
+
+Do not re-add them. If you need the old code, read it from git history (`git log -- workers/wallet_lp_positions_discovery`); the domain modules live in `workers/wallet_holdings_discovery/src/`.
+
+Do not reset 429-burned rows until the unified worker has run at least once with backoff. Schema: `20260916140000_wallet_discovery_reset_alchemy_429.sql`.
+

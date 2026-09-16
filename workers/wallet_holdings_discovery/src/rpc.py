@@ -2,20 +2,24 @@
 
 from __future__ import annotations
 
-import logging
 from typing import Any
 
 import httpx
 from eth_abi import decode, encode
 from eth_utils import function_signature_to_4byte_selector, to_checksum_address
 
+from alchemy_rpc import alchemy_url, json_rpc
 from networks import MULTICALL3
 
-logger = logging.getLogger("wallet_lp_positions_discovery")
-
-
-def alchemy_url(subdomain: str, api_key: str) -> str:
-    return f"https://{subdomain}.g.alchemy.com/v2/{api_key}"
+__all__ = [
+    "alchemy_url",
+    "encode_call",
+    "decode_result",
+    "eth_call",
+    "multicall3",
+    "parse_uint",
+    "parse_address",
+]
 
 
 def _selector(sig: str) -> bytes:
@@ -42,20 +46,13 @@ async def eth_call(
     *,
     block: str = "latest",
 ) -> str | None:
-    payload = {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "eth_call",
-        "params": [{"to": to_checksum_address(to), "data": data}, block],
-    }
-    response = await client.post(url, json=payload, timeout=45.0)
-    response.raise_for_status()
-    body = response.json()
-    if not isinstance(body, dict):
-        raise RuntimeError("Invalid eth_call body")
-    if body.get("error"):
-        raise RuntimeError(f"eth_call error: {body['error']}")
-    result = body.get("result")
+    result = await json_rpc(
+        client,
+        url,
+        "eth_call",
+        [{"to": to_checksum_address(to), "data": data}, block],
+        timeout=45.0,
+    )
     if result is None or result in ("0x", "0x0"):
         return None
     return str(result)
@@ -72,7 +69,6 @@ async def multicall3(
     if not calls:
         return []
 
-    # aggregate3((address target, bool allowFailure, bytes callData)[])
     typed = [
         (
             to_checksum_address(target),

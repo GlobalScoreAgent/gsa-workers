@@ -57,9 +57,7 @@ Funding first-inflows: [workers/wallet_funding_transfers/README.md](./workers/wa
 | `owner_wallet_origin` | `owner-wallet-origin.yml` | `wallet_apply_owner_history_snapshot` | `wallet_owner_details.first_transaction_at` |
 | `dune_queries_import` | `dune-queries-import.yml` | `cex` / `mixer` / `bridge` / `ofac_sanction` upserts | `wallets.cex_addresses`, `mixer_addresses`, `bridge_addresses`, `ofac_sanction_addresses` |
 | `token_prices_import` | `token-prices-import.yml` | `token_prices_upsert` + `apply_prices` + `mark_price_misses` | `wallets.token_prices` → positions |
-| `wallet_token_contracts_discovery` | `wallet-token-contracts-discovery.yml` | `wallets.wallet_token_contracts_upsert` | `wallets.wallet_token_contracts` |
-| `wallet_token_portfolio_discovery` | `wallet-token-portfolio-discovery.yml` | `wallets.wallet_token_positions_insert` | `wallets.wallet_token_positions` (fungible) |
-| `wallet_lp_positions_discovery` | `wallet-lp-positions-discovery.yml` | `wallets.wallet_lp_positions_upsert` | `wallets.wallet_lp_positions` (NFT + classic LP) |
+| `wallet_holdings_discovery` | `wallet-holdings-discovery.yml` | `wallet_token_contracts_upsert` + `wallet_token_positions_insert` + `wallet_lp_positions_upsert` | contracts + fungible positions + LP (one run per wallet). Split workers deleted 2026-09-16 |
 | `wallet_activity_flows` | `wallet-activity-flows.yml` (matrix etherscan / alchemy_k1 / bsc / xlayer; UTC 18→12) | `wallets.wallet_activity_transfers_insert` | `wallets.wallet_activity_transfers` (staging INSERT-only; claim uses `activity_flows_agent_ok`) |
 | `wallet_funding_transfers` | `wallet-funding-transfers.yml` (matrix etherscan / blockscout / bsc / xlayer) | `wallets.wallet_funding_transfers_insert` | `wallets.wallet_funding_transfers` (first ~500 incoming, INSERT-only) |
 | `agent_uri_resolve` | `agent-uri-resolve.yml` | direct SQL upsert | `uri_documents` + `agent_manifest` (ingest) |

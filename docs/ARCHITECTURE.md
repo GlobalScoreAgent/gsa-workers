@@ -77,9 +77,7 @@ stateDiagram-v2
 | `dune_queries_import` | `dune-queries-import.yml` | `dune-queries-import` | 1 runner |
 | `token_prices_import` | `token-prices-import.yml` | `token-prices-import` | 1 runner |
 | `erc8257_tools_import` | `erc8257-tools-import.yml` | `erc8257-tools-import` | 1 runner |
-| `wallet_token_contracts_discovery` | `wallet-token-contracts-discovery.yml` | `wallet-token-contracts-discovery` | 1 runner |
-| `wallet_token_portfolio_discovery` | `wallet-token-portfolio-discovery.yml` | `wallet-token-portfolio-discovery` | 1 runner |
-| `wallet_lp_positions_discovery` | `wallet-lp-positions-discovery.yml` | `wallet-lp-positions-discovery` | 1 runner |
+| `wallet_holdings_discovery` | `wallet-holdings-discovery.yml` | `wallet-holdings-discovery` | 1 runner; `CONCURRENCY=4` |
 | `wallet_activity_flows` | `wallet-activity-flows.yml` | per provider group | etherscan / alchemy_k1 / bsc / xlayer; `max-parallel: 4`; UTC window 18→12 (cuts 1/15 + drain 18,22,2,6,10) |
 | `wallet_funding_transfers` | `wallet-funding-transfers.yml` | per provider group | etherscan / blockscout / bsc / xlayer; `max-parallel: 4`; UTC window 18→12 (drain 18,0,6) |
 | `agent_uri_resolve` | `agent-uri-resolve.yml` | `agent-uri-resolve` | 1 runner (00:00 / 12:00) |
@@ -110,9 +108,7 @@ HUMI reason publisher: `0 0,6,12,18 * * *` UTC + `workflow_dispatch`; **not** ti
 | dune queries | n/a | 4 Dune queries → cex / mixer / bridge / ofac tables (paginated + chunked upserts) |
 | erc8257 tools | n/a | agenttoolindex dump → `erc_8257.tools` (+ `sync_state` watermark) |
 | token prices | n/a | Unpriced ERC-20s → Dex/CG → `token_prices` → apply hits / mark misses |
-| token contracts discovery | `wallet_transactions.does_need_discovery_contracts` + `chains.subdomain_alchemy` | Alchemy ERC-20 balances → `wallets.wallet_token_contracts` via `wallet_token_contracts_upsert` |
-| token portfolio discovery | `does_need_portfolio_discovery` after contract discovery | Alchemy amounts + DeFiLlama → fungible `wallet_token_positions_insert` |
-| LP positions discovery | `does_need_lp_discovery` after portfolio discovery | NFT + `lp_pools` → `wallet_lp_positions_upsert` |
+| holdings discovery | any pending `does_need_discovery_contracts` / `_portfolio_discovery` / `_lp_discovery` + Alchemy subdomain | Sequential contracts → portfolio → LP; 429 is transient |
 | activity flows 15d | `is_valid_activity_flows` + `activity_flows_agent_ok` + due clock + not `Dormant_*` + address ≠ `0x0` | Adapter → INSERT `wallets.wallet_activity_transfers`; empty OK |
 | funding transfers | `is_valid_funding_transfers` + due clock; non-`Dormant_*` first | Adapter → INSERT `wallets.wallet_funding_transfers`; one-shot; empty OK |
 | agent URI resolve | agents / on-chain / external feedbacks pending | Resolve/materialize → `uri_documents` + `agent_manifest` |
@@ -122,41 +118,26 @@ HUMI reason publisher: `0 0,6,12,18 * * *` UTC + `workflow_dispatch`; **not** ti
 | Ethos reviews API | GSA-linked Claimed + `reviews_next_eligible_at` | Ethos v2 given/received → `ethos.reviews` |
 | HUMI reason publisher | `index_humi_agent.needs_reason_publish` | Assemble the 4 `pillar_*` reasons → private bucket `humi-reasons`, `humi/agent/{id}.json`. Only worker whose destination is Storage, not a table |
 
-## Token contracts discovery
+## Holdings discovery
 
-Claims **`erc_8004.wallet_transactions`** rows (not `wallets`). Pipeline:
+Claims **`erc_8004.wallet_transactions`** rows (not `wallets`). One worker, three stages in the same run ([README](../workers/wallet_holdings_discovery/README.md)):
 
-1. Claim rows with `does_need_discovery_contracts IS DISTINCT FROM FALSE` and non-empty `chains.subdomain_alchemy`.
-2. Alchemy `alchemy_getTokenBalances(address, "erc20")` (paginate); keep balance > 0.
-3. `wallets.wallet_token_contracts_upsert(wallet_id, chain_id, rows)` then set flag `FALSE`.
+1. Claim any pending stage (`does_need_discovery_contracts` / `_portfolio_discovery` / `_lp_discovery`) with non-empty `chains.subdomain_alchemy`. Stamps all three `*_claimed_at`.
+2. **Contracts:** Alchemy `alchemy_getTokenBalances(address, "erc20")` → `wallet_token_contracts_upsert` → flag `FALSE`.
+3. **Portfolio:** load contracts → `portfolio_calc` (Alchemy + DeFiLlama) → `wallet_token_positions_insert`.
+4. **LP:** UniV3/Pancake NFT + `wallets.lp_pools` → price → `wallet_lp_positions_upsert` (replace per wallet+chain). Empty `inserted=0` is the common case.
 
-Design / business rationale (ERC-20 inventory, Alchemy Free, Llama → Dex → CG): [TOKEN_CONTRACTS_DISCOVERY_ALCHEMY.md](./TOKEN_CONTRACTS_DISCOVERY_ALCHEMY.md).
+`src/alchemy_rpc.py` retries HTTP 429/5xx/timeouts with `Retry-After`. Exhausted retries raise `AlchemyTransientError`: flag stays pending, no `has_*_error`. Permanent errors still set `has_*_error` and block downstream triggers.
 
-```mermaid
-flowchart LR
-  claimWt[Claim_wallet_transactions]
-  alchemy[Alchemy_getTokenBalances]
-  upsertFn["wallet_token_contracts_upsert"]
-  done[Flag_false]
-  claimWt --> alchemy --> upsertFn --> done
-```
-
-## Token portfolio discovery
-
-After contract discovery succeeds, claims rows with `does_need_portfolio_discovery` pending:
-
-1. Load contracts from `wallet_token_contracts`.
-2. Shared `portfolio_calc` (Alchemy balances + DeFiLlama prices; no `token_prices`; sets `token_quality` / `quality_reason`).
-3. `wallet_token_positions_insert` (INSERT only; native as `contract_address='native'`).
-   Rediscovery after pricing/quality changes: `wallet_token_portfolio_discovery_reset.sql` then re-run the workflow.
-   **Does not** discover Uniswap V3 / LP NFT positions — see LP discovery below.
+Design / business rationale: [TOKEN_CONTRACTS_DISCOVERY_ALCHEMY.md](./TOKEN_CONTRACTS_DISCOVERY_ALCHEMY.md). Deleted split workers: [DEPRECATION.md](./DEPRECATION.md). 15-day LP refresh still pending: [PENDING_LP_POSITIONS.md](./PENDING_LP_POSITIONS.md).
 
 ```mermaid
 flowchart LR
-  claimP[Claim_portfolio_discovery]
-  calc[portfolio_calc]
-  ins["wallet_token_positions_insert"]
-  claimP --> calc --> ins
+  claimWt[Claim_any_pending_stage]
+  contracts[getTokenBalances]
+  portfolio[portfolio_calc]
+  lp[nft_plus_classic_lp]
+  claimWt --> contracts --> portfolio --> lp
 ```
 
 ## Reference-data workers
@@ -188,18 +169,6 @@ flowchart LR
   ati --> upsert8257["erc_8257.tools_upsert"]
   upsert8257 --> tools8257[erc_8257.tools]
 ```
-
-## LP positions discovery
-
-**Live** claim worker on `wallet_transactions` after portfolio success ([README](../workers/wallet_lp_positions_discovery/README.md)):
-
-1. Claim + soft lock (`lp_discovery_claimed_at` / `claimed_by`).
-2. Step 1: UniV3 / Pancake NFT managers → amounts via pool `slot0` (chains with NFPM in `networks.py`).
-3. Step 2: Active `wallets.lp_pools` → classic LP + gauge balances.
-4. Price (DeFiLlama → `token_prices`) → `wallet_lp_positions_upsert` (replace per wallet+chain; stamps `calculated_at`; PK sentinels for classic).
-5. Mark flag done (`FALSE` even on error). Empty positions (`inserted=0`) are the common case.
-
-Chains without NFT/classic coverage still drain the queue with empty upserts. 15-day refresh worker still pending: [PENDING_LP_POSITIONS.md](./PENDING_LP_POSITIONS.md).
 
 ## URI ingest (resolve + reprocess)
 
@@ -291,7 +260,7 @@ workers/<name>/
     └── address.py
 ```
 
-Origin also has `scripts/check_pending.py` and `scripts/compare_smoke.py`. `wallet_lp_positions_discovery` uses Alchemy `eth_call` + Multicall3 (httpx), not the daily balance JSON snapshot path. `agent_uri_reprocess` does not duplicate resolve/handlers — it adds claim SQL for errors/refresh and imports the sibling resolve package.
+Origin also has `scripts/check_pending.py` and `scripts/compare_smoke.py`. `wallet_holdings_discovery` uses Alchemy Token API + `eth_call` / Multicall3 (httpx) via `alchemy_rpc.py`. `agent_uri_reprocess` does not duplicate resolve/handlers — it adds claim SQL for errors/refresh and imports the sibling resolve package.
 
 ## CI env defaults (workflows)
 
@@ -302,9 +271,7 @@ Origin also has `scripts/check_pending.py` and `scripts/compare_smoke.py`. `wall
 | monthly | 20 | 200 | 7200 |
 | dune queries | n/a | n/a | n/a |
 | token prices | n/a | n/a | n/a |
-| token contracts discovery | 10 | 50 | 7200 |
-| token portfolio discovery | 5 | 25 | 7200 |
-| LP positions discovery | 5 | 25 | 7200 |
+| holdings discovery | 4 | 15 | 7200 |
 | activity flows 15d | 1 | 20 | 7200 |
 | funding transfers | 1 | 20 | 7200 |
 | agent URI resolve | 4 | 20 | n/a |
@@ -314,7 +281,7 @@ Origin also has `scripts/check_pending.py` and `scripts/compare_smoke.py`. `wall
 | Ethos reviews API | 3 | 10 | 7200 |
 | HUMI reason publisher | 16 | 500 | 7200 |
 
-Secrets: `SUPABASE_DB_URL` (required), `ALCHEMY_KEY` (balance/nonce), `ALCHEMY_FREE_KEY` (contracts / portfolio / LP), `ETHERSCAN_API_KEY` / `ALCHEMY_ACTIVITY_KEY_1` / `ALCHEMY_ACTIVITY_KEY_2` / `ANKR_API_KEY` / OKX HMAC for activity flows, `ETHERSCAN_FUNDING_KEY` / `BLOCKSCOUT_FUNDING_KEY` / `ANKR_FUNDING_KEY` for funding transfers (do not reuse 15d Etherscan/Ankr keys), `DUNE_KEY`, `COINGECKO_KEY`, `PINATA_GATEWAY` / `SCRAPING_ANT_KEY`, `GROQ`, and `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` for the HUMI reason publisher (only worker that talks to the Storage API, not just Postgres). Daily sets `WORKER_ID` from the matrix.
+Secrets: `SUPABASE_DB_URL` (required), `ALCHEMY_KEY` (balance/nonce), `ALCHEMY_FREE_KEY` (holdings discovery), `ETHERSCAN_API_KEY` / `ALCHEMY_ACTIVITY_KEY_1` / `ALCHEMY_ACTIVITY_KEY_2` / `ANKR_API_KEY` / OKX HMAC for activity flows, `ETHERSCAN_FUNDING_KEY` / `BLOCKSCOUT_FUNDING_KEY` / `ANKR_FUNDING_KEY` for funding transfers (do not reuse 15d Etherscan/Ankr keys), `DUNE_KEY`, `COINGECKO_KEY`, `PINATA_GATEWAY` / `SCRAPING_ANT_KEY`, `GROQ`, and `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` for the HUMI reason publisher (only worker that talks to the Storage API, not just Postgres). Daily sets `WORKER_ID` from the matrix.
 
 ## On-demand backfill (orchestrator)
 

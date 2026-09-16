@@ -8,9 +8,10 @@ from typing import Any
 import httpx
 from eth_utils import to_checksum_address
 
-from rpc import encode_call, eth_call, multicall3, parse_uint
+from alchemy_rpc import AlchemyTransientError
+from rpc import decode_result, encode_call, eth_call, multicall3, parse_uint
 
-logger = logging.getLogger("wallet_lp_positions_discovery")
+logger = logging.getLogger("wallet_holdings_discovery")
 
 ZERO = "0x0000000000000000000000000000000000000000"
 
@@ -27,7 +28,7 @@ async def extract_classic_positions(
 
     wallet = to_checksum_address(wallet_address)
     calls: list[tuple[str, str]] = []
-    call_meta: list[tuple[dict[str, Any], str]] = []  # pool row, "lp"|"staked"
+    call_meta: list[tuple[dict[str, Any], str]] = []
 
     for pool in pools:
         pool_addr = to_checksum_address(str(pool["pool_address"]))
@@ -49,11 +50,13 @@ async def extract_classic_positions(
 
     try:
         results = await multicall3(client, url, calls)
+    except AlchemyTransientError:
+        raise
     except Exception as exc:
         logger.warning("classic LP multicall failed: %s", exc)
         return []
 
-    balances: dict[str, dict[str, int]] = {}
+    balances: dict[str, dict[str, Any]] = {}
     for (pool, kind), (success, data) in zip(call_meta, results, strict=False):
         key = str(pool["pool_address"]).lower()
         balances.setdefault(key, {"lp": 0, "staked": 0, "pool": pool})
@@ -122,7 +125,6 @@ async def _share_of_reserves(
 ) -> tuple[int | None, int | None, int | None, int | None]:
     """amount0/1 = lp_balance / totalSupply * reserve0/1."""
     from nft_lp import _decimals
-    from rpc import decode_result
 
     try:
         raw_ts = await eth_call(
@@ -134,7 +136,6 @@ async def _share_of_reserves(
         if not raw_ts or not raw_res:
             return None, None, None, None
         total_supply = int(decode_result(["uint256"], raw_ts)[0])
-        # UniswapV2-style: reserve0, reserve1, blockTimestampLast
         reserves = decode_result(["uint112", "uint112", "uint32"], raw_res)
         reserve0 = int(reserves[0])
         reserve1 = int(reserves[1])
@@ -143,7 +144,6 @@ async def _share_of_reserves(
         amount0 = (lp_balance * reserve0) // total_supply
         amount1 = (lp_balance * reserve1) // total_supply
 
-        # token0/token1 decimals from pair
         t0 = await eth_call(client, url, pool, encode_call("token0()", [], []))
         t1 = await eth_call(client, url, pool, encode_call("token1()", [], []))
         dec0 = dec1 = 18
@@ -154,6 +154,8 @@ async def _share_of_reserves(
             token1 = "0x" + bytes.fromhex(t1[2:])[-20:].hex()
             dec1 = await _decimals(client, url, token1) or 18
         return amount0, amount1, dec0, dec1
+    except AlchemyTransientError:
+        raise
     except Exception as exc:
         logger.warning("share_of_reserves failed pool=%s: %s", pool, exc)
         return None, None, None, None

@@ -260,4 +260,4 @@ Deploy order when both change: **schema → worker → workflow_dispatch**.
 - [SUPABASE.md](./SUPABASE.md) — monitoring and backfill SQL
 - [ARCHITECTURE.md](./ARCHITECTURE.md) — pipeline and budgets
 - [DEPRECATION.md](./DEPRECATION.md) — do not re-enable old crons / Edge URI
-- Workers: [`wallet_activity_flows`](../workers/wallet_activity_flows/README.md), [`wallet_lp_positions_discovery`](../workers/wallet_lp_positions_discovery/README.md), [`wallet_funding_transfers`](../workers/wallet_funding_transfers/README.md), [`agent_uri_resolve`](../workers/agent_uri_resolve/README.md), [`agent_uri_reprocess`](../workers/agent_uri_reprocess/README.md), [`ethos_reviews_api`](../workers/ethos_reviews_api/README.md)
+- Workers: [`wallet_activity_flows`](../workers/wallet_activity_flows/README.md), [`wallet_holdings_discovery`](../workers/wallet_holdings_discovery/README.md), [`wallet_funding_transfers`](../workers/wallet_funding_transfers/README.md), [`agent_uri_resolve`](../workers/agent_uri_resolve/README.md), [`agent_uri_reprocess`](../workers/agent_uri_reprocess/README.md), [`ethos_reviews_api`](../workers/ethos_reviews_api/README.md)

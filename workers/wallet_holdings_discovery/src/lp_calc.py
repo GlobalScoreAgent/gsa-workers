@@ -7,6 +7,7 @@ from typing import Any
 
 import httpx
 
+from alchemy_rpc import AlchemyTransientError
 from classic_lp import extract_classic_positions
 from nft_lp import extract_nft_positions
 from pricing import (
@@ -17,7 +18,7 @@ from pricing import (
 )
 from rpc import alchemy_url
 
-logger = logging.getLogger("wallet_lp_positions_discovery")
+logger = logging.getLogger("wallet_holdings_discovery")
 
 
 async def extract_raw_lp_positions(
@@ -41,6 +42,8 @@ async def extract_raw_lp_positions(
                 chain_id=chain_id,
             )
         )
+    except AlchemyTransientError:
+        raise
     except Exception as exc:
         logger.warning(
             "NFT step failed wallet=%s chain=%s: %s",
@@ -58,6 +61,8 @@ async def extract_raw_lp_positions(
                 pools=classic_pools,
             )
         )
+    except AlchemyTransientError:
+        raise
     except Exception as exc:
         logger.warning(
             "Classic LP step failed wallet=%s chain=%s: %s",
