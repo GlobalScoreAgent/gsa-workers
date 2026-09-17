@@ -90,6 +90,23 @@ RPCs `index_humi.claim_reason_publish(limit, worker_id, stale_seconds)` / `compl
 
 `release_reason_publish(bigint[])` exists but the worker never calls it — see [PROCESSES.md](./PROCESSES.md#17-humi-reason-publisher).
 
+### Agent series export (`erc_8004.agents`)
+
+| Column | Role |
+|---|---|
+| `series_export_as_of` | Last exported cycle (T-1). **This is the queue**: `NULL` or below the target means pending. No boolean flag, on purpose |
+| `series_export_at` | Last ack |
+| `series_export_sha256` | Hash of the last uploaded object; auditing only, it cannot short-circuit a PUT because the window moves daily |
+| `series_export_claimed_at` / `series_export_claimed_by` | Soft lock (stale 2h), `agent_series_export/gha:{WORKER_ID}` |
+
+Index `idx_agents_series_export_claim (series_export_as_of NULLS FIRST, series_export_claimed_at NULLS FIRST, id)`: exported agents sort to the end, so the claim always finds pending rows at the front.
+
+RPCs `erc_8004.agent_series_claim(batch, as_of, worker_id, stale_seconds)` → `(agent_id, document jsonb)`, `agent_series_ack(rows jsonb, as_of)`, `agent_series_release(bigint[])`, `agent_tx_scalars_refresh(as_of, batch, after_agent_id)` → `(agents_scanned, rows_upserted, last_agent_id)`, `agent_series_cycle_open/close(as_of)`.
+
+Destinations: public bucket `agent-series` (`agents/{agent_id}.json`) and table `erc_8004.agent_tx_scalars` (`nonce`, deltas 7/15/30, `first_nonce`, `nonce_history_span_days`, `as_of`).
+
+`document` comes back `NULL` for agents with no valid wallet or no `wallet_transactions` rows; they are acked without an upload so the cycle can close.
+
 ### Token contracts discovery (`wallet_transactions`)
 
 Live consumer: **`wallet_holdings_discovery`** (stage 1). Split worker schedule is off.
@@ -892,11 +909,44 @@ GROUP BY 1 ORDER BY 2 DESC;
 
 Schema: sibling `gsa-supabase-schema` → `supabase/docs/toast-cold-storage.md`.
 
+## Monitoring — Agent series export (#18)
+
+```sql
+-- Cycle. status = 'closed' only when the queue emptied; it gates the future
+-- wallet_daily_metrics purge by watermark.
+SELECT * FROM job_control.agent_series_export_cycle ORDER BY as_of DESC LIMIT 7;
+
+-- Queue against today's target
+SELECT
+  count(*)                                                                    AS agents,
+  count(*) FILTER (WHERE series_export_as_of = (now() AT TIME ZONE 'utc')::date - 1) AS exported_today,
+  count(*) FILTER (WHERE series_export_as_of IS NULL)                         AS never_exported,
+  count(*) FILTER (WHERE series_export_claimed_at IS NOT NULL)                AS in_flight,
+  min(series_export_as_of)                                                    AS oldest_cycle
+FROM erc_8004.agents;
+
+-- Objects vs agents that should have one. Expect fewer objects than exported
+-- agents: those without wallets are acked without a PUT.
+SELECT count(*) AS objects, pg_size_pretty(sum((metadata->>'size')::bigint)) AS total_size
+FROM storage.objects WHERE bucket_id = 'agent-series';
+
+-- Scalars freshness (step 1 runs on lane a only)
+SELECT as_of, count(*) FROM erc_8004.agent_tx_scalars GROUP BY as_of ORDER BY as_of DESC;
+
+-- Stale locks: runs that died mid-batch. They self-heal after CLAIM_STALE_SECONDS.
+SELECT series_export_claimed_by, count(*), min(series_export_claimed_at)
+FROM erc_8004.agents
+WHERE series_export_claimed_at < now() - interval '2 hours'
+GROUP BY 1 ORDER BY 2 DESC;
+```
+
+Schema: sibling `gsa-supabase-schema` → `supabase/docs/agent-series-export-storage.md`.
+
 ## Related docs
 
 - [ARCHITECTURE.md](./ARCHITECTURE.md) — GHA pipeline and state machine
 - [OPS.md](./OPS.md) — stuck wallets, URI ops, logs
-- [PROCESSES.md](./PROCESSES.md) — live catalog (#10–11 URI ingest, **#13 on-demand backfill**, **#14 ERC-8257**, **#15 endpoint liveness**, **#16 Ethos reviews API**, **#17 HUMI reason publisher**)
+- [PROCESSES.md](./PROCESSES.md) — live catalog (#10–11 URI ingest, **#13 on-demand backfill**, **#14 ERC-8257**, **#15 endpoint liveness**, **#16 Ethos reviews API**, **#17 HUMI reason publisher**, **#18 agent series export**)
 - Worker READMEs under `workers/*/README.md`
 - Ethos linking (schema): sibling `gsa-supabase-schema` → `supabase/docs/ethos-erc8004-linking.md`
 - ERC-8183 catch-up: `supabase/docs/bsc-erc-8183-import.md` (Fase 3 = `on_demand_backfill`)
@@ -905,3 +955,4 @@ Schema: sibling `gsa-supabase-schema` → `supabase/docs/toast-cold-storage.md`.
 - ERC-8257 tools: `supabase/docs/erc-8257-tools-import.md`
 - Endpoint HTTP census: `supabase/docs/agent-endpoint-health.md`
 - Ethos reviews API: `supabase/docs/ethos-reviews-api.md`
+- Agent series export: `supabase/docs/agent-series-export-storage.md`

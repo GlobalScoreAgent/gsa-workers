@@ -1,0 +1,60 @@
+name: Agent series export
+
+on:
+  # 01:00 UTC: T-1 ya esta cerrado y la pasada termina antes del blackout de MVs
+  # 12-18 UTC.
+  schedule:
+    - cron: "0 1 * * *"
+  workflow_dispatch:
+
+jobs:
+  run:
+    strategy:
+      matrix:
+        include:
+          # Solo la lane a refresca escalares: el paso 1 ya es set-based y correrlo
+          # en las dos duplicaria el trabajo sin acelerar nada. Las dos lanes se
+          # reparten el export por SKIP LOCKED.
+          - worker_id: exporter-a
+            run_scalars: "1"
+          - worker_id: exporter-b
+            run_scalars: "0"
+    concurrency:
+      group: agent-series-export-${{ matrix.worker_id }}
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        working-directory: workers/agent_series_export
+        run: uv sync
+
+      - name: Run agent series export
+        working-directory: workers/agent_series_export
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          AGENT_SERIES_BUCKET: agent-series
+          WORKER_ID: ${{ matrix.worker_id }}
+          RUN_SCALARS: ${{ matrix.run_scalars }}
+          SCALARS_BATCH_SIZE: 5000
+          CONCURRENCY: 16
+          CLAIM_BATCH_SIZE: 500
+          CLAIM_STALE_SECONDS: 7200
+          MAX_RUNTIME_SECONDS: 19800
+        run: uv run python job.py

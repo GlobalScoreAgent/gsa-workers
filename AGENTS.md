@@ -67,6 +67,7 @@ Funding first-inflows: [workers/wallet_funding_transfers/README.md](./workers/wa
 | `agent_endpoint_liveness` | `agent-endpoint-liveness.yml` | `agent_endpoint_health_sync` / `_claim` / `_complete_batch` | `erc_8004.agent_endpoint_health` (15d HTTP census) |
 | `ethos_reviews_api` | `ethos-reviews-api.yml` | `claim_reviews_fetch` / `complete_reviews_fetch` | `ethos.reviews` (Ethos API v2; GSA-linked Claimed) |
 | `humi_reason_publisher` | `humi-reason-publisher.yml` | `claim_reason_publish` / `complete_reason_publish` | Private Storage bucket `humi-reasons` → `humi/agent/{id}.json` (HUMI narrative out of `index_humi_agent`) |
+| `agent_series_export` | `agent-series-export.yml` (01:00 UTC, matrix 2 lanes) | `agent_tx_scalars_refresh` + `agent_series_claim` / `_ack` + `agent_series_cycle_open` / `_close` | Public Storage bucket `agent-series` → `agents/{id}.json` + `erc_8004.agent_tx_scalars` (30d tree out of the stalled `series` stage) |
 
 LP 15-day refresh worker: **not built** — see [docs/PENDING_LP_POSITIONS.md](./docs/PENDING_LP_POSITIONS.md).  
 Agent manifest **consume** (profile / feedbacks / liveness / sentinel): **not built** — keep legacy consume off until readers JOIN `uri_documents`.  
@@ -76,7 +77,7 @@ Walcert consume of `wallet_activity_transfers` (normalize / `analyze_recent_flow
 
 1. Local: `cd workers/<name>`, `uv sync`, `uv run python job.py` with `SUPABASE_DB_URL` (+ Alchemy / Dune / CoinGecko / `PINATA_GATEWAY` / `SCRAPING_ANT_KEY` / `GROQ` as needed). URI workers also need `uv run playwright install chromium`.
 2. Or GitHub Actions → workflow → **Run workflow** (`workflow_dispatch`).
-3. Logs: `Claimed batch`, reconnect/retry, snapshot failures (wallet claim), Dune tasks / chunk upserts, token-price enrich, discovery `Done wt_id=`, activity flows `Done wt_id=`, funding transfers `Done wt_id=` / `QUOTA_EXHAUSTED`, URI `Claimed agents` / `on-chain` / `Reprocess` / `Refresh`, classifier `Done agent_id=`, on-demand backfill `Step done name=` / `skipped_empty` / `Claimed history` / `Claimed satellite`, endpoint liveness `queue empty` / `Claimed batch`, Ethos reviews `Done profile_id=`, or HUMI reason publisher `Batch done uploaded=` / `queue empty`.
+3. Logs: `Claimed batch`, reconnect/retry, snapshot failures (wallet claim), Dune tasks / chunk upserts, token-price enrich, discovery `Done wt_id=`, activity flows `Done wt_id=`, funding transfers `Done wt_id=` / `QUOTA_EXHAUSTED`, URI `Claimed agents` / `on-chain` / `Reprocess` / `Refresh`, classifier `Done agent_id=`, on-demand backfill `Step done name=` / `skipped_empty` / `Claimed history` / `Claimed satellite`, endpoint liveness `queue empty` / `Claimed batch`, Ethos reviews `Done profile_id=`, HUMI reason publisher `Batch done uploaded=` / `queue empty`, or agent series export `Scalars batch scanned=` / `Batch done uploaded=` / `Cycle as_of=`.
 4. SQL: eligible counts in [docs/SUPABASE.md](./docs/SUPABASE.md) (wallets + URI + AI classifier sections); Ethos/8183 catch-up counts in worker README / vault Monitoreo.
 
 ## When to touch which repo
