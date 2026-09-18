@@ -4,6 +4,8 @@ End-to-end map of batch pipelines that run on GitHub Actions against Supabase Po
 
 Sibling schema repo: **`gsa-supabase-schema`**.
 
+**GHA host split (2026-09-17):** schedules for #10–11 (URI), #14 (erc8257), #15 (endpoint liveness), #17 (HUMI reason), #18 (series export) run on [`GlobalScoreAgent/gsa-workers`](https://github.com/GlobalScoreAgent/gsa-workers). All other live processes keep schedules on [`MichBarbarian/gsa-workers`](https://github.com/MichBarbarian/gsa-workers). See [AGENTS.md — GHA hosts](../AGENTS.md#gha-hosts-split-2026-09-17).
+
 ## Pipeline diagram (token portfolio path)
 
 ```mermaid

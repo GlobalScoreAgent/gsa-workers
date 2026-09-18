@@ -2,6 +2,15 @@
 
 Runbook for stuck wallets, failed Actions runs, and when to change schema vs workers.
 
+## GHA hosts
+
+| Host | Schedules |
+|------|-----------|
+| [`MichBarbarian/gsa-workers`](https://github.com/MichBarbarian/gsa-workers) | Chain-heavy (daily, owner, holdings, prices, activity, funding, dune, classifier, backfill, ethos reviews) |
+| [`GlobalScoreAgent/gsa-workers`](https://github.com/GlobalScoreAgent/gsa-workers) | DB-light (URI resolve/reprocess, endpoint liveness, erc8257, series export, HUMI reason) |
+
+`gh run list` / `workflow_dispatch` must target the host that owns the workflow. Map: [AGENTS.md](../AGENTS.md#gha-hosts-split-2026-09-17).
+
 ## Stuck states
 
 | Symptom | Likely cause | Action |

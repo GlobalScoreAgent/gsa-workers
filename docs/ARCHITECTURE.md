@@ -2,6 +2,8 @@
 
 Python batch workers run on **GitHub Actions**, talk to **Supabase Postgres** over a pooler DSN. Wallet jobs finish with an **inline SQL snapshot / upsert** RPC; **URI ingest** writes `uri_documents` + `agent_manifest` directly. There is no Cloudflare Worker or Edge Function in the hot path.
 
+**Two GHA hosts** share this codebase (2026-09-17): MichBarbarian runs chain-heavy workflows; GlobalScoreAgent runs DB-light (URI, liveness, erc8257, series export, HUMI reason). Host map: [AGENTS.md](../AGENTS.md#gha-hosts-split-2026-09-17).
+
 ## System diagram
 
 ```mermaid

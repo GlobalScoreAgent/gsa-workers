@@ -24,6 +24,17 @@ Entry point for AI agents (and humans) changing GitHub Actions batch workers.
 - **Not** Cloudflare Workers for these pipelines
 - Schema / RPCs live in sibling repo **`gsa-supabase-schema`**
 
+## GHA hosts (split 2026-09-17)
+
+Same codebase is mirrored on two remotes. **Schedules must not overlap** for a given workflow (disable on the other host). ADR: vault `08 - Decisiones/2026-09-17 - Split hosts GHA workers DB-light a GlobalScoreAgent`.
+
+| Host | Role | Live schedules |
+|------|------|----------------|
+| [`MichBarbarian/gsa-workers`](https://github.com/MichBarbarian/gsa-workers) | Chain-heavy / multi-secret | daily, owner monthly, holdings, prices, activity, funding, dune, classifier, backfill, ethos reviews |
+| [`GlobalScoreAgent/gsa-workers`](https://github.com/GlobalScoreAgent/gsa-workers) | DB-light (DB / Storage / URI) | `agent_endpoint_liveness`, `erc8257_tools_import`, `agent_series_export`, `humi_reason_publisher`, `agent_uri_resolve`, `agent_uri_reprocess` |
+
+Local remotes: `origin` → MichBarbarian; `gsa-old` → GlobalScoreAgent. After code changes that affect DB-light workers, push **both**. `gh` / `workflow_dispatch`: use `--repo` for the host that owns that workflow.
+
 ## Read in this order
 
 1. [README.md](./README.md) — workers table, secrets, local run
@@ -59,15 +70,15 @@ Funding first-inflows: [workers/wallet_funding_transfers/README.md](./workers/wa
 | `wallet_holdings_discovery` | `wallet-holdings-discovery.yml` | `wallet_token_contracts_upsert` + `wallet_token_positions_insert` + `wallet_lp_positions_upsert` | contracts + fungible positions + LP (one run per wallet). Split workers deleted 2026-09-16 |
 | `wallet_activity_flows` | `wallet-activity-flows.yml` (matrix etherscan / alchemy_k1 / bsc / xlayer; UTC 18→12) | `wallets.wallet_activity_transfers_insert` | `wallets.wallet_activity_transfers` (staging INSERT-only; claim uses `activity_flows_agent_ok`) |
 | `wallet_funding_transfers` | `wallet-funding-transfers.yml` (matrix etherscan / blockscout / bsc / xlayer) | `wallets.wallet_funding_transfers_insert` | `wallets.wallet_funding_transfers` (first ~500 incoming, INSERT-only) |
-| `agent_uri_resolve` | `agent-uri-resolve.yml` | direct SQL upsert | `uri_documents` + `agent_manifest` (ingest) |
-| `agent_uri_reprocess` | `agent-uri-reprocess.yml` | direct SQL upsert | error retry + off-chain `uri_documents` refresh |
+| `agent_uri_resolve` | `agent-uri-resolve.yml` (**GSA** host) | direct SQL upsert | `uri_documents` + `agent_manifest` (ingest) |
+| `agent_uri_reprocess` | `agent-uri-reprocess.yml` (**GSA** host) | direct SQL upsert | error retry + off-chain `uri_documents` refresh |
 | `ai_agent_classifier` | `ai-agent-classifier.yml` | direct SQL | `web_dashboard.agents` AI category fields (`llm` config) |
 | `on_demand_backfill` | `on-demand-backfill.yml` | Ethos claim/complete + scores; 8183 + Virtual ACP + Olas Mech `claim/complete_satellite_backfill` | `ethos.*` + `official_scores` + `bsc_erc_8183` / `virtual_acp` / `olas_mech` satellites |
-| `erc8257_tools_import` | `erc8257-tools-import.yml` | `erc_8257.tools_upsert` + `sync_state` | `erc_8257.tools` (agenttoolindex full dump) |
-| `agent_endpoint_liveness` | `agent-endpoint-liveness.yml` | `agent_endpoint_health_sync` / `_claim` / `_complete_batch` | `erc_8004.agent_endpoint_health` (15d HTTP census) |
+| `erc8257_tools_import` | `erc8257-tools-import.yml` (**GSA** host) | `erc_8257.tools_upsert` + `sync_state` | `erc_8257.tools` (agenttoolindex full dump) |
+| `agent_endpoint_liveness` | `agent-endpoint-liveness.yml` (**GSA** host) | `agent_endpoint_health_sync` / `_claim` / `_complete_batch` | `erc_8004.agent_endpoint_health` (15d HTTP census) |
 | `ethos_reviews_api` | `ethos-reviews-api.yml` | `claim_reviews_fetch` / `complete_reviews_fetch` | `ethos.reviews` (Ethos API v2; GSA-linked Claimed) |
-| `humi_reason_publisher` | `humi-reason-publisher.yml` | `claim_reason_publish` / `complete_reason_publish` | Private Storage bucket `humi-reasons` → `humi/agent/{id}.json` (HUMI narrative out of `index_humi_agent`) |
-| `agent_series_export` | `agent-series-export.yml` (01:00 UTC, matrix 2 lanes) | `agent_tx_scalars_refresh` + `agent_series_claim` / `_ack` + `agent_series_cycle_open` / `_close` | Public Storage bucket `agent-series` → `agents/{id}.json` + `erc_8004.agent_tx_scalars` (30d tree out of the stalled `series` stage) |
+| `humi_reason_publisher` | `humi-reason-publisher.yml` (**GSA** host) | `claim_reason_publish` / `complete_reason_publish` | Private Storage bucket `humi-reasons` → `humi/agent/{id}.json` (HUMI narrative out of `index_humi_agent`) |
+| `agent_series_export` | `agent-series-export.yml` (**GSA** host; 01:00 UTC, matrix 2 lanes) | `agent_tx_scalars_refresh` + `agent_series_claim` / `_ack` + `agent_series_cycle_open` / `_close` | Storage bucket `agent-series` → `agents/{id}.json` + `erc_8004.agent_tx_scalars` (30d tree out of the stalled `series` stage) |
 
 LP 15-day refresh worker: **not built** — see [docs/PENDING_LP_POSITIONS.md](./docs/PENDING_LP_POSITIONS.md).  
 Agent manifest **consume** (profile / feedbacks / liveness / sentinel): **not built** — keep legacy consume off until readers JOIN `uri_documents`.  

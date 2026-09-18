@@ -2,6 +2,8 @@
 
 Unified Python batch workers for [Global Score Agent](https://www.globalscoreagent.com/), run via GitHub Actions against Supabase Postgres.
 
+**GHA hosts (split 2026-09-17):** chain-heavy schedules on [`MichBarbarian/gsa-workers`](https://github.com/MichBarbarian/gsa-workers); DB-light (liveness, URI, series export, HUMI reason, erc8257) on [`GlobalScoreAgent/gsa-workers`](https://github.com/GlobalScoreAgent/gsa-workers). Same mirror — do not enable the same workflow schedule on both. Details: [AGENTS.md](./AGENTS.md#gha-hosts-split-2026-09-17).
+
 **For AI agents:** start at [AGENTS.md](./AGENTS.md). Process catalog: [docs/PROCESSES.md](./docs/PROCESSES.md) (wallet pipelines + URI #10–11 + **on-demand backfill** #13). Architecture / DB / ops: [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md), [docs/SUPABASE.md](./docs/SUPABASE.md), [docs/OPS.md](./docs/OPS.md). LP **15-day refresh** still pending: [docs/PENDING_LP_POSITIONS.md](./docs/PENDING_LP_POSITIONS.md).
 
 ## Workers
