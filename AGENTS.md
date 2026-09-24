@@ -78,7 +78,7 @@ Funding first-inflows: [workers/wallet_funding_transfers/README.md](./workers/wa
 | `agent_endpoint_liveness` | `agent-endpoint-liveness.yml` (**GSA** host) | `agent_endpoint_health_sync` / `_claim` / `_complete_batch` | `erc_8004.agent_endpoint_health` (15d HTTP census) |
 | `ethos_reviews_api` | `ethos-reviews-api.yml` | `claim_reviews_fetch` / `complete_reviews_fetch` | `ethos.reviews` (Ethos API v2; GSA-linked Claimed) |
 | `humi_reason_publisher` | `humi-reason-publisher.yml` (**GSA** host) | `claim_reason_publish` / `complete_reason_publish` | Private Storage bucket `humi-reasons` → `humi/agent/{id}.json` (HUMI narrative out of `index_humi_agent`) |
-| `agent_series_export` | `agent-series-export.yml` (**GSA** host; 01:00 UTC, matrix 2 lanes) | `agent_tx_scalars_refresh` + `agent_series_claim` / `_ack` + `agent_series_cycle_open` / `_close` | Storage bucket `agent-series` → `agents/{id}.json` + `erc_8004.agent_tx_scalars` (30d tree out of the stalled `series` stage) |
+| `agent_series_export` | `agent-series-export.yml` (**GSA** host; 01:00 UTC, matrix 3 lanes) | `agent_tx_scalars_refresh` + `agent_series_claim` / `_ack` + `agent_series_cycle_open` / `_close` | Storage bucket `agent-series` → `agents/{id}.json` + `erc_8004.agent_tx_scalars` (30d tree out of the stalled `series` stage) |
 
 LP 15-day refresh worker: **not built** — see [docs/PENDING_LP_POSITIONS.md](./docs/PENDING_LP_POSITIONS.md).  
 Agent manifest **consume** (profile / feedbacks / liveness / sentinel): **not built** — keep legacy consume off until readers JOIN `uri_documents`.  

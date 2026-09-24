@@ -87,7 +87,7 @@ stateDiagram-v2
 | `agent_endpoint_liveness` | `agent-endpoint-liveness.yml` | `agent-endpoint-liveness` | 1 runner (0/6/12/18); empty queue exit 0 |
 | `ethos_reviews_api` | `ethos-reviews-api.yml` | `ethos-reviews-api` | 1 runner (0/6/12/18); empty queue exit 0 |
 | `humi_reason_publisher` | `humi-reason-publisher.yml` | `humi-reason-publisher` | 1 runner (0/6/12/18); empty queue exit 0 |
-| `agent_series_export` | `agent-series-export.yml` | `agent-series-export-${{ matrix.worker_id }}` | 2 runners (01:00 daily); empty queue → cycle close, exit 0 |
+| `agent_series_export` | `agent-series-export.yml` | `agent-series-export-${{ matrix.worker_id }}` | 3 runners (01:00 daily); empty queue → cycle close, exit 0 |
 
 Claim wallet workers schedule: `0 0,6,12,18 * * *` UTC + `workflow_dispatch`.  
 Dune queries import schedule: `0 0 18 * *` UTC + `workflow_dispatch` (18th monthly, after typical Dune billing reset ~17th; 4 tasks per run).  

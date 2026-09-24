@@ -32,7 +32,7 @@ Balance maps are keyed by `erc_8004.chains.symbol_wallet_process` (`ethereum`, `
 ## Pipeline
 
 ```
-agent_series_cycle_open(as_of)                 both lanes, idempotent
+agent_series_cycle_open(as_of)                 all lanes, idempotent
   → agent_tx_scalars_refresh(as_of, batch, cursor)   lane a only, loops until scanned = 0
   → agent_series_claim(batch, as_of, worker, stale)  SKIP LOCKED + soft-lock, returns the tree
       document NULL → ack without a PUT (agent has no wallet / no wallet_transactions row)
@@ -41,7 +41,7 @@ agent_series_cycle_open(as_of)                 both lanes, idempotent
   → agent_series_cycle_close(as_of)            closed only if the queue is empty
 ```
 
-`as_of` is resolved **in the database** (`(now() AT TIME ZONE 'utc')::date - 1`) so both lanes agree even if they start minutes apart.
+`as_of` is resolved **in the database** (`(now() AT TIME ZONE 'utc')::date - 1`) so all three lanes agree even if they start minutes apart.
 
 The document travels as `document::text` and is uploaded byte for byte. Parsing it into Python would turn balance `numeric` values into floats and silently drop decimals.
 
@@ -152,7 +152,7 @@ SELECT as_of, count(*) FROM erc_8004.agent_tx_scalars GROUP BY as_of ORDER BY as
 
 Measured against prod on 2026-09-17: the claim returns 500 agents in 1.1 s (446 agents/s) and 200 in 0.8 s, so the fixed cost per call dominates and larger batches are cheaper. Documents average 5.8 kB and peak at 41 kB, which puts a full pass at roughly 2 GB in the bucket.
 
-The database is therefore **not** the bottleneck — Storage round-trip latency is, the same ~0.5 s per object the publisher measured. At `CONCURRENCY=16` per lane and two lanes, a 367 k-object pass should land near 3 h, inside the 360-minute slot and well before the 12-18 UTC MV blackout.
+The database is therefore **not** the bottleneck — Storage round-trip latency is, the same ~0.5 s per object the publisher measured. At `CONCURRENCY=16` per lane, early sizing assumed two lanes would finish ~367 k objects in ~3 h. By 2026-09-24 the universe was ~534 k agents and two lanes left ~141 k one day behind (`incomplete` cycle) inside the 5.5 h soft budget — so the matrix added `exporter-c` (three lanes, still one cron at 01:00 UTC, still before the 12-18 UTC MV blackout).
 
 ## Known difference against the old chain
 

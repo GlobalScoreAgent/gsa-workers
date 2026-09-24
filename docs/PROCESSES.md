@@ -95,7 +95,7 @@ flowchart TB
 | 15 | [`agent_endpoint_liveness`](../workers/agent_endpoint_liveness/README.md) | Claim (`agent_endpoint_health`) | 0/6/12/18 | HTTP(s) locators from `agent_metadata_services` due on 15d clock | `agent_endpoint_health_sync` / `_claim` / `_complete_batch` | `erc_8004.agent_endpoint_health` + view `agent_endpoint_status` |
 | 16 | [`ethos_reviews_api`](../workers/ethos_reviews_api/README.md) | Claim (`ethos.profiles`) | 0/6/12/18 | GSA-linked Claimed + `reviews_next_eligible_at` | `claim_reviews_fetch` / `complete_reviews_fetch` | `ethos.reviews` |
 | 17 | [`humi_reason_publisher`](../workers/humi_reason_publisher/README.md) | Claim (`index_humi.index_humi_agent`) | 0/6/12/18 | `needs_reason_publish` | `claim_reason_publish` / `complete_reason_publish` / `release_reason_publish` | Private bucket `humi-reasons` → `humi/agent/{id}.json` |
-| 18 | [`agent_series_export`](../workers/agent_series_export/README.md) | Claim (`erc_8004.agents`, matrix 2 lanes) | 01:00 daily | `series_export_as_of` behind T-1 | `agent_tx_scalars_refresh` + `agent_series_claim` / `_ack` / `_release` + `agent_series_cycle_open` / `_close` | Public bucket `agent-series` → `agents/{id}.json` + `erc_8004.agent_tx_scalars` |
+| 18 | [`agent_series_export`](../workers/agent_series_export/README.md) | Claim (`erc_8004.agents`, matrix 3 lanes) | 01:00 daily | `series_export_as_of` behind T-1 | `agent_tx_scalars_refresh` + `agent_series_claim` / `_ack` / `_release` + `agent_series_cycle_open` / `_close` | Public bucket `agent-series` → `agents/{id}.json` + `erc_8004.agent_tx_scalars` |
 
 Soft runtime budget for claim / enrich jobs: **`MAX_RUNTIME_SECONDS=19800`** (~5.5h). Empty queue → exit 0; next cron still fires.
 
@@ -370,7 +370,7 @@ Worker README: [`humi_reason_publisher`](../workers/humi_reason_publisher/README
 **Schema deployed 2026-09-17, first full pass pending.** Moves the 30-day nonce/balance tree out of the `series` stage of `job_control.wallet_tx_rollup_pipeline` and into the public bucket `agent-series`. That stage writes `wallet_transactions.nonce_last_30_days` one wallet at a time — row + TOAST + WAL rewritten ~450 k times per pass, ~29 h of compute for a single day, 262 913 wallets queued and never draining.
 
 ```
-agent_series_cycle_open(as_of)                    both lanes
+agent_series_cycle_open(as_of)                    all lanes
   → agent_tx_scalars_refresh(as_of, batch, cursor)    lane a only, until scanned = 0
   → agent_series_claim → tree built in a SELECT from wallet_daily_metrics
       document NULL → ack, no PUT · otherwise → PUT agents/{id}.json
@@ -390,7 +390,7 @@ The sha256 short-circuit that the HUMI publisher relies on cannot fire here — 
 | Bucket | `agent-series`, **public** (CDN), `application/json` |
 | Object | `agents/{agent_id}.json` — ~5.8 kB average, 41 kB peak, ~2 GB per pass |
 | Cycle | `job_control.agent_series_export_cycle`, `closed` only when the queue is empty |
-| Workflow | `agent-series-export.yml`, cron `0 1 * * *`, matrix `exporter-a` / `exporter-b` |
+| Workflow | `agent-series-export.yml`, cron `0 1 * * *`, matrix `exporter-a` / `exporter-b` / `exporter-c` (3rd lane since 2026-09-24: 2 lanes left ~141 k agents one day behind) |
 | Schema | `20260917010000_agent_tx_scalars.sql`, `20260917010100_agent_series_export_claim.sql`, `20260917010200_agent_series_bucket_and_cycle.sql` |
 | Out of scope | Migrating consumers, dropping the JSON chain, enabling the `wallet_daily_metrics` purge |
 

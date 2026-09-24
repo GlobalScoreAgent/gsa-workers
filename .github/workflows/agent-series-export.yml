@@ -13,11 +13,14 @@ jobs:
       matrix:
         include:
           # Solo la lane a refresca escalares: el paso 1 ya es set-based y correrlo
-          # en las dos duplicaria el trabajo sin acelerar nada. Las dos lanes se
-          # reparten el export por SKIP LOCKED.
+          # en las demas duplicaria el trabajo sin acelerar nada. Las tres lanes se
+          # reparten el export por SKIP LOCKED. exporter-c (2026-09-24): la pasada
+          # con 2 lanes quedaba incomplete (~141 k agentes un dia atras).
           - worker_id: exporter-a
             run_scalars: "1"
           - worker_id: exporter-b
+            run_scalars: "0"
+          - worker_id: exporter-c
             run_scalars: "0"
     concurrency:
       group: agent-series-export-${{ matrix.worker_id }}

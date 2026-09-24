@@ -151,7 +151,7 @@ async def run_job() -> int:
     scalars_batch_size = env_int("SCALARS_BATCH_SIZE", default=5000, minimum=100)
     max_runtime_seconds = env_int("MAX_RUNTIME_SECONDS", default=19800, minimum=60)
     # Solo una lane refresca escalares: el paso 1 ya es set-based y correrlo en las
-    # dos duplicaria el trabajo sin acelerar nada.
+    # demas duplicaria el trabajo sin acelerar nada.
     run_scalars = env_flag("RUN_SCALARS", default=False)
 
     db = Database(dsn)

@@ -22,7 +22,7 @@ _NO_RECONNECT_EXCEPTIONS = (
     psycopg.errors.DeadlockDetected,
 )
 
-# T-1 resuelto en la base y no en el runner: las dos lanes tienen que coincidir en
+# T-1 resuelto en la base y no en el runner: las lanes tienen que coincidir en
 # el as_of aunque arranquen con minutos de diferencia o el runner este en otra TZ.
 AS_OF_SQL = """
 SELECT ((now() AT TIME ZONE 'utc')::date - 1) AS as_of
