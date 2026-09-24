@@ -340,11 +340,11 @@ Worker README: [`ethos_reviews_api`](../workers/ethos_reviews_api/README.md).
 
 ### 17. HUMI reason publisher
 
-**Live since 2026-09-16.** Moves the ~12 kB narrative aggregate per agent out of `index_humi.index_humi_agent` (9.2 GB of TOAST, 290 395 rows rewritten in 7 days) into the private Storage bucket `humi-reasons`. SQL keeps computing every `*_score`; the worker only assembles and uploads.
+**Live since 2026-09-16** (Stage 1 copy). **Stage 2 render live since 2026-09-24** (`HUMI_REASON_RENDER=1` on host GlobalScoreAgent). Moves the ~12 kB narrative aggregate per agent out of `index_humi.index_humi_agent` into the private Storage bucket `humi-reasons`. SQL keeps computing every `*_score`; the worker assembles (Stage 1) or generates leaf reasons in Python (Stage 2) and uploads. ADR Stage 2: vault `2026-09-24 HUMI reason Stage 2 render en Python`.
 
 ```
 claim_reason_publish → read pillar_* scores (+ render ctx)
-  → assemble (Stage 2: src/render generates reasons; Stage 1 copy disabled when HUMI_REASON_RENDER=1)
+  → assemble (Stage 2: src/render; Stage 1 copy when HUMI_REASON_RENDER=0)
   → sha256 → unchanged: clear flag · changed: PUT humi/agent/{id}.json
   → complete_reason_publish
 ```
@@ -353,7 +353,7 @@ Failed rows **keep** their soft-lock rather than being released. The claim order
 
 Not triggered by the HUMI lane: it has no stable finish time (12 min on quiet days, ~24 h on loaded ones, measured in `cron.job_run_details`). Fixed cron plus an idempotent content-hashed claim means running mid-lane is harmless, at the cost of narrative lag, accepted silently — 6 h by the cron, closer to 10 h in practice because scheduled runs fire hours late ([OPS.md](./OPS.md#scheduled-runs-fire-hours-late)).
 
-Initial backfill (2026-09-16) took three runs for 504 428 agents at ~1 030 agents/min sustained, 9 810 MB in the bucket, zero errors. Details in the [worker README](../workers/humi_reason_publisher/README.md).
+Initial backfill (2026-09-16) took three runs for 504 428 agents at ~1 030 agents/min sustained, 9 810 MB in the bucket, zero errors. Stage 2 corpus republish (2026-09-24) re-flags + `workflow_dispatch` (~750–800/min; optional for UI — web already reads Storage). Details in the [worker README](../workers/humi_reason_publisher/README.md).
 
 | Item | Detail |
 |---|---|

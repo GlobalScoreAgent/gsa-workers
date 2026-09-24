@@ -6,11 +6,13 @@
 
 Publishes the HUMI narrative aggregate of each agent as a JSON object in the **private** Supabase Storage bucket `humi-reasons`, so `index_humi.index_humi_agent` stops carrying ~12 kB of TOAST per row through every recalculation.
 
-**ADR:** vault `08 - Decisiones/2026-09-15 - Toast JSON frios a Supabase Storage`  
+**ADR (Etapa 1 Storage):** vault `08 - Decisiones/2026-09-15 - Toast JSON frios a Supabase Storage`  
+**ADR (Etapa 2 render):** vault `08 - Decisiones/2026-09-24 - HUMI reason Stage 2 render en Python`  
 **Schema:** `gsa-supabase-schema` → `supabase/docs/toast-cold-storage.md` (`20260916010000_humi_reason_publish_claim.sql`, `20260916010100_agent_index_humi_calculate_reason_publish_flag.sql`)  
-**Vault ops:** `12 - Github Worker/HUMI Reason Publisher/`
+**Vault ops:** `12 - Github Worker/HUMI Reason Publisher/`  
+**GHA host:** [`GlobalScoreAgent/gsa-workers`](https://github.com/GlobalScoreAgent/gsa-workers) (DB-light). MichBarbarian copy is schedule-disabled.
 
-The worker is a **renderer, not an engine**: every `*_score` keeps being computed and persisted by SQL. It only assembles the document and uploads it.
+The worker is a **renderer, not an engine**: every `*_score` keeps being computed and persisted by SQL. Stage 2 only chooses narrative text (`src/render/`); it does not recompute scores.
 
 ## Why a fixed cron and not "when the HUMI lane finishes"
 
@@ -24,8 +26,9 @@ The cron interval puts that lag at 6 h on paper, but **measure it against realit
 
 ```
 claim_reason_publish (SKIP LOCKED + soft-lock)
-  → SELECT the 4 pillar_* rows for the batch
-  → assemble the aggregate (src/pillar_spec.py drives both the SELECT and the build)
+  → SELECT pillar_* scores (Stage 2: no *_reason columns)
+  → fetch_render_contexts (same summary inputs the SQL calculates use)
+  → assemble via src/render/* (HUMI_REASON_RENDER=1) or copy jsonb (Stage 1 legacy)
   → sha256 of the serialized document
       == stored sha  → skip upload, just clear the flag
       != stored sha  → POST /storage/v1/object/humi-reasons/humi/agent/{id}.json (x-upsert)
@@ -93,13 +96,14 @@ uv sync
 uv run python job.py
 ```
 
-Spec parity check (no DB needed, real prod sample):
+Spec + render parity (no DB needed for the shipped fixtures):
 
 ```powershell
 uv run python tests/test_spec_parity.py
+uv run python tests/test_render_parity.py
 ```
 
-It fails if an item name ends up mapped to the wrong score column, which is the only real risk in `src/pillar_spec.py`.
+`test_spec_parity` fails if an item name maps to the wrong score column. `test_render_parity` fails if Python reasons diverge from the SQL fixture (after normalizing `last_calculated`).
 
 ## Monitor
 
@@ -139,13 +143,21 @@ The bottleneck is Storage round-trip latency, roughly 0.5 s per object, not the 
 
 ## Stage 2 (live) — render in Python
 
-The worker generates leaf `reason` text and `pillar_summary` in `src/render/` from scores + the same summary inputs the SQL calculates use. It no longer copies `*_reason` jsonb from `pillar_*` when `HUMI_REASON_RENDER=1`.
+Live since **2026-09-24** with `HUMI_REASON_RENDER=1` on the GSA host workflow. Leaf `reason` text and `pillar_summary` come from `src/render/` (history / information / measure / usage) using scores + the same summary inputs the SQL calculates use. The worker no longer copies `*_reason` jsonb from `pillar_*` when the flag is on.
 
-SQL **still writes** those columns (DROP / stop-write is a separate schema process). Document shape stays `schema: 1`; `last_calculated` is omitted from rendered summaries so the sha256 short-circuit stays stable.
+SQL **still writes** those columns and the cold copy on `index_humi_agent` (stop-write / `DROP` / `pg_repack` = separate schema process). Document shape stays `schema: 1`; rendered summaries omit `last_calculated` so the sha short-circuit stays meaningful once the corpus is homogeneous.
 
-Parity: `uv run python tests/test_render_parity.py` (history fixture agent_id=2 + Stage 1 name→score map).
+The product web already hydrates narrative from Storage only — Stage 2 does not require a front change. Backfill is optional for UI correctness; it exists to homogenize objects before a future column DROP.
 
-```
-claim → fetch scores (+ render ctx if Stage 2)
-  → assemble (copy reasons | render.*) → sha256 → upload → complete
-```
+### Stage 2 corpus republish (2026-09-24, in progress)
+
+Re-flagged the full table (`needs_reason_publish = true`, `reason_content_sha256 = null`) and drained with `workflow_dispatch` on `GlobalScoreAgent/gsa-workers`. Sustained ~750–800 agents/min (Storage-bound, same as Stage 1). Job timeout 360 min → expect **2–3 runs** for ~529 k agents.
+
+| Check | SQL / action |
+|---|---|
+| Queue | `count(*) FILTER (WHERE needs_reason_publish)` |
+| Stage 2 published | `count(*) FILTER (WHERE reason_content_sha256 IS NOT NULL)` (sha was nulled on re-flag) |
+| Done | `needs_reason_publish = 0` and Storage object count ≈ published |
+| Next slot | `gh workflow run humi-reason-publisher.yml --repo GlobalScoreAgent/gsa-workers` |
+
+Canceling mid-run is fine for product (old Stage 1 objects remain valid). Leaving the flag set means cron slots continue the drain.
