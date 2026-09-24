@@ -39,6 +39,7 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           HUMI_REASON_BUCKET: humi-reasons
+          HUMI_REASON_RENDER: "1"
           MAX_RUNTIME_SECONDS: 19800
           WORKER_ID: publisher-a
           CONCURRENCY: 16

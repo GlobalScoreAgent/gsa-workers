@@ -343,8 +343,9 @@ Worker README: [`ethos_reviews_api`](../workers/ethos_reviews_api/README.md).
 **Live since 2026-09-16.** Moves the ~12 kB narrative aggregate per agent out of `index_humi.index_humi_agent` (9.2 GB of TOAST, 290 395 rows rewritten in 7 days) into the private Storage bucket `humi-reasons`. SQL keeps computing every `*_score`; the worker only assembles and uploads.
 
 ```
-claim_reason_publish → read the 4 pillar_* rows → assemble → sha256
-  → unchanged: clear flag, no upload · changed: PUT humi/agent/{id}.json
+claim_reason_publish → read pillar_* scores (+ render ctx)
+  → assemble (Stage 2: src/render generates reasons; Stage 1 copy disabled when HUMI_REASON_RENDER=1)
+  → sha256 → unchanged: clear flag · changed: PUT humi/agent/{id}.json
   → complete_reason_publish
 ```
 
@@ -361,7 +362,7 @@ Initial backfill (2026-09-16) took three runs for 504 428 agents at ~1 030 agent
 | Concurrency guard | `complete` re-sends the claimed `version`; if the lane recalculated meanwhile the flag stays `true` |
 | Workflow | `humi-reason-publisher.yml` |
 | Schema | `20260916010000_humi_reason_publish_claim.sql`, `20260916010100_agent_index_humi_calculate_reason_publish_flag.sql` |
-| Stage 2 | Render the leaf `reason` text in Python and drop ~45 columns from `index_humi.pillar_*` (not built) |
+| Stage 2 | Render leaf `reason` + `pillar_summary` in Python (`src/render/`, `HUMI_REASON_RENDER=1`). SQL still writes pillar jsonb; DROP is a separate schema process. |
 
 Worker README: [`humi_reason_publisher`](../workers/humi_reason_publisher/README.md).
 

@@ -15,7 +15,13 @@ import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 
-from assemble import build_document, content_sha256, object_path, serialize
+from assemble import (
+    build_document,
+    content_sha256,
+    object_path,
+    render_mode_enabled,
+    serialize,
+)
 from db import CLAIM_RETRY_BASE_SECONDS, Database
 from storage import StorageClient, StorageError
 
@@ -93,18 +99,20 @@ async def run_job() -> int:
     claim_batch_size = env_int("CLAIM_BATCH_SIZE", default=500, minimum=1, maximum=5000)
     claim_stale_seconds = env_int("CLAIM_STALE_SECONDS", default=7200, minimum=60)
     max_runtime_seconds = env_int("MAX_RUNTIME_SECONDS", default=19800, minimum=60)
+    use_render = render_mode_enabled()
 
     db = Database(dsn)
     db.connect()
     logger.info(
         "Started claimed_by=%s bucket=%s concurrency=%s claim_batch_size=%s "
-        "claim_stale_seconds=%s max_runtime=%ss",
+        "claim_stale_seconds=%s max_runtime=%ss humi_reason_render=%s",
         claimed_by,
         bucket,
         concurrency,
         claim_batch_size,
         claim_stale_seconds,
         max_runtime_seconds,
+        use_render,
     )
 
     start = time.monotonic()
@@ -168,7 +176,12 @@ async def run_job() -> int:
                 )
 
                 try:
-                    pillars_by_agent = db.fetch_pillars(agent_ids)
+                    pillars_by_agent = db.fetch_pillars(
+                        agent_ids, include_reasons=not use_render
+                    )
+                    contexts_by_agent: dict[int, dict[str, dict]] = {}
+                    if use_render:
+                        contexts_by_agent = db.fetch_render_contexts(agent_ids)
                 except Exception as exc:
                     # No se libera el soft-lock: si se liberara, el claim siguiente
                     # devolveria exactamente estas filas y el worker giraria en vacio.
@@ -186,7 +199,12 @@ async def run_job() -> int:
                 async def publish(row: dict) -> tuple[dict | None, bool]:
                     """Devuelve (fila para complete, hubo upload)."""
                     agent_id = int(row["agent_id"])
-                    document = build_document(agent_id, pillars_by_agent.get(agent_id, {}))
+                    document = build_document(
+                        agent_id,
+                        pillars_by_agent.get(agent_id, {}),
+                        render_contexts=contexts_by_agent.get(agent_id),
+                        use_render=use_render,
+                    )
                     payload = serialize(document)
                     sha256 = content_sha256(payload)
 

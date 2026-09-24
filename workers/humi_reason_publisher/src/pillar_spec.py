@@ -123,10 +123,21 @@ PILLARS: tuple[Pillar, ...] = (HISTORY, INFORMATION, MEASURES, USAGE)
 BLOCK_SCORE_COLUMNS = ("block_basic_score", "block_intermediate_score", "block_advanced_score")
 
 
-def pillar_columns(pillar: Pillar) -> list[str]:
-    """Columnas que hay que leer de la tabla del pilar, sin agent_id."""
-    columns = list(BLOCK_SCORE_COLUMNS) + ["pillar_summary"]
+def pillar_columns(pillar: Pillar, *, include_reasons: bool = True) -> list[str]:
+    """Columnas que hay que leer de la tabla del pilar, sin agent_id.
+
+    Stage 2 (HUMI_REASON_RENDER): include_reasons=False — solo scores; el texto
+    lo genera src/render/.
+    """
+    columns = list(BLOCK_SCORE_COLUMNS)
+    if include_reasons:
+        columns.append("pillar_summary")
     for item in (*pillar.basic, *pillar.intermediate, *pillar.advanced):
         columns.append(item.score_column)
-        columns.append(item.reason_column)
+        if include_reasons:
+            columns.append(item.reason_column)
     return columns
+
+
+def pillar_score_columns(pillar: Pillar) -> list[str]:
+    return pillar_columns(pillar, include_reasons=False)

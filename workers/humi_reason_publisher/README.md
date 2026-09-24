@@ -75,6 +75,7 @@ No timestamp inside the document on purpose: it would change the sha on every ru
 | `SUPABASE_URL` | required | Project URL for the Storage REST API |
 | `SUPABASE_SERVICE_ROLE_KEY` | required | Storage write on a private bucket |
 | `HUMI_REASON_BUCKET` | `humi-reasons` | Target bucket |
+| `HUMI_REASON_RENDER` | `0` (GHA: `1`) | Stage 2: generate reasons in Python |
 | `WORKER_ID` | `publisher-a` | Claim stamp |
 | `CONCURRENCY` | 16 | In-flight uploads |
 | `CLAIM_BATCH_SIZE` | 500 | Claim size |
@@ -136,6 +137,15 @@ The bottleneck is Storage round-trip latency, roughly 0.5 s per object, not the 
 - **The flag path works.** The lane recalculated 62 359 agents that day; all ended up published after their recalculation, so `calculated_at > reason_published_at` returns zero rows.
 - Storage object count tracked `reason_published_at` exactly throughout. A persistent gap would mean uploads returned 200 but the matching `complete` never reached the DB.
 
-## Stage 2 (not built)
+## Stage 2 (live) — render in Python
 
-Port the bilingual templates of the 4 pillars to `src/render/` so the worker also produces the leaf `reason` text and the pillar `summary`, then stop writing those ~45 columns in `index_humi.pillar_*`. Requires a zero-diff parity gate first. See [PENDING](../../docs/PROCESSES.md).
+The worker generates leaf `reason` text and `pillar_summary` in `src/render/` from scores + the same summary inputs the SQL calculates use. It no longer copies `*_reason` jsonb from `pillar_*` when `HUMI_REASON_RENDER=1`.
+
+SQL **still writes** those columns (DROP / stop-write is a separate schema process). Document shape stays `schema: 1`; `last_calculated` is omitted from rendered summaries so the sha256 short-circuit stays stable.
+
+Parity: `uv run python tests/test_render_parity.py` (history fixture agent_id=2 + Stage 1 name→score map).
+
+```
+claim → fetch scores (+ render ctx if Stage 2)
+  → assemble (copy reasons | render.*) → sha256 → upload → complete
+```
