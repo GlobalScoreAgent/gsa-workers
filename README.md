@@ -4,7 +4,7 @@ Unified Python batch workers for [Global Score Agent](https://www.globalscoreage
 
 **GHA hosts (split 2026-09-17):** chain-heavy schedules on [`MichBarbarian/gsa-workers`](https://github.com/MichBarbarian/gsa-workers); DB-light (liveness, URI, series export, HUMI reason, erc8257) on [`GlobalScoreAgent/gsa-workers`](https://github.com/GlobalScoreAgent/gsa-workers). Same mirror — do not enable the same workflow schedule on both. Details: [AGENTS.md](./AGENTS.md#gha-hosts-split-2026-09-17).
 
-**For AI agents:** start at [AGENTS.md](./AGENTS.md). Process catalog: [docs/PROCESSES.md](./docs/PROCESSES.md) (wallet pipelines + URI #10–11 + **on-demand backfill** #13). Architecture / DB / ops: [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md), [docs/SUPABASE.md](./docs/SUPABASE.md), [docs/OPS.md](./docs/OPS.md). LP **15-day refresh** still pending: [docs/PENDING_LP_POSITIONS.md](./docs/PENDING_LP_POSITIONS.md).
+**For AI agents:** start at [AGENTS.md](./AGENTS.md). Process catalog: [docs/PROCESSES.md](./docs/PROCESSES.md) (wallet pipelines + URI #10–11 + **on-demand backfill** #13). Architecture / DB / ops: [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md), [docs/SUPABASE.md](./docs/SUPABASE.md), [docs/OPS.md](./docs/OPS.md).
 
 ## Workers
 
@@ -13,10 +13,6 @@ Unified Python batch workers for [Global Score Agent](https://www.globalscoreage
 | [`wallet_nonce_balance_daily`](./workers/wallet_nonce_balance_daily/README.md) | 0, 6, 12, 18h (matrix `worker-a`/`worker-b`) | `is_valid_..._daily` + `import_nonce_and_balance_daily_next_eligible_at` | Balance + nonce → daily JSON → `wallet_apply_daily_snapshot` → `wallet_daily_metrics` |
 | [`owner_wallet_monthly`](./workers/owner_wallet_monthly/README.md) | 0, 6, 12, 18h | `is_valid_..._monthly` + either `import_nonce_and_balance_monthly_next_eligible_at` (lane `monthly`) or `import_wallet_history_next_eligible_at` (lane `origin`) | Two concurrent lanes: balance + nonce (30d) → `wallet_apply_monthly_snapshot`, and first on-chain activity → `wallet_apply_owner_history_snapshot`. Replaces the two split owner workers |
 | [`dune_queries_import`](./workers/dune_queries_import/README.md) | 18th 00:00 (monthly; post Dune billing reset) | n/a (reference data) | 4 Dune queries → cex/mixer/bridge/ofac upserts |
-| [`token_prices_import`](./workers/token_prices_import/README.md) | 0, 6, 12, 18h | n/a (reference data) | Dex/CG → `token_prices` → apply / mark known-unknown misses |
-| [`wallet_holdings_discovery`](./workers/wallet_holdings_discovery/README.md) | 0, 6, 12, 18h | any pending contracts / portfolio / LP flag + `chains.subdomain_alchemy` | Sequential contracts → portfolio → LP (Alchemy 429 backoff). Replaces the three split discovery workers |
-| [`wallet_activity_flows`](./workers/wallet_activity_flows/README.md) | UTC 18:00→12:00 (cuts 1/15 + drain 18,22,2,6,10; closed 12–18) | `is_valid_activity_flows` + not `Dormant_*` | 15d transfers → staging `wallets.wallet_activity_transfers` |
-| [`wallet_funding_transfers`](./workers/wallet_funding_transfers/README.md) | UTC 18:00→12:00 (drain 18,0,6; closed 12–18) | `is_valid_funding_transfers` (non-Dormant first) | First ~500 incoming → `wallets.wallet_funding_transfers` |
 | [`agent_uri_resolve`](./workers/agent_uri_resolve/README.md) | 00:00, 12:00 | agents / `feedback_on_chain` / external feedbacks pending | Resolve/materialize → `uri_documents` + `agent_manifest` |
 | [`agent_uri_reprocess`](./workers/agent_uri_reprocess/README.md) | 06:00, 18:00 | download errors (max 3) + off-chain docs &gt;15d | Retry errors; refresh HTTP/IPFS; `is_processed` only if document changed |
 | [`ai_agent_classifier`](./workers/ai_agent_classifier/README.md) | 0, 6, 12, 18h | `web_dashboard.agents.does_need_ai_category_process` | LLM categories → `ai_category_*` (+ `llm.models_requests` rate limits) |
@@ -26,7 +22,7 @@ Unified Python batch workers for [Global Score Agent](https://www.globalscoreage
 | [`ethos_reviews_api`](./workers/ethos_reviews_api/README.md) | 0, 6, 12, 18h | GSA-linked Claimed + `reviews_next_eligible_at` | Ethos v2 activities → `ethos.reviews` |
 | [`humi_reason_publisher`](./workers/humi_reason_publisher/README.md) | 0, 6, 12, 18h | `index_humi_agent.needs_reason_publish` | HUMI narrative aggregate → private bucket `humi-reasons`, `humi/agent/{id}.json` |
 
-Pending: [LP 15-day refresh](./docs/PENDING_LP_POSITIONS.md). Manifest **consume** (entity SPs) not built yet. `ethos_enrich` → absorbed by `on_demand_backfill` ([DEPRECATION](./docs/DEPRECATION.md)).
+Pending: Manifest **consume** (entity SPs) not built yet. `ethos_enrich` → absorbed by `on_demand_backfill`; WAMI workers removed 2026-10-21 ([DEPRECATION](./docs/DEPRECATION.md)).
 
 ## Common pipeline (claim workers)
 
@@ -37,7 +33,7 @@ claim (Pending, next_eligible_at += CLAIM_STALE_SECONDS)
   → wallet_apply_*_snapshot → Processed
 ```
 
-Reference-data: `dune_queries_import` (4 Dune queries → upserts); `token_prices_import` (Dex/CG enrich + miss mark); `erc8257_tools_import` (agenttoolindex → `erc_8257.tools`). Full catalog: [docs/PROCESSES.md](./docs/PROCESSES.md). Column/RPC inventory: [docs/SUPABASE.md](./docs/SUPABASE.md).
+Reference-data: `dune_queries_import` (4 Dune queries → upserts); `erc8257_tools_import` (agenttoolindex → `erc_8257.tools`). Full catalog: [docs/PROCESSES.md](./docs/PROCESSES.md). Column/RPC inventory: [docs/SUPABASE.md](./docs/SUPABASE.md).
 
 ## Secrets
 
@@ -47,24 +43,13 @@ Reference-data: `dune_queries_import` (4 Dune queries → upserts); `token_price
 | `SUPABASE_URL` | For HUMI reason publisher | Project REST base, e.g. `https://<ref>.supabase.co` |
 | `SUPABASE_SERVICE_ROLE_KEY` | For HUMI reason publisher | Storage writes to the private `humi-reasons` bucket. Bypasses RLS — GHA secret only |
 | `ALCHEMY_KEY` | Recommended | Alchemy fallback after public RPCs (claim workers) |
-| `ALCHEMY_FREE_KEY` | For token contracts / portfolio / LP discovery | Alchemy Token API + eth_call |
 | `DUNE_KEY` | For CEX import | Dune Analytics API key |
-| `COINGECKO_KEY` | For token-prices enrich | CoinGecko Demo/Pro API key |
 | `PINATA_GATEWAY` | Optional (URI workers) | Pinata dedicated gateway access token (last IPFS fallback after public gateways) |
 | `SCRAPING_ANT_KEY` | Optional (URI workers) | ScrapingAnt API key (last HTTP fallback) |
 | `GROQ` | For AI agent classifier | Groq API key (`llm.llm_provider.secret`) |
 | `NVIDIA` | Optional (classifier NIM) | Hosted NVIDIA NIM key (`llm.llm_provider.secret`) |
 | `MISTRAL` | Optional (classifier Mistral) | AI Studio / La Plateforme Experiment key (`llm.llm_provider.secret`) |
 | `CLOUDFLARE` | Optional (classifier Workers AI) | Cloudflare API token with Workers AI + AI Gateway (`llm.llm_provider.secret`) |
-| `ETHERSCAN_API_KEY` | For activity flows (ETH/Arb/Polygon/Celo) | Etherscan V2 Free |
-| `ETHERSCAN_FUNDING_KEY` | For funding transfers (ETH/Arb/Polygon/Celo) | Separate Etherscan V2 key — not `ETHERSCAN_API_KEY` |
-| `BLOCKSCOUT_FUNDING_KEY` | For funding transfers (Base + Gnosis) | Blockscout PRO Free |
-| `ALCHEMY_ACTIVITY_KEY_1` | For activity flows (Base + Gnosis) | Dedicated Transfers key — not `ALCHEMY_FREE_KEY` |
-| `ALCHEMY_ACTIVITY_KEY_2` | For activity flows BSC day-1 cut | Dedicated Alchemy **Free** app — not `ALCHEMY_FREE_KEY` |
-| `ANKR_API_KEY` | For activity flows BSC day-15 cut | Ankr Advanced API |
-| `ANKR_FUNDING_KEY` | For funding transfers (BSC) | Separate Ankr Advanced key — not `ANKR_API_KEY` |
-| `OKX_API_KEY` / `OKX_SECRET_KEY` / `OKX_PASSPHRASE` | For activity flows + funding X Layer | OKX **Data API** HMAC (not Market API) |
-
 ## CI defaults (workflows)
 
 | Worker | CONCURRENCY | CLAIM_BATCH_SIZE | CLAIM_STALE_SECONDS | MAX_RUNTIME_SECONDS |
@@ -73,12 +58,6 @@ Reference-data: `dune_queries_import` (4 Dune queries → upserts); `token_price
 | origin | 4 | 50 | 7200 | 19800 |
 | monthly | 20 | 200 | 7200 | 19800 |
 | cex import | n/a | n/a | n/a | GHA timeout 30m |
-| token prices | n/a | n/a | n/a | GHA timeout 360m |
-| token contracts discovery | 10 | 50 | 7200 | 19800 |
-| token portfolio discovery | 5 | 25 | 7200 | 19800 |
-| LP positions discovery | 5 | 25 | 7200 | 19800 |
-| activity flows 15d | 1 | 20 | 7200 | 19800 |
-| funding transfers | 1 | 20 | 7200 | 19800 |
 | agent URI resolve | 4 | 20 | n/a | 19800 |
 | agent URI reprocess | 4 | 20 | n/a | 19800 |
 | AI agent classifier | 1 | 20 | n/a | 19800 |
@@ -109,8 +88,6 @@ gsa-workers/
 ├── README.md
 ├── docs/
 │   ├── PROCESSES.md
-│   ├── TOKEN_CONTRACTS_DISCOVERY_ALCHEMY.md
-│   ├── PENDING_LP_POSITIONS.md
 │   ├── ARCHITECTURE.md
 │   ├── SUPABASE.md
 │   ├── OPS.md
@@ -134,12 +111,6 @@ gsa-workers/
 │   ├── agent_endpoint_liveness/
 │   │   ├── job.py
 │   │   └── src/          # db, probe, ssrf
-│   ├── token_prices_import/
-│   │   ├── job.py
-│   │   └── src/          # db, dexscreener, coingecko
-│   ├── wallet_holdings_discovery/
-│   │   ├── job.py
-│   │   └── src/          # alchemy_rpc, contracts + portfolio + LP stages
 │   ├── ai_agent_classifier/
 │   │   ├── job.py
 │   │   └── src/          # db, llm_client, prompt
@@ -157,8 +128,6 @@ gsa-workers/
     ├── owner-wallet-monthly.yml
     ├── dune-queries-import.yml
     ├── erc8257-tools-import.yml
-    ├── token-prices-import.yml
-    ├── wallet-holdings-discovery.yml
     ├── ai-agent-classifier.yml
     ├── on-demand-backfill.yml
     ├── agent-uri-resolve.yml

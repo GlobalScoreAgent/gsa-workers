@@ -76,11 +76,7 @@ stateDiagram-v2
 | `wallet_nonce_balance_daily` | `wallet-nonce-balance-daily.yml` | per `worker-a` / `worker-b` | Matrix: 2 runners |
 | `owner_wallet_monthly` | `owner-wallet-monthly.yml` | `owner-wallet-monthly` | 1 runner; 2 concurrent lanes (`monthly` 20, `origin` 4) sharing `ALCHEMY_MAX_INFLIGHT` |
 | `dune_queries_import` | `dune-queries-import.yml` | `dune-queries-import` | 1 runner |
-| `token_prices_import` | `token-prices-import.yml` | `token-prices-import` | 1 runner |
 | `erc8257_tools_import` | `erc8257-tools-import.yml` | `erc8257-tools-import` | 1 runner |
-| `wallet_holdings_discovery` | `wallet-holdings-discovery.yml` | `wallet-holdings-discovery` | 1 runner; `CONCURRENCY=4` |
-| `wallet_activity_flows` | `wallet-activity-flows.yml` | per provider group | etherscan / alchemy_k1 / bsc / xlayer; `max-parallel: 4`; UTC window 18→12 (cuts 1/15 + drain 18,22,2,6,10) |
-| `wallet_funding_transfers` | `wallet-funding-transfers.yml` | per provider group | etherscan / blockscout / bsc / xlayer; `max-parallel: 4`; UTC window 18→12 (drain 18,0,6) |
 | `agent_uri_resolve` | `agent-uri-resolve.yml` | `agent-uri-resolve` | 1 runner (00:00 / 12:00) |
 | `agent_uri_reprocess` | `agent-uri-reprocess.yml` | `agent-uri-reprocess` | 1 runner (06:00 / 18:00) |
 | `ai_agent_classifier` | `ai-agent-classifier.yml` | `ai-agent-classifier` | 1 runner (0/6/12/18) |
@@ -91,11 +87,8 @@ stateDiagram-v2
 
 Claim wallet workers schedule: `0 0,6,12,18 * * *` UTC + `workflow_dispatch`.  
 Dune queries import schedule: `0 0 18 * *` UTC + `workflow_dispatch` (18th monthly, after typical Dune billing reset ~17th; 4 tasks per run).  
-Token prices import schedule: `0 0,6,12,18 * * *` UTC + `workflow_dispatch`.  
 URI resolve: `0 0,12 * * *`; URI reprocess: `0 6,18 * * *` (split cadence by design).  
 AI classifier: `0 0,6,12,18 * * *` UTC + `workflow_dispatch`.  
-Activity flows 15d: UTC window **18:00→12:00** — `0 0 1,15 * *` + `0 18,22,2,6,10 * * *` (+ soft-stop); closed 12–18.  
-Funding transfers: UTC window **18:00→12:00** — `0 18,0,6 * * *` (+ soft-stop); closed 12–18.  
 Endpoint liveness 15d: `0 0,6,12,18 * * *` UTC + `workflow_dispatch`.  
 Ethos reviews API: `0 0,6,12,18 * * *` UTC + `workflow_dispatch`.  
 HUMI reason publisher: `0 0,6,12,18 * * *` UTC + `workflow_dispatch`; **not** tied to the HUMI lane, which has no stable finish time.  
@@ -110,10 +103,6 @@ Agent series export: `0 1 * * *` UTC + `workflow_dispatch` — T-1 is already cl
 | owner monthly, lane `origin` | same flag + history clock | First-activity history JSON → `wallet_owner_details.first_transaction_at` |
 | dune queries | n/a | 4 Dune queries → cex / mixer / bridge / ofac tables (paginated + chunked upserts) |
 | erc8257 tools | n/a | agenttoolindex dump → `erc_8257.tools` (+ `sync_state` watermark) |
-| token prices | n/a | Unpriced ERC-20s → Dex/CG → `token_prices` → apply hits / mark misses |
-| holdings discovery | any pending `does_need_discovery_contracts` / `_portfolio_discovery` / `_lp_discovery` + Alchemy subdomain | Sequential contracts → portfolio → LP; 429 is transient |
-| activity flows 15d | `is_valid_activity_flows` + `activity_flows_agent_ok` + due clock + not `Dormant_*` + address ≠ `0x0` | Adapter → INSERT `wallets.wallet_activity_transfers`; empty OK |
-| funding transfers | `is_valid_funding_transfers` + due clock; non-`Dormant_*` first | Adapter → INSERT `wallets.wallet_funding_transfers`; one-shot; empty OK |
 | agent URI resolve | agents / on-chain / external feedbacks pending | Resolve/materialize → `uri_documents` + `agent_manifest` |
 | agent URI reprocess | download errors (max 3) + off-chain docs &gt;15d | Retry + refresh; `is_processed` only if document changed; failed refresh still stamps `fetched_at` |
 | AI agent classifier | `does_need_ai_category_process` | LLM → `ai_category_*` on `web_dashboard.agents`; rotate `llm.models` by daily cap |
@@ -146,35 +135,11 @@ Shared: process, workflow, Postgres connection (serialized by an asyncio lock), 
 
 A lane only writes its own clock, so a wallet due on one clock is processed for that task alone. Alchemy rate limits surface as `RpcTransientError` (`src/backoff.py`) and requeue the wallet on `TRANSIENT_REQUEUE_SECONDS` instead of burning the 30-day window; they never set status `Error`.
 
-## Holdings discovery
-
-Claims **`erc_8004.wallet_transactions`** rows (not `wallets`). One worker, three stages in the same run ([README](../workers/wallet_holdings_discovery/README.md)):
-
-1. Claim any pending stage (`does_need_discovery_contracts` / `_portfolio_discovery` / `_lp_discovery`) with non-empty `chains.subdomain_alchemy`. Stamps all three `*_claimed_at`.
-2. **Contracts:** Alchemy `alchemy_getTokenBalances(address, "erc20")` → `wallet_token_contracts_upsert` → flag `FALSE`.
-3. **Portfolio:** load contracts → `portfolio_calc` (Alchemy + DeFiLlama) → `wallet_token_positions_insert`.
-4. **LP:** UniV3/Pancake NFT + `wallets.lp_pools` → price → `wallet_lp_positions_upsert` (replace per wallet+chain). Empty `inserted=0` is the common case.
-
-`src/alchemy_rpc.py` retries HTTP 429/5xx/timeouts with `Retry-After`. Exhausted retries raise `AlchemyTransientError`: flag stays pending, no `has_*_error`. Permanent errors still set `has_*_error` and block downstream triggers.
-
-Design / business rationale: [TOKEN_CONTRACTS_DISCOVERY_ALCHEMY.md](./TOKEN_CONTRACTS_DISCOVERY_ALCHEMY.md). Deleted split workers: [DEPRECATION.md](./DEPRECATION.md). 15-day LP refresh still pending: [PENDING_LP_POSITIONS.md](./PENDING_LP_POSITIONS.md).
-
-```mermaid
-flowchart LR
-  claimWt[Claim_any_pending_stage]
-  contracts[getTokenBalances]
-  portfolio[portfolio_calc]
-  lp[nft_plus_classic_lp]
-  claimWt --> contracts --> portfolio --> lp
-```
-
 ## Reference-data workers
 
-`dune_queries_import`, `token_prices_import`, and `erc8257_tools_import` do **not** use claim / `next_eligible_at`.
+`dune_queries_import` and `erc8257_tools_import` do **not** use claim / `next_eligible_at`.
 
 **Dune queries:** For each of cex / mixers / bridges / ofac_sanction — paginated Dune fetch → fail task if zero rows → upsert in chunks (`UPSERT_CHUNK_SIZE`) via the matching `wallets.*_upsert` RPC. Tasks continue on failure; job exit 1 if any failed.
-
-**Token prices:** Load chain `subdomain_*` → distinct unpriced ERC-20s (`DISTINCT ON` chain+contract) → cache TTL → DexScreener → CoinGecko → `token_prices_upsert` (deduped PK) → per-chain `apply_prices` → `mark_price_misses` for unresolved contracts → final `apply_prices`.
 
 **ERC-8257 tools:** `GET /api/stats` watermark vs `erc_8257.sync_state` → if changed (or `FORCE_FULL_SYNC`), dump active+deregistered from agenttoolindex → `erc_8257.tools_upsert` (full catalog). Schedule `0 4 * * *` UTC.
 
@@ -189,10 +154,6 @@ flowchart LR
   upsertMix --> mixTable[wallets.mixer_addresses]
   upsertBr --> brTable[wallets.bridge_addresses]
   upsertOfac --> ofacTable[wallets.ofac_sanction_addresses]
-  ghaPrices[GHA_token_prices] --> dexCg[Dex_CoinGecko]
-  dexCg --> upsertPrices["token_prices_upsert"]
-  upsertPrices --> applyPos["apply_prices"]
-  upsertPrices --> markMiss["mark_price_misses"]
   gha8257[GHA_erc8257_tools] --> ati[agenttoolindex]
   ati --> upsert8257["erc_8257.tools_upsert"]
   upsert8257 --> tools8257[erc_8257.tools]
@@ -249,7 +210,7 @@ Secrets: env name = `llm.llm_provider.secret` (Groq → `GROQ`, NVIDIA → `NVID
 
 | Limit | Value |
 |---|---|
-| GHA `timeout-minutes` | 360 (claim workers / token-prices), 90 (dune queries) |
+| GHA `timeout-minutes` | 360 (claim workers), 90 (dune queries) |
 | `MAX_RUNTIME_SECONDS` | 19800 (~5.5h) — soft stop inside claim / enrich `job.py` |
 | Postgres `statement_timeout` | 300s |
 | HTTP client timeout | ~10s (daily), 30s client on owner monthly with per-call 5s `latest` / 10s historical / 15s Alchemy, ~120s (Dune), **120s** (AI classifier LLM read) |
@@ -279,16 +240,14 @@ workers/<name>/
     ├── query.py        # balance+nonce (daily, monthly)
     ├── origin.py       # binary-search first activity (origin only)
     ├── dune.py         # Dune HTTP client (dune queries)
-    ├── dexscreener.py / coingecko.py  # token_prices_import
-    ├── nft_lp.py / classic_lp.py / pricing.py / univ3_math.py  # LP discovery
     ├── resolve.py / handlers / scrape   # URI resolve (reprocess imports via sys.path)
     ├── rpc.py
     ├── alchemy.py
-    ├── networks.py     # 8-chain public RPC list (or LP NFPM map)
+    ├── networks.py     # 8-chain public RPC list
     └── address.py
 ```
 
-`owner_wallet_monthly` also has `scripts/check_pending.py` and `scripts/compare_smoke.py`, plus `src/backoff.py` for the Alchemy `Retry-After` client shared by both lanes. `wallet_holdings_discovery` uses Alchemy Token API + `eth_call` / Multicall3 (httpx) via `alchemy_rpc.py`. `agent_uri_reprocess` does not duplicate resolve/handlers — it adds claim SQL for errors/refresh and imports the sibling resolve package.
+`owner_wallet_monthly` also has `scripts/check_pending.py` and `scripts/compare_smoke.py`, plus `src/backoff.py` for the Alchemy `Retry-After` client shared by both lanes. `agent_uri_reprocess` does not duplicate resolve/handlers — it adds claim SQL for errors/refresh and imports the sibling resolve package.
 
 ## CI env defaults (workflows)
 
@@ -297,10 +256,6 @@ workers/<name>/
 | daily | 20 | 200 | 7200 |
 | owner monthly | lane `monthly` 20 / lane `origin` 4 (`ALCHEMY_MAX_INFLIGHT` 8) | 200 / 50 | 7200 |
 | dune queries | n/a | n/a | n/a |
-| token prices | n/a | n/a | n/a |
-| holdings discovery | 4 | 15 | 7200 |
-| activity flows 15d | 1 | 20 | 7200 |
-| funding transfers | 1 | 20 | 7200 |
 | agent URI resolve | 4 | 20 | n/a |
 | agent URI reprocess | 4 | 20 | n/a |
 | AI agent classifier | 1 | 20 | n/a |
@@ -309,7 +264,7 @@ workers/<name>/
 | HUMI reason publisher | 16 | 500 | 7200 |
 | agent series export | 16 per lane | 500 | 7200 |
 
-Secrets: `SUPABASE_DB_URL` (required), `ALCHEMY_KEY` (balance/nonce), `ALCHEMY_FREE_KEY` (holdings discovery), `ETHERSCAN_API_KEY` / `ALCHEMY_ACTIVITY_KEY_1` / `ALCHEMY_ACTIVITY_KEY_2` / `ANKR_API_KEY` / OKX HMAC for activity flows, `ETHERSCAN_FUNDING_KEY` / `BLOCKSCOUT_FUNDING_KEY` / `ANKR_FUNDING_KEY` for funding transfers (do not reuse 15d Etherscan/Ankr keys), `DUNE_KEY`, `COINGECKO_KEY`, `PINATA_GATEWAY` / `SCRAPING_ANT_KEY`, `GROQ`, and `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` for the two Storage workers (HUMI reason publisher and agent series export), the only ones that talk to the Storage API and not just Postgres. Daily sets `WORKER_ID` from the matrix.
+Secrets: `SUPABASE_DB_URL` (required), `ALCHEMY_KEY` (balance/nonce), `DUNE_KEY`, `PINATA_GATEWAY` / `SCRAPING_ANT_KEY`, `GROQ`, and `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` for the two Storage workers (HUMI reason publisher and agent series export), the only ones that talk to the Storage API and not just Postgres. Daily sets `WORKER_ID` from the matrix.
 
 ## On-demand backfill (orchestrator)
 
@@ -331,9 +286,8 @@ See [PROCESSES.md](./PROCESSES.md) #13 and [`workers/on_demand_backfill/README.m
 ## Related docs
 
 - [PROCESSES.md](./PROCESSES.md) — process catalog
-- [PENDING_LP_POSITIONS.md](./PENDING_LP_POSITIONS.md) — LP 15-day refresh (pending)
 - [SUPABASE.md](./SUPABASE.md) — columns, RPCs, monitoring SQL (wallets + URI)
 - [OPS.md](./OPS.md) — operations / stuck states / URI runbook
 - [DEPRECATION.md](./DEPRECATION.md) — ethos-enrich absorbed; token-activity probe/enrich removed
 - [AGENTS.md](../AGENTS.md) — agent entry point
-- Worker READMEs: `agent_uri_resolve`, `agent_uri_reprocess`, `on_demand_backfill`, `wallet_activity_flows`
+- Worker READMEs: `agent_uri_resolve`, `agent_uri_reprocess`, `on_demand_backfill`

@@ -18,7 +18,7 @@ Entry point for AI agents (and humans) changing GitHub Actions batch workers.
 
 ## What this repo is
 
-**Python 3.12** batch jobs on **GitHub Actions**. Most claim rows from Supabase Postgres (`erc_8004.wallets` / `wallet_transactions`), query EVM chains over HTTP, save JSON, then call **inline SQL snapshot / upsert** RPCs. There are also **reference-data** workers (Dune queries, token prices), **URI ingest** workers (`uri_documents` + `agent_manifest`), **AI classification** (`web_dashboard.agents` via schema `llm`), and **on-demand backfill** (`on_demand_backfill`: Ethos history/scores + ERC-8183 + Virtual ACP + Olas Mech satellites).
+**Python 3.12** batch jobs on **GitHub Actions**. Most claim rows from Supabase Postgres (`erc_8004.wallets` / `wallet_transactions`), query EVM chains over HTTP, save JSON, then call **inline SQL snapshot / upsert** RPCs. There are also **reference-data** workers (Dune queries), **URI ingest** workers (`uri_documents` + `agent_manifest`), **AI classification** (`web_dashboard.agents` via schema `llm`), and **on-demand backfill** (`on_demand_backfill`: Ethos history/scores + ERC-8183 + Virtual ACP + Olas Mech satellites).
 
 - **Not** Edge Functions / supabase-js in the hot path
 - **Not** Cloudflare Workers for these pipelines
@@ -30,7 +30,7 @@ Same codebase is mirrored on two remotes. **Schedules must not overlap** for a g
 
 | Host | Role | Live schedules |
 |------|------|----------------|
-| [`MichBarbarian/gsa-workers`](https://github.com/MichBarbarian/gsa-workers) | Chain-heavy / multi-secret | daily, owner monthly, holdings, prices, activity, funding, dune, classifier, backfill, ethos reviews |
+| [`MichBarbarian/gsa-workers`](https://github.com/MichBarbarian/gsa-workers) | Chain-heavy / multi-secret | daily, owner monthly, dune, classifier, backfill, ethos reviews |
 | [`GlobalScoreAgent/gsa-workers`](https://github.com/GlobalScoreAgent/gsa-workers) | DB-light (DB / Storage / URI) | `agent_endpoint_liveness`, `erc8257_tools_import`, `agent_series_export`, `humi_reason_publisher`, `agent_uri_resolve`, `agent_uri_reprocess` |
 
 Local remotes: `origin` → MichBarbarian; `gsa-old` → GlobalScoreAgent. After code changes that affect DB-light workers, push **both**. `gh` / `workflow_dispatch`: use `--repo` for the host that owns that workflow.
@@ -44,16 +44,12 @@ Local remotes: `origin` → MichBarbarian; `gsa-old` → GlobalScoreAgent. After
 5. The worker README for the job you touch (`workers/<name>/README.md`)
 6. That worker’s `src/db.py` and `job.py` (code of truth)
 
-Ops / stuck wallets: [docs/OPS.md](./docs/OPS.md). Deprecations: [docs/DEPRECATION.md](./docs/DEPRECATION.md) (`ethos-enrich` absorbed by `on_demand_backfill`).  
-LP discovery is live; 15-day refresh still pending: [docs/PENDING_LP_POSITIONS.md](./docs/PENDING_LP_POSITIONS.md).  
-Token contracts + Alchemy Free design: [docs/TOKEN_CONTRACTS_DISCOVERY_ALCHEMY.md](./docs/TOKEN_CONTRACTS_DISCOVERY_ALCHEMY.md).  
-15d activity ingest: [workers/wallet_activity_flows/README.md](./workers/wallet_activity_flows/README.md) → staging `wallets.wallet_activity_transfers`. Probe/enrich census removed ([DEPRECATION.md](./docs/DEPRECATION.md)).  
-Funding first-inflows: [workers/wallet_funding_transfers/README.md](./workers/wallet_funding_transfers/README.md) → `wallets.wallet_funding_transfers` (one-shot, non-Dormant first). Do not revive Walcert Alchemy fund-origins Edge.
+Ops / stuck wallets: [docs/OPS.md](./docs/OPS.md). Deprecations: [docs/DEPRECATION.md](./docs/DEPRECATION.md) (`ethos-enrich` absorbed by `on_demand_backfill`; WAMI workers — holdings, token prices, activity flows, funding transfers — removed 2026-10-21, ADR *Deprecar WAMI y mover analisis a Walcert*).
 
 ## Hard rules
 
 1. **Eligibility** (wallet claim workers) uses `is_valid_*` + `*_next_eligible_at <= NOW()`, not legacy “status + day window” alone.
-2. **Wallet claim workers** pipeline is always claim → RPC → save → `wallet_apply_*_snapshot` → `Processed`. Do not reintroduce pg_cron for those snapshots. **Daily** snapshot writes **`erc_8004.wallet_daily_metrics`** only (`snapshot_date = CURRENT_DATE` in DB timezone, usually UTC); it does **not** update `wallet_transactions` until a rollup job exists. **Reference-data:** `dune_queries_import` (4 Dune queries → upserts, paginated + chunked); `token_prices_import` (DexScreener/CoinGecko → upsert → apply hits → `mark_price_misses`). **URI:** `agent_uri_resolve` / `agent_uri_reprocess` write `uri_documents` + `agent_manifest` directly (no snapshot RPC); do not revive Edge URI batch / `agent-process-uri` for ingest.
+2. **Wallet claim workers** pipeline is always claim → RPC → save → `wallet_apply_*_snapshot` → `Processed`. Do not reintroduce pg_cron for those snapshots. **Daily** snapshot writes **`erc_8004.wallet_daily_metrics`** only (`snapshot_date = CURRENT_DATE` in DB timezone, usually UTC); it does **not** update `wallet_transactions` until a rollup job exists. **Reference-data:** `dune_queries_import` (4 Dune queries → upserts, paginated + chunked). **URI:** `agent_uri_resolve` / `agent_uri_reprocess` write `uri_documents` + `agent_manifest` directly (no snapshot RPC); do not revive Edge URI batch / `agent-process-uri` for ingest.
 3. **Do not revive** deprecated cron jobs listed in [DEPRECATION.md](./docs/DEPRECATION.md).
 4. DB helpers are **copy-pasted** per worker (`src/db.py`). If you change reconnect/retry or claim SQL, update **all claim-based workers** unless the change is worker-specific. (`agent_uri_reprocess` reuses `agent_uri_resolve` resolve/handlers via `sys.path`.)
 5. Snapshot / upsert / index SQL changes belong in **`gsa-supabase-schema`** migrations (+ `supabase/scripts/`), then deploy to prod before relying on new worker behavior.
@@ -66,10 +62,6 @@ Funding first-inflows: [workers/wallet_funding_transfers/README.md](./workers/wa
 | `wallet_nonce_balance_daily` | `wallet-nonce-balance-daily.yml` (matrix a/b) | `wallet_apply_daily_snapshot` | `wallet_daily_metrics` (flat); **not** `wallet_transactions` yet (rollup TBD) |
 | `owner_wallet_monthly` | `owner-wallet-monthly.yml` (lanes monthly + origin) | `wallet_apply_monthly_snapshot` + `wallet_apply_owner_history_snapshot` | `wallet_owner_details` (current metrics + `first_transaction_at`). Split owner workers deleted 2026-09-16 |
 | `dune_queries_import` | `dune-queries-import.yml` | `cex` / `mixer` / `bridge` / `ofac_sanction` upserts | `wallets.cex_addresses`, `mixer_addresses`, `bridge_addresses`, `ofac_sanction_addresses` |
-| `token_prices_import` | `token-prices-import.yml` | `token_prices_upsert` + `apply_prices` + `mark_price_misses` | `wallets.token_prices` → positions |
-| `wallet_holdings_discovery` | `wallet-holdings-discovery.yml` | `wallet_token_contracts_upsert` + `wallet_token_positions_insert` + `wallet_lp_positions_upsert` | contracts + fungible positions + LP (one run per wallet). Split workers deleted 2026-09-16 |
-| `wallet_activity_flows` | `wallet-activity-flows.yml` (matrix etherscan / alchemy_k1 / bsc / xlayer; UTC 18→12) | `wallets.wallet_activity_transfers_insert` | `wallets.wallet_activity_transfers` (staging INSERT-only; claim uses `activity_flows_agent_ok`) |
-| `wallet_funding_transfers` | `wallet-funding-transfers.yml` (matrix etherscan / blockscout / bsc / xlayer) | `wallets.wallet_funding_transfers_insert` | `wallets.wallet_funding_transfers` (first ~500 incoming, INSERT-only) |
 | `agent_uri_resolve` | `agent-uri-resolve.yml` (**GSA** host) | direct SQL upsert | `uri_documents` + `agent_manifest` (ingest) |
 | `agent_uri_reprocess` | `agent-uri-reprocess.yml` (**GSA** host) | direct SQL upsert | error retry + off-chain `uri_documents` refresh |
 | `ai_agent_classifier` | `ai-agent-classifier.yml` | direct SQL | `web_dashboard.agents` AI category fields (`llm` config) |
@@ -80,15 +72,14 @@ Funding first-inflows: [workers/wallet_funding_transfers/README.md](./workers/wa
 | `humi_reason_publisher` | `humi-reason-publisher.yml` (**GSA** host) | `claim_reason_publish` / `complete_reason_publish` | Private Storage bucket `humi-reasons` → `humi/agent/{id}.json` (HUMI narrative out of `index_humi_agent`) |
 | `agent_series_export` | `agent-series-export.yml` (**GSA** host; 01:00 UTC, matrix 3 lanes) | `agent_tx_scalars_refresh` + `agent_series_claim` / `_ack` + `agent_series_cycle_open` / `_close` | Storage bucket `agent-series` → `agents/{id}.json` + `erc_8004.agent_tx_scalars` (30d tree out of the stalled `series` stage) |
 
-LP 15-day refresh worker: **not built** — see [docs/PENDING_LP_POSITIONS.md](./docs/PENDING_LP_POSITIONS.md).  
 Agent manifest **consume** (profile / feedbacks / liveness / sentinel): **not built** — keep legacy consume off until readers JOIN `uri_documents`.  
-Walcert consume of `wallet_activity_transfers` (normalize / `analyze_recent_flows` / DELETE staging): **not in this worker** — follow-up.
+WAMI workers removed (holdings / prices / activity / funding): see [docs/DEPRECATION.md](./docs/DEPRECATION.md); wallet analysis is Walcert on-demand, do not revive them.
 
 ## How to validate a change
 
-1. Local: `cd workers/<name>`, `uv sync`, `uv run python job.py` with `SUPABASE_DB_URL` (+ Alchemy / Dune / CoinGecko / `PINATA_GATEWAY` / `SCRAPING_ANT_KEY` / `GROQ` as needed). URI workers also need `uv run playwright install chromium`.
+1. Local: `cd workers/<name>`, `uv sync`, `uv run python job.py` with `SUPABASE_DB_URL` (+ Alchemy / Dune / `PINATA_GATEWAY` / `SCRAPING_ANT_KEY` / `GROQ` as needed). URI workers also need `uv run playwright install chromium`.
 2. Or GitHub Actions → workflow → **Run workflow** (`workflow_dispatch`).
-3. Logs: `Claimed batch`, reconnect/retry, snapshot failures (wallet claim), Dune tasks / chunk upserts, token-price enrich, discovery `Done wt_id=`, activity flows `Done wt_id=`, funding transfers `Done wt_id=` / `QUOTA_EXHAUSTED`, URI `Claimed agents` / `on-chain` / `Reprocess` / `Refresh`, classifier `Done agent_id=`, on-demand backfill `Step done name=` / `skipped_empty` / `Claimed history` / `Claimed satellite`, endpoint liveness `queue empty` / `Claimed batch`, Ethos reviews `Done profile_id=`, HUMI reason publisher `Batch done uploaded=` / `queue empty`, or agent series export `Scalars batch scanned=` / `Batch done uploaded=` / `Cycle as_of=`.
+3. Logs: `Claimed batch`, reconnect/retry, snapshot failures (wallet claim), Dune tasks / chunk upserts, URI `Claimed agents` / `on-chain` / `Reprocess` / `Refresh`, classifier `Done agent_id=`, on-demand backfill `Step done name=` / `skipped_empty` / `Claimed history` / `Claimed satellite`, endpoint liveness `queue empty` / `Claimed batch`, Ethos reviews `Done profile_id=`, HUMI reason publisher `Batch done uploaded=` / `queue empty`, or agent series export `Scalars batch scanned=` / `Batch done uploaded=` / `Cycle as_of=`.
 4. SQL: eligible counts in [docs/SUPABASE.md](./docs/SUPABASE.md) (wallets + URI + AI classifier sections); Ethos/8183 catch-up counts in worker README / vault Monitoreo.
 
 ## When to touch which repo
@@ -96,5 +87,5 @@ Walcert consume of `wallet_activity_transfers` (normalize / `analyze_recent_flow
 | Change | Repo |
 |---|---|
 | Claim SQL, retries, job loop, RPC clients, GHA env | **gsa-workers** |
-| `wallet_apply_*_snapshot`, Dune reference upserts (`cex`/`mixer`/`bridge`/`ofac`), token_prices / discovery upserts, `uri_documents` / `agent_manifest` indexes & helpers, triggers, `next_eligible_at` / discovery flags, `llm.*` / agent AI category columns, `ethos.claim_reviews_fetch` / watermark | **gsa-supabase-schema** |
+| `wallet_apply_*_snapshot`, Dune reference upserts (`cex`/`mixer`/`bridge`/`ofac`), `uri_documents` / `agent_manifest` indexes & helpers, triggers, `next_eligible_at`, `llm.*` / agent AI category columns, `ethos.claim_reviews_fetch` / watermark | **gsa-supabase-schema** |
 | Deploy order | Schema first (if needed) → push worker → `workflow_dispatch` |

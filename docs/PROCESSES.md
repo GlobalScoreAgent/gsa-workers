@@ -6,7 +6,7 @@ Sibling schema repo: **`gsa-supabase-schema`**.
 
 **GHA host split (2026-09-17):** schedules for #10–11 (URI), #14 (erc8257), #15 (endpoint liveness), #17 (HUMI reason), #18 (series export) run on [`GlobalScoreAgent/gsa-workers`](https://github.com/GlobalScoreAgent/gsa-workers). All other live processes keep schedules on [`MichBarbarian/gsa-workers`](https://github.com/MichBarbarian/gsa-workers). See [AGENTS.md — GHA hosts](../AGENTS.md#gha-hosts-split-2026-09-17).
 
-## Pipeline diagram (token portfolio path)
+## Pipeline diagram
 
 ```mermaid
 flowchart TB
@@ -14,17 +14,11 @@ flowchart TB
     daily[wallet_nonce_balance_daily]
     ownerMonthly["owner_wallet_monthly (lanes monthly + origin)"]
   end
-  subgraph discovery [Token_discovery]
-    holdings[wallet_holdings_discovery]
-    prices[token_prices_import]
-    activityFlows[wallet_activity_flows]
-  end
   subgraph refdata [Other_reference]
     dune[dune_queries_import]
     erc8257[erc8257_tools_import]
   end
   subgraph pending [Not_built_yet]
-    lpRefresh[wallet_lp_positions_refresh_15d]
     manifestConsume[agent_manifest_consume]
   end
   subgraph ethosApi [Ethos_API]
@@ -45,22 +39,12 @@ flowchart TB
   end
   daily --> metrics[erc_8004.wallet_daily_metrics]
   metrics -->|wallet_rollup_daily_metrics| wt[erc_8004.wallet_transactions]
-  wt --> holdings
-  holdings --> wtc[wallets.wallet_token_contracts]
-  holdings --> wtp[wallets.wallet_token_positions]
-  holdings --> wlp[wallets.wallet_lp_positions]
-  prices --> wtp
-  prices --> tpc[wallets.token_prices]
-  activityFlows --> wat[wallets.wallet_activity_transfers]
-  fundingTransfers[wallet_funding_transfers] --> wft[wallets.wallet_funding_transfers]
   dune --> cexT[wallets.cex_addresses]
   dune --> mixT[wallets.mixer_addresses]
   dune --> brT[wallets.bridge_addresses]
   dune --> ofacT[wallets.ofac_sanction_addresses]
   erc8257 --> tools8257[erc_8257.tools]
-  activityFlows --> wat
   liveness[agent_endpoint_liveness] --> aeh[erc_8004.agent_endpoint_health]
-  lpRefresh -.-> wlp
   uriResolve --> ud[erc_8004.uri_documents]
   uriResolve --> am[erc_8004.agent_manifest]
   uriReprocess --> ud
@@ -83,10 +67,6 @@ flowchart TB
 | 1 | [`wallet_nonce_balance_daily`](../workers/wallet_nonce_balance_daily/README.md) | Claim | 0/6/12/18 (matrix a/b) | `wallets` + daily flags | `wallet_apply_daily_snapshot` | `wallet_daily_metrics` (flat); rollup `wallet_rollup_daily_metrics` → `wallet_transactions` |
 | 2 | [`owner_wallet_monthly`](../workers/owner_wallet_monthly/README.md) | Claim (2 lanes) | 0/6/12/18 | lane `monthly`: monthly clock · lane `origin`: history clock | `wallet_apply_monthly_snapshot` + `wallet_apply_owner_history_snapshot` | `wallet_owner_details` current metrics + `first_transaction_at` |
 | 4 | [`dune_queries_import`](../workers/dune_queries_import/README.md) | Reference | 18th 00:00 | Dune API (4 queries) | cex/mixer/bridge/ofac upserts (chunked) | `wallets.cex_addresses` + mixer/bridge/ofac tables |
-| 5 | [`wallet_holdings_discovery`](../workers/wallet_holdings_discovery/README.md) | Claim (`wallet_transactions`) | 0/6/12/18 | any pending contracts / portfolio / LP flag + Alchemy subdomain | stage RPCs in succession | `wallet_token_contracts` + `wallet_token_positions` + `wallet_lp_positions` |
-| 7 | [`token_prices_import`](../workers/token_prices_import/README.md) | Reference | 0/6/12/18 | unpriced ERC-20s (`has_price_error`) | `token_prices_upsert` + `apply_prices` + `mark_price_misses` | `token_prices` → positions |
-| 9 | [`wallet_activity_flows`](../workers/wallet_activity_flows/README.md) | Claim (`wallet_transactions`, matrix 4) | UTC window **18:00→12:00**: cuts 1/15 00:00 + drain `18,22,2,6,10`; closed 12–18 | `is_valid_activity_flows` + `activity_flows_agent_ok` + due clock + not `Dormant_*` + address ≠ `0x0` | `wallet_activity_transfers_insert` | Staging `wallets.wallet_activity_transfers` (INSERT-only) |
-| 9b | [`wallet_funding_transfers`](../workers/wallet_funding_transfers/README.md) | Claim (`wallet_transactions`, matrix 4) | UTC window **18:00→12:00**: drain `18,0,6`; closed 12–18 | `is_valid_funding_transfers` + due clock; non-`Dormant_*` first | `wallet_funding_transfers_insert` | `wallets.wallet_funding_transfers` (first ~500 incoming, INSERT-only) |
 | 10 | [`agent_uri_resolve`](../workers/agent_uri_resolve/README.md) | Claim (agents / feedbacks) | 00:00, 12:00 | `is_uri_processed` / `is_feedback_processed` | direct SQL | `uri_documents` + `agent_manifest` |
 | 11 | [`agent_uri_reprocess`](../workers/agent_uri_reprocess/README.md) | Claim (manifest errors + docs) | 06:00, 18:00 | download errors / off-chain &gt;15d | direct SQL | retry + refresh `uri_documents` (failed refresh still stamps `fetched_at`) |
 | 12 | [`ai_agent_classifier`](../workers/ai_agent_classifier/README.md) | Claim (`web_dashboard.agents`) | 0/6/12/18 | `does_need_ai_category_process` | exact-hash copy or LLM | `ai_category_*` + `ai_category_input_hash` |
@@ -125,81 +105,6 @@ Rate limits are not errors: public endpoints fall through to the next URL, and A
 ### 4. Dune queries (reference)
 
 Four tasks per run (cex / mixers / bridges / ofac): paginated Dune fetch → fail task on empty → chunked `*_upsert`. No claim loop. Continue on per-task failure; exit 1 if any failed.
-
-### 5. Holdings discovery (contracts + portfolio + LP)
-
-**Live.** One worker claims any pending stage and runs the rest in succession in the same process. Alchemy 429 / 5xx / timeouts retry with `Retry-After`; exhausted retries leave the flag pending (`AlchemyTransientError`) instead of `has_*_error`.
-
-```
-claim (any pending stage) →
-  contracts (getTokenBalances → wallet_token_contracts_upsert) →
-  portfolio (Alchemy amounts + DeFiLlama → wallet_token_positions_insert) →
-  LP (NFT + lp_pools → wallet_lp_positions_upsert)
-```
-
-| Item | Detail |
-|---|---|
-| Flags | `does_need_discovery_contracts` / `_portfolio_discovery` / `_lp_discovery` (triggers still chain after mark_done) |
-| Destinations | `wallets.wallet_token_contracts`, `wallet_token_positions`, `wallet_lp_positions` |
-| Empty wallet | Completes OK (`inserted=0` on contracts/LP) |
-| Pricing (portfolio) | DeFiLlama only; Dex/CG stays in #7 |
-| Pricing (LP) | DeFiLlama first, then `wallets.token_prices` |
-| Workflow | `wallet-holdings-discovery.yml` (`CONCURRENCY=4`) |
-| Split token/LP discovery workers | Deleted 2026-09-16; [DEPRECATION.md](./DEPRECATION.md) |
-
-Business rationale: [TOKEN_CONTRACTS_DISCOVERY_ALCHEMY.md](./TOKEN_CONTRACTS_DISCOVERY_ALCHEMY.md). Worker README: [`wallet_holdings_discovery`](../workers/wallet_holdings_discovery/README.md). LP extractors: Ethereum / Base / Arbitrum UniV3 NFT; BNB Pancake V3 NFT; Base Aerodrome classic via `lp_pools`. 15-day LP refresh still pending: [PENDING_LP_POSITIONS.md](./PENDING_LP_POSITIONS.md). 429-row reset: schema `20260916183128_wallet_discovery_reset_alchemy_429.sql`, applied in prod 2026-09-16 (9 210 contracts + 8 339 portfolio requeued).
-
-### 7. Token prices enrich
-
-Distinct unpriced ERC-20s → cache TTL → DexScreener → CoinGecko → upsert spot cache → apply priced hits → **mark Dex+CG misses** as known-unknown (`quality_reason=unknown_token_dex_coingecko_defillama`, `has_price_error=false`) so they leave the enrich queue.
-
-### 9. Wallet activity flows (15d staging ingest)
-
-**Live (schema must be applied first).** Matrix 4 cells by provider group. Active only in UTC window **18:00→12:00** (closed **12:00–18:00**): cron cuts days **1 and 15** 00:00 UTC plus drain at **18,22,2,6,10** until the claim queue is empty (`exit 0`). Soft-stop if a run crosses into the closed window. INSERT-only into `wallets.wallet_activity_transfers`. Does not compute Walcert metrics or DELETE staging.
-
-```
-claim (activity_flows_agent_ok, no Dormant_*, exclude 0x0, no FIFO ORDER BY) →
-  adapter (Etherscan / Alchemy / Ankr / OKX Data API) →
-  INSERT staging ON CONFLICT DO NOTHING →
-  next calendar cut (day 15 or day 1 next month, UTC)
-```
-
-| Item | Detail |
-|---|---|
-| Groups | `etherscan` (ETH/Arb/Polygon/Celo); `alchemy_k1` (Base/Gnosis); `bsc` (Alchemy key_2 on day-1 cut, Ankr on day-15 cut with `pageSize=1000`; **through 2026-08-31 UTC** leftover day-15 BSC uses Alchemy key_2); `xlayer` (OKX Data API) |
-| Schedule | UTC **18:00→12:00** (closed 12–18); soft-stop + `ignore_schedule_window` |
-| Claim gate | Denormalized `activity_flows_agent_ok` (index `idx_wallet_transactions_activity_flows_claim`); excludes `0x0`; logs `claim_ms` / `save_ms` |
-| Window | Last ~15 days; native + ERC-20/721/1155 |
-| Empty wallet | Completes OK with no INSERT |
-| Gnosis timestamps | Worker `eth_getBlockByNumber` + `erc_8004.block_cache` (Alchemy without `withMetadata`) |
-| Secrets | `ETHERSCAN_API_KEY`, `ALCHEMY_ACTIVITY_KEY_1`, `ALCHEMY_ACTIVITY_KEY_2` (dedicated Free app, not `ALCHEMY_FREE_KEY`), `ANKR_API_KEY`, OKX HMAC trio |
-| Workflow | `wallet-activity-flows.yml` |
-| Follow-up | Walcert `analyze_recent_flows` consume + DELETE staging — **not this worker** |
-
-Worker README: [`wallet_activity_flows`](../workers/wallet_activity_flows/README.md). Schema: `gsa-supabase-schema` `20260813010000_wallet_activity_transfers.sql` + `20260906060059_activity_flows_agent_ok_claim.sql`. Probe/enrich census: [DEPRECATION.md](./DEPRECATION.md).
-
-### 9b. Wallet funding transfers (first-inflow ingest)
-
-**Live (schema must be applied first).** Matrix 4 cells. Active only in UTC window **18:00→12:00** (closed **12:00–18:00**): cron drain at **18,0,6** UTC + `workflow_dispatch` until the queue is empty or a provider quota trips (`exit 0`). Soft-stop if a run crosses into the closed window. INSERT-only into `wallets.wallet_funding_transfers`. Does **not** run `analyze_fund_origins` or write `walcert.wallet_fund_origins`.
-
-```
-claim (all mapped chains; non-Dormant_* first) →
-  adapter (Etherscan / Blockscout / Ankr / OKX) →
-  cap ~500 incoming native+ERC-20 →
-  INSERT ON CONFLICT DO NOTHING →
-  next_eligible = infinity
-```
-
-| Item | Detail |
-|---|---|
-| Groups | `etherscan` (ETH/Arb/Polygon/Celo); `blockscout` (Base/Gnosis); `bsc` (Ankr); `xlayer` (OKX Data API) |
-| Window | Genesis → now; oldest incoming |
-| Empty wallet | Completes OK with no INSERT |
-| Quota | Daily Etherscan/Blockscout or monthly Ankr → unlock batch, stop group, exit 0 |
-| Secrets | `ETHERSCAN_FUNDING_KEY`, `BLOCKSCOUT_FUNDING_KEY`, `ANKR_FUNDING_KEY` (not the 15d keys), OKX HMAC trio |
-| Workflow | `wallet-funding-transfers.yml` |
-
-Worker README: [`wallet_funding_transfers`](../workers/wallet_funding_transfers/README.md). Schema: `gsa-supabase-schema` `20260826010000_wallet_funding_transfers.sql`.
 
 ### 10. Agent URI resolve (ingest)
 
@@ -247,10 +152,7 @@ Worker README: [`ai_agent_classifier`](../workers/ai_agent_classifier/README.md)
 
 | Doc / work | Status |
 |---|---|
-| [PENDING_LP_POSITIONS.md](./PENDING_LP_POSITIONS.md) | Discovery **live**; only **15-day refresh** worker remains |
-| Walcert consume of `wallet_activity_transfers` | Follow-up — normalize / `analyze_recent_flows` / DELETE staging; do not retarget in this worker |
 | Agent manifest **consume** | Not built — rewrite SQL readers to JOIN `uri_documents`, then GHA orchestrator; keep legacy pg_cron consume **off** |
-| Funding analyze / WAMI Origins | Ingest live; `analyze_fund_origins` / `walcert.wallet_fund_origins` not in v1 |
 
 ### 13. On-demand backfill (Ethos + ERC-8183 + Virtual ACP + Olas Mech)
 
@@ -404,9 +306,7 @@ Worker README: [`agent_series_export`](../workers/agent_series_export/README.md)
 | `SUPABASE_DB_URL` | All |
 | `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` | HUMI reason publisher (private bucket) and agent series export (public bucket) |
 | `ALCHEMY_KEY` | Balance/nonce claim workers (fallback RPC) |
-| `ALCHEMY_FREE_KEY` | Holdings discovery (`wallet_holdings_discovery`) |
 | `DUNE_KEY` | Dune queries import |
-| `COINGECKO_KEY` | Token prices enrich |
 | `PINATA_GATEWAY` | URI resolve / reprocess (optional; Pinata dedicated Gateway Key — last IPFS fallback after public gateways) |
 | `SCRAPING_ANT_KEY` | URI resolve / reprocess (optional HTTP fallback) |
 | `GROQ` | AI agent classifier (Groq; name matches `llm.llm_provider.secret`) |

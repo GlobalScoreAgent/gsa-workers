@@ -1,8 +1,8 @@
 # Supabase / Postgres interaction
 
-Workers connect with **direct Postgres** via `SUPABASE_DB_URL` (`psycopg`), not supabase-js or Edge Functions. Schema of truth for wallet claim jobs: `erc_8004`. Reference-data imports (Dune queries, token prices) use schema `wallets`. ERC-8257 tools import uses schema `erc_8257`. URI ingest uses `erc_8004.uri_documents` + `erc_8004.agent_manifest`. AI agent classifier uses `web_dashboard.agents` + schema `llm` + `web_dashboard.agent_ai_categories`.
+Workers connect with **direct Postgres** via `SUPABASE_DB_URL` (`psycopg`), not supabase-js or Edge Functions. Schema of truth for wallet claim jobs: `erc_8004`. Reference-data imports (Dune queries) use schema `wallets`. ERC-8257 tools import uses schema `erc_8257`. URI ingest uses `erc_8004.uri_documents` + `erc_8004.agent_manifest`. AI agent classifier uses `web_dashboard.agents` + schema `llm` + `web_dashboard.agent_ai_categories`.
 
-Schema migrations and snapshot/upsert SQL live in the sibling repo **`gsa-supabase-schema`** (functions `wallet_apply_*_snapshot`, Dune reference / token_prices / discovery upserts, URI indexes + helpers, triggers). Code of truth for claim/save SQL in this repo: each worker’s `src/db.py`. Process catalog: [PROCESSES.md](./PROCESSES.md). Live token/LP fill is **`wallet_holdings_discovery`** (the three split workers were deleted 2026-09-16). LP refresh (15d) still pending: [PENDING_LP_POSITIONS.md](./PENDING_LP_POSITIONS.md).
+Schema migrations and snapshot/upsert SQL live in the sibling repo **`gsa-supabase-schema`** (functions `wallet_apply_*_snapshot`, Dune reference upserts, URI indexes + helpers, triggers). Code of truth for claim/save SQL in this repo: each worker’s `src/db.py`. Process catalog: [PROCESSES.md](./PROCESSES.md). WAMI token/LP/prices/activity/funding workers were removed 2026-10-21 (see [DEPRECATION.md](./DEPRECATION.md)); their `wallets.*` tables and RPCs were dropped in the schema repo.
 
 ## Connection
 
@@ -20,20 +20,13 @@ Schema migrations and snapshot/upsert SQL live in the sibling repo **`gsa-supaba
 | `erc_8004.wallets` | Claim queue, JSON payloads, status, `next_eligible_at` |
 | `erc_8004.chains` | Active chains + `subdomain_alchemy` for Alchemy fallback |
 | `erc_8004.wallet_daily_metrics` | Daily flat nonce/balance per wallet×chain×date (written by daily snapshot). `snapshot_date` = Postgres `CURRENT_DATE` (DB timezone, typically UTC). |
-| `erc_8004.wallet_transactions` | Read model: current nonce/balance + 30d history + category. Updated by **`wallet_rollup_daily_metrics`** (not by daily snapshot). Claim queue for token/LP discovery + **activity flows 15d** + **funding transfers**. |
+| `erc_8004.wallet_transactions` | Read model: current nonce/balance + 30d history + category. Updated by **`wallet_rollup_daily_metrics`** (not by daily snapshot). |
 | `erc_8004.chain_nonces` | Per-chain daily nonce totals (not written by current daily snapshot) |
 | `erc_8004.wallet_owner_details` | Monthly + origin snapshots: owner metrics / first tx |
 | `wallets.cex_addresses` | CEX address reference list (Dune import) |
 | `wallets.mixer_addresses` | Mixer / Tornado pool addresses (Dune) |
 | `wallets.bridge_addresses` | Bridge label addresses (Dune) |
 | `wallets.ofac_sanction_addresses` | OFAC sanction addresses (Dune) |
-| `wallets.token_prices` | Spot USD cache PK `(chain_id, contract)`; Dex/CG enrich |
-| `wallets.wallet_token_contracts` | ERC-20 contracts with balance > 0 per wallet+chain (discovery) |
-| `wallets.wallet_token_positions` | Fungible positions (native=`'native'` + ERC-20); initial INSERT discovery |
-| `wallets.lp_pools` | Classic LP scan targets (`active` toggle); seeded Aerodrome V1 on Base |
-| `wallets.wallet_lp_positions` | LP snapshots (UniV3 NFT + classic); PK `(wallet_id, chain_id, position_kind, nft_manager, token_id, pool)`; FKs to `wallets`/`chains`; `calculated_at` for future 15d refresh |
-| `wallets.wallet_nft_contracts` | NFT collections touched by activity scan (`erc721`/`erc1155`) |
-| `wallets.wallet_token_transfers` | Wallet-centric ERC-20/721(/1155) transfer rows from activity scan |
 | `erc_8004.uri_documents` | Canonical resolved JSON by `uri_hash = md5(uri)` (UNIQUE); TTL `expires_at` (~15d write); `fetched_at` / `document` / `status` |
 | `erc_8004.agent_manifest` | Envelope per agent/feedback (`uri_document_id` FK); `source`, revoke fields, `has_download_error`, `reprocess_count`, `is_processed` — **no** `data`/`url` columns |
 | `erc_8004.agents` | Queue via `is_uri_processed` + `agent_uri_raw` |
@@ -106,116 +99,6 @@ RPCs `erc_8004.agent_series_claim(batch, as_of, worker_id, stale_seconds)` → `
 Destinations: public bucket `agent-series` (`agents/{agent_id}.json`) and table `erc_8004.agent_tx_scalars` (`nonce`, deltas 7/15/30, `first_nonce`, `nonce_history_span_days`, `as_of`).
 
 `document` comes back `NULL` for agents with no valid wallet or no `wallet_transactions` rows; they are acked without an upload so the cycle can close.
-
-### Token contracts discovery (`wallet_transactions`)
-
-Live consumer: **`wallet_holdings_discovery`** (stage 1). Split worker schedule is off.
-
-| Column | Role |
-|---|---|
-| `does_need_discovery_contracts` | `NULL`/`true` = pending; `false` = attempted (success or error) |
-| `discovery_contracts_claimed_at` | In-flight claim lock; after attempt kept as last-attempt timestamp (`NOW()`) |
-| `discovery_contracts_claimed_by` | Audit id `wallet_holdings_discovery/gha:{WORKER_ID}` (legacy prefix `wallet_token_contracts_discovery/gha:`) |
-| `has_discovery_contracts_error` | `TRUE` if last attempt failed |
-| `discovery_contracts_message_error` | Last error text; `NULL` on success |
-
-Eligibility: flag pending **and** `chains.subdomain_alchemy` non-empty. New `wallet_transactions` inserts get the flag from trigger `trg_wallet_transactions_discovery_flag_bi`. On process error the worker sets flag `FALSE` and fills the error columns so the queue does not re-claim the same row forever. **HTTP 429 / timeouts / 5xx are not this path** — `wallet_holdings_discovery` leaves the flag pending (`release_transient`).
-
-### Token portfolio discovery (`wallet_transactions`)
-
-Live consumer: **`wallet_holdings_discovery`** (stage 2, same run after contracts OK).
-
-| Column | Role |
-|---|---|
-| `does_need_portfolio_discovery` | Pending after contract discovery done |
-| `portfolio_discovery_claimed_at` | Claim lock / last attempt |
-| `portfolio_discovery_claimed_by` | Audit id `wallet_holdings_discovery/gha:{WORKER_ID}` (legacy prefix `wallet_token_portfolio_discovery/gha:`) |
-| `has_portfolio_discovery_error` | Last attempt failed |
-| `portfolio_discovery_message_error` | Error text |
-
-Trigger `trg_wallet_transactions_portfolio_flag_bu` sets portfolio pending when contract discovery completes successfully.
-
-### LP positions discovery (`wallet_transactions`)
-
-Live consumer: **`wallet_holdings_discovery`** (stage 3, same run after portfolio OK).
-
-| Column | Role |
-|---|---|
-| `does_need_lp_discovery` | Pending after portfolio discovery done |
-| `lp_discovery_claimed_at` | Claim lock / last attempt |
-| `lp_discovery_claimed_by` | Audit id `wallet_holdings_discovery/gha:{WORKER_ID}` (legacy prefix `wallet_lp_positions_discovery/gha:`) |
-| `has_lp_discovery_error` | Last attempt failed |
-| `lp_discovery_message_error` | Error text |
-
-Trigger `trg_wallet_transactions_lp_flag_bu` sets LP pending when portfolio discovery completes successfully.
-
-### Activity flows 15d (`wallet_transactions` claim → staging)
-
-| Column | Role |
-|---|---|
-| `is_valid_activity_flows` | Chain is in the 15d map (ETH, Arb, Polygon, Celo, Base, Gnosis, BSC, X Layer) |
-| `activity_flows_agent_ok` | Denormalized valid-agent gate (`agent_wallet_tx` × `agents.valid`). Triggers keep it fresh; claim uses this instead of EXISTS |
-| `activity_flows_next_eligible_at` | Claim clock. Success → next UTC cut (day 15 00:00, or day 1 next month). New inserts `-infinity` via BI |
-| `activity_flows_claimed_at` / `claimed_by` | Soft lock (`CLAIM_STALE_SECONDS`) |
-| `activity_flows_completed_at` | Last successful ingest (empty window still counts) |
-| `has_activity_flows_error` / `activity_flows_message_error` | Last failure (requeue +1h) |
-
-Eligibility: `is_valid_activity_flows` + `activity_flows_agent_ok` + due clock + `wallet_category NOT LIKE 'Dormant_%'` + `lower(wallets.address) <> 0x0` (null address excluded — Alchemy transfer pagination OOMs the runner). Index: `idx_wallet_transactions_activity_flows_claim`. No FIFO `ORDER BY` on claim (full-set 15d drain). Schedule: UTC window **18:00→12:00** (closed 12–18).
-
-```sql
-SELECT
-  count(*) FILTER (WHERE is_valid_activity_flows IS TRUE) AS seeded,
-  count(*) FILTER (
-    WHERE is_valid_activity_flows IS TRUE
-      AND COALESCE(wallet_category, '') LIKE 'Dormant_%'
-  ) AS dormant,
-  count(*) FILTER (
-    WHERE is_valid_activity_flows IS TRUE
-      AND COALESCE(wallet_category, '') NOT LIKE 'Dormant_%'
-  ) AS non_dormant,
-  count(*) FILTER (
-    WHERE is_valid_activity_flows IS TRUE
-      AND activity_flows_agent_ok IS TRUE
-      AND activity_flows_next_eligible_at IS NOT NULL
-      AND activity_flows_next_eligible_at <= NOW()
-      AND COALESCE(wallet_category, '') NOT LIKE 'Dormant_%'
-  ) AS due_now,
-  count(*) FILTER (WHERE has_activity_flows_error IS TRUE) AS errors,
-  count(*) FILTER (WHERE activity_flows_completed_at IS NOT NULL) AS completed
-FROM erc_8004.wallet_transactions;
-```
-
-`dormant` rises and `non_dormant` falls as `wallet_tx_rollup` reclassifies — expected. Baseline 2026-08-13: seeded 294 948 / dormant 77 159 / non_dormant 217 789. Same snapshot is required in skill `gsa-worker-health`. Through 2026-08-31 UTC leftover BSC due rows drain via Alchemy key_2 (Ankr Freemium exhausted 2026-08-24).
-
-Staging table: `wallets.wallet_activity_transfers` via `wallets.wallet_activity_transfers_insert`. PK `(wallet_id, chain_id, unique_id)`. `chain_id` is `erc_8004.chains.id`. Migrations: `20260813010000_wallet_activity_transfers.sql`, `20260906060059_activity_flows_agent_ok_claim.sql`. Schema doc: `gsa-supabase-schema/supabase/docs/wallet-activity-transfers.md`.
-
-### Funding transfers (first inflows)
-
-| Column | Role |
-|---|---|
-| `is_valid_funding_transfers` | Chain in funding map (same 8 EVM ids as activity) |
-| `funding_transfers_next_eligible_at` | Claim clock. Success → `infinity`. New inserts `-infinity` via BI |
-| `funding_transfers_claimed_at` / `claimed_by` | Soft lock (`CLAIM_STALE_SECONDS`) |
-| `funding_transfers_completed_at` | Last successful ingest (empty still counts) |
-| `has_funding_transfers_error` / `funding_transfers_message_error` | Last failure (requeue +1h) |
-
-Claim prefers `wallet_category NOT LIKE 'Dormant_%'`. Quota exhausted unlocks the in-flight batch.
-
-```sql
-SELECT
-  count(*) FILTER (WHERE is_valid_funding_transfers IS TRUE) AS seeded,
-  count(*) FILTER (
-    WHERE is_valid_funding_transfers IS TRUE
-      AND COALESCE(wallet_category, '') NOT LIKE 'Dormant_%'
-      AND funding_transfers_next_eligible_at <= NOW()
-  ) AS due_active,
-  count(*) FILTER (WHERE funding_transfers_completed_at IS NOT NULL) AS completed
-FROM erc_8004.wallet_transactions;
-```
-
-Table: `wallets.wallet_funding_transfers` via `wallets.wallet_funding_transfers_insert`. Migration: `20260826010000_wallet_funding_transfers.sql`.
-
-Probe/enrich census columns were dropped. Do not revive them ([DEPRECATION.md](./DEPRECATION.md)).
 
 ### URI ingest (`uri_documents` / `agent_manifest`)
 
@@ -315,38 +198,9 @@ Canonical SQL / migrations: `gsa-supabase-schema/supabase/migrations/` and `supa
 | dune queries | `wallets.mixer_addresses_upsert(p_rows jsonb)` | `wallets.mixer_addresses` |
 | dune queries | `wallets.bridge_addresses_upsert(p_rows jsonb)` | `wallets.bridge_addresses` |
 | dune queries | `wallets.ofac_sanction_addresses_upsert(p_rows jsonb)` | `wallets.ofac_sanction_addresses` |
-| token prices | `token_prices_upsert` + `apply_prices` + `mark_price_misses` | Spot cache; apply hits; mark Dex/CG misses as known-unknown |
-| token contracts discovery | `wallets.wallet_token_contracts_upsert(p_wallet_id, p_chain_id, p_rows jsonb)` | `wallets.wallet_token_contracts` (insert/update only; no delete) |
-| token portfolio discovery | `wallets.wallet_token_positions_insert(p_wallet_id, p_chain_id, p_rows jsonb)` | `wallets.wallet_token_positions` (INSERT … ON CONFLICT DO NOTHING) |
-| LP positions discovery | `wallets.wallet_lp_positions_upsert(p_wallet_id, p_chain_id, p_rows jsonb)` | `wallets.wallet_lp_positions` (DELETE+INSERT replace per wallet+chain; stamps `calculated_at`) |
-| activity flows 15d | `wallets.wallet_activity_transfers_insert(p_rows jsonb)` | Staging `wallets.wallet_activity_transfers` (INSERT … ON CONFLICT DO NOTHING) |
-| funding transfers | `wallets.wallet_funding_transfers_insert(p_rows jsonb)` | Staging `wallets.wallet_funding_transfers` (INSERT … ON CONFLICT DO NOTHING) |
 | endpoint liveness 15d | `agent_endpoint_health_sync` / `_claim` / `_complete` / `_complete_batch` | `erc_8004.agent_endpoint_health` |
 
 Dune upserts: JSON arrays; empty array raises. Worker sends **chunks** (default 5000). Scripts: `wallets_cex_addresses_upsert.sql`, `wallets_dune_reference_tables.sql`. Docs: `gsa-supabase-schema/supabase/docs/wallets-dune-reference-tables.md`.
-
-Token prices enrich upserts `{chain_id, contract_address, symbol?, price_usd?, source, liquidity_usd?}` (`source` = dexscreener|coingecko|miss). Upsert dedupes PK in SQL (`DISTINCT ON`). Platforms from `chains.subdomain_*`. After Dex+CG miss: `mark_price_misses` sets `has_price_error=false` and `quality_reason=unknown_token_dex_coingecko_defillama`. Scripts: `chains_price_subdomains.sql`, `wallets_token_prices_spot_cache.sql`, `wallet_token_positions_mark_price_misses.sql`.
-
-Discovery `p_rows` is a JSON array of `{contract_address, source?}`. Empty array is a no-op (does not delete). Script: `gsa-supabase-schema/supabase/scripts/wallet_token_contracts_upsert_no_delete.sql`.
-
-Portfolio positions `p_rows` include `contract_address` (`'native'` or `0x…`), amounts, `price_usd`, `has_price_error`, `token_quality` (`priced`|`unpriced`|`spam`), `quality_reason`, etc. Initial prices from DeFiLlama; Dex/CG fill via `token_prices_import`. Script: `gsa-supabase-schema/supabase/scripts/wallet_token_portfolio_discovery.sql`. Quality columns: `gsa-supabase-schema/supabase/scripts/wallet_token_positions_quality.sql`. Reset / re-queue: `wallet_token_portfolio_discovery_reset.sql` (TRUNCATE + re-flag; required because insert is DO NOTHING).
-
-LP positions `p_rows` include `position_kind` (`nft`|`classic_lp`|`classic_staked`), pool/NFT keys, amounts, USD, `group_id`. Classic targets: `wallets.lp_pools`. Classic PK sentinels: `nft_manager_address=''`, `token_id=-1`. Scripts: `wallet_lp_positions_discovery.sql`, `wallet_lp_positions_pk_fk.sql`. Reset: `wallet_lp_positions_discovery_reset.sql` (ask before running). Schema docs: `gsa-supabase-schema/supabase/docs/wallet-lp-positions-discovery.md`.
-
-### Progress vs LP row count
-
-Most claimed wallets finish with **zero** LP rows (no NFT / no classic balance, or chain without extractor coverage). Prefer monitoring **attempted / pending / errors**, not only `count(*)` on `wallet_lp_positions`:
-
-```sql
-SELECT
-  count(*) FILTER (WHERE does_need_lp_discovery IS DISTINCT FROM FALSE) AS pending,
-  count(*) FILTER (WHERE does_need_lp_discovery IS FALSE
-                   AND COALESCE(has_lp_discovery_error, FALSE) IS NOT TRUE) AS done_ok,
-  count(*) FILTER (WHERE has_lp_discovery_error IS TRUE) AS errors,
-  count(*) FILTER (WHERE lp_discovery_claimed_at IS NOT NULL
-                   AND does_need_lp_discovery IS DISTINCT FROM FALSE) AS in_flight
-FROM erc_8004.wallet_transactions;
-```
 
 ## Triggers (schema repo)
 
@@ -355,11 +209,6 @@ When `is_valid_*` becomes true, DB triggers set the matching `next_eligible_at` 
 - `trg_wallet_daily_next_eligible_at`
 - `trg_wallet_monthly_next_eligible_at`
 - `trg_wallet_history_next_eligible_at`
-- `trg_wallet_transactions_discovery_flag_bi` (sets `does_need_discovery_contracts` on insert from `chains.subdomain_alchemy`)
-- `trg_wallet_transactions_portfolio_flag_bu` (sets `does_need_portfolio_discovery` when contract discovery completes)
-- `trg_wallet_transactions_lp_flag_bu` (sets `does_need_lp_discovery` when portfolio discovery completes)
-- `trg_wallet_transactions_activity_flows_bi` (sets `is_valid_activity_flows` + `-infinity` clock on insert for mapped EVM chains)
-- `trg_awt_refresh_activity_flows_agent_ok` / `trg_agents_refresh_activity_flows_agent_ok` (keep `activity_flows_agent_ok` in sync)
 
 ## Claim pattern
 
@@ -423,18 +272,6 @@ SELECT COUNT(*) FROM erc_8004.wallets
 WHERE is_valid_import_current_nonce_and_balance_monthly IS TRUE
   AND import_wallet_history_next_eligible_at <= NOW();
 
--- token contracts discovery
-SELECT COUNT(*) FROM erc_8004.wallet_transactions wt
-JOIN erc_8004.chains c ON c.id = wt.chain_id
-WHERE wt.does_need_discovery_contracts IS DISTINCT FROM FALSE
-  AND c.subdomain_alchemy IS NOT NULL
-  AND btrim(c.subdomain_alchemy) <> ''
-  AND (
-    wt.discovery_contracts_claimed_at IS NULL
-    OR wt.discovery_contracts_claimed_at < NOW() - interval '2 hours'
-  );
-```
-
 ### Stuck Completed (snapshot not applied)
 
 ```sql
@@ -493,167 +330,6 @@ SELECT 'bridges', count(*), max(updated_at) FROM wallets.bridge_addresses
 UNION ALL
 SELECT 'ofac', count(*), max(updated_at) FROM wallets.ofac_sanction_addresses;
 ```
-
-### Token prices (`wallets.token_prices`)
-
-```sql
-SELECT source, count(*), count(*) FILTER (WHERE price_usd IS NOT NULL) AS with_price
-FROM wallets.token_prices
-GROUP BY 1;
-
-SELECT id, subdomain_coingecko, subdomain_dexscreener
-FROM erc_8004.chains
-ORDER BY id;
-```
-
-### Holdings discovery (unified, live)
-
-```sql
-SELECT
-  count(*) FILTER (WHERE does_need_discovery_contracts IS DISTINCT FROM FALSE) AS contracts_pending,
-  count(*) FILTER (WHERE does_need_portfolio_discovery IS DISTINCT FROM FALSE) AS portfolio_pending,
-  count(*) FILTER (WHERE does_need_lp_discovery IS DISTINCT FROM FALSE) AS lp_pending,
-  count(*) FILTER (
-    WHERE has_discovery_contracts_error IS TRUE
-      AND discovery_contracts_message_error ~* '(429|too many requests|rate.?limit)'
-  ) AS contracts_429,
-  count(*) FILTER (
-    WHERE has_portfolio_discovery_error IS TRUE
-      AND portfolio_discovery_message_error ~* '(429|too many requests|rate.?limit)'
-  ) AS portfolio_429,
-  count(*) FILTER (
-    WHERE has_lp_discovery_error IS TRUE
-      AND lp_discovery_message_error ~* '(429|too many requests|rate.?limit)'
-  ) AS lp_429
-FROM erc_8004.wallet_transactions;
-```
-
-429-only requeue (prod **after** unified worker is live and split crons are off): sibling `supabase/scripts/wallet_discovery_reset_alchemy_429.sql`. Do not TRUNCATE positions/LP for this.
-
-**Eligible now** — what the claim can actually take, across the three stages. Flag counts alone hide upstream blocks (`has_*_error` on the previous stage) and chains without `subdomain_alchemy`; a high pending with `eligible_now = 0` means stalled, not drained:
-
-```sql
-SELECT
-  count(*) AS eligible_now_rows,
-  count(DISTINCT wt.wallet_id) AS eligible_now_wallets
-FROM erc_8004.wallet_transactions wt
-JOIN erc_8004.chains c ON c.id = wt.chain_id
-WHERE c.subdomain_alchemy IS NOT NULL
-  AND btrim(c.subdomain_alchemy) <> ''
-  AND (
-    wt.does_need_discovery_contracts IS DISTINCT FROM FALSE
-    OR (
-      wt.does_need_portfolio_discovery IS DISTINCT FROM FALSE
-      AND wt.does_need_discovery_contracts = FALSE
-      AND COALESCE(wt.has_discovery_contracts_error, FALSE) IS NOT TRUE
-    )
-    OR (
-      wt.does_need_lp_discovery IS DISTINCT FROM FALSE
-      AND wt.does_need_portfolio_discovery = FALSE
-      AND COALESCE(wt.has_portfolio_discovery_error, FALSE) IS NOT TRUE
-    )
-  );
-```
-
-### Token contracts discovery
-
-```sql
-SELECT
-  count(*) FILTER (WHERE does_need_discovery_contracts IS DISTINCT FROM FALSE) AS pending,
-  count(*) FILTER (WHERE does_need_discovery_contracts = FALSE) AS attempted,
-  count(*) FILTER (WHERE has_discovery_contracts_error IS TRUE) AS errors
-FROM erc_8004.wallet_transactions;
-
-SELECT c.name, count(*) AS pending
-FROM erc_8004.wallet_transactions wt
-JOIN erc_8004.chains c ON c.id = wt.chain_id
-WHERE wt.does_need_discovery_contracts IS DISTINCT FROM FALSE
-GROUP BY 1
-ORDER BY pending DESC;
-
-SELECT count(*) AS contracts, count(DISTINCT wallet_id) AS wallets
-FROM wallets.wallet_token_contracts;
-
--- Re-queue failures
--- UPDATE erc_8004.wallet_transactions
--- SET does_need_discovery_contracts = TRUE,
---     has_discovery_contracts_error = NULL,
---     discovery_contracts_message_error = NULL,
---     discovery_contracts_claimed_at = NULL,
---     discovery_contracts_claimed_by = NULL
--- WHERE has_discovery_contracts_error IS TRUE;
-```
-
-### Token portfolio discovery
-
-```sql
-SELECT
-  count(*) FILTER (WHERE does_need_portfolio_discovery IS DISTINCT FROM FALSE) AS pending,
-  count(*) FILTER (WHERE has_portfolio_discovery_error IS TRUE) AS errors
-FROM erc_8004.wallet_transactions;
-
-SELECT count(*) AS positions,
-       count(*) FILTER (WHERE contract_address = 'native') AS native_rows,
-       count(*) FILTER (WHERE has_price_error IS TRUE) AS price_errors
-FROM wallets.wallet_token_positions;
-
-SELECT token_quality, quality_reason, count(*)
-FROM wallets.wallet_token_positions
-GROUP BY 1, 2
-ORDER BY count(*) DESC;
-
--- Polygon native should be priced after POL key fix + reset re-run
-SELECT chain_id,
-       count(*) FILTER (WHERE has_price_error IS NOT TRUE) AS native_ok,
-       count(*) FILTER (WHERE has_price_error IS TRUE) AS native_err
-FROM wallets.wallet_token_positions
-WHERE contract_address = 'native'
-GROUP BY 1
-ORDER BY 1;
-```
-
-**Full rediscovery** (after pricing/quality code changes): deploy schema + worker, then run `gsa-supabase-schema/supabase/scripts/wallet_token_portfolio_discovery_reset.sql`, then `workflow_dispatch` `wallet-holdings-discovery`.
-
-### LP positions discovery
-
-```sql
-SELECT
-  count(*) FILTER (WHERE does_need_lp_discovery IS DISTINCT FROM FALSE) AS pending,
-  count(*) FILTER (WHERE does_need_lp_discovery IS FALSE
-                   AND COALESCE(has_lp_discovery_error, FALSE) IS NOT TRUE) AS done_ok,
-  count(*) FILTER (WHERE has_lp_discovery_error IS TRUE) AS errors
-FROM erc_8004.wallet_transactions;
-
-SELECT position_kind, protocol, count(*)
-FROM wallets.wallet_lp_positions
-GROUP BY 1, 2
-ORDER BY count(*) DESC;
-
--- Done volume by chain (many chains have no LP extractor → 0 rows is normal)
-SELECT wt.chain_id, c.name,
-       count(*) AS wallets_done,
-       count(*) FILTER (WHERE EXISTS (
-         SELECT 1 FROM wallets.wallet_lp_positions p
-         WHERE p.wallet_id = wt.wallet_id AND p.chain_id = wt.chain_id
-       )) AS wallets_with_lp
-FROM erc_8004.wallet_transactions wt
-JOIN erc_8004.chains c ON c.id = wt.chain_id
-WHERE wt.does_need_lp_discovery IS FALSE
-  AND COALESCE(wt.has_lp_discovery_error, FALSE) IS NOT TRUE
-GROUP BY 1, 2
-ORDER BY wallets_done DESC;
-
-SELECT count(*) AS active_pools
-FROM wallets.lp_pools
-WHERE active IS TRUE;
-
--- Stale snapshots (inputs for future 15d refresh worker)
-SELECT count(DISTINCT (wallet_id, chain_id)) AS stale_wallet_chains
-FROM wallets.wallet_lp_positions
-WHERE calculated_at < NOW() - interval '15 days';
-```
-
-**Full rediscovery** (ask before TRUNCATE): `wallet_lp_positions_discovery_reset.sql` then `workflow_dispatch` `wallet-holdings-discovery`.
 
 ### Agent URI resolve (pending queues)
 

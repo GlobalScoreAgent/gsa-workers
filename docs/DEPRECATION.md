@@ -1,5 +1,25 @@
 # Deprecation notes
 
+## WAMI workers (removed 2026-10-21 — ADR *Deprecar WAMI y mover analisis a Walcert*)
+
+The four GitHub Actions workers that fed the WAMI wallet index were **deleted**. WAMI was deprecated as an always-on precomputed score (scores stale since 2026-07-06); deep wallet analysis (origins, activity, multichain, portfolio) is now exclusively **Walcert Agent on-demand** (preview + x402 certificate). HUMI remains the always-on agent score.
+
+Their database destinations were dropped in `gsa-supabase-schema` on 2026-10-22 (migrations `20261022020359`…`20261022022035`, docs `supabase/docs/wami-deprecation-drop.md`), so these workers were failing against nonexistent RPCs/tables. Do **not** revive them, their workflows, or the dropped objects:
+
+| Worker (deleted) | Workflow (deleted) | Dropped destination |
+|---|---|---|
+| `workers/wallet_holdings_discovery/` | `wallet-holdings-discovery.yml` | `wallets.wallet_token_contracts`, `wallet_token_positions` (incl. `token_quality`/`quality_reason` — Portfolio Quality source data), `wallet_lp_positions`, `wallet_token_transfers`, `wallet_nft_contracts`, `lp_pools` + discovery claim columns on `wallet_transactions` |
+| `workers/token_prices_import/` | `token-prices-import.yml` | `wallets.token_prices` + `token_prices_upsert` / `wallet_token_positions_apply_prices` / `wallet_token_positions_mark_price_misses` |
+| `workers/wallet_activity_flows/` (+ smoke) | `wallet-activity-flows.yml`, `wallet-activity-flows-smoke.yml` | Staging `wallets.wallet_activity_transfers` + `activity_flows_*` claim columns |
+| `workers/wallet_funding_transfers/` | `wallet-funding-transfers.yml` | `wallets.wallet_funding_transfers` + `wallet_origins_stats` prep (Origins pillar) + `funding_transfers_*` claim columns |
+
+Notes:
+
+- The Portfolio Quality prep table `wallets.wallet_quality_stats` never existed (deferred stub in the dropped `job_control.wami_stats_pipeline_schedule`); Quality's source data above is what was dropped.
+- `dune_queries_import` is **not** part of this removal: `wallets.cex/mixer/bridge/ofac_addresses` survived as the source of `walcert_lookup_labels`. `wallet_nonce_balance_daily` / `owner_wallet_monthly` also stay (HUMI core).
+- GHA secrets that only these workers used (`ALCHEMY_FREE_KEY`, `COINGECKO_KEY`, activity/funding provider keys, OKX trio) are inert; removing them from repo Settings is optional manual cleanup.
+- Old code and design docs (`docs/TOKEN_CONTRACTS_DISCOVERY_ALCHEMY.md`, `docs/PENDING_LP_POSITIONS.md`, both deleted) remain readable in git history.
+
 ## Ethos enrich workflow (absorbed by on-demand backfill)
 
 | Legacy | Status |
@@ -81,7 +101,7 @@ IPFS cascade: public gateways first (`ipfs.io` → `gateway.pinata.cloud` → Cl
 
 ## Token prices (walcert → GHA → Dex/CoinGecko)
 
-Current: **`token_prices_import`** enriches unpriced `wallet_token_positions` via DexScreener → CoinGecko into spot cache `wallets.token_prices` (PK `chain_id`+`contract`), then `wallet_token_positions_apply_prices`.
+**Superseded by the WAMI removal above (2026-10-21):** `token_prices_import`, `wallets.token_prices` and `wallets.wallet_token_positions` were all deleted/dropped; this section is historical. The historical path enriched unpriced `wallet_token_positions` via DexScreener → CoinGecko into spot cache `wallets.token_prices` (PK `chain_id`+`contract`), then `wallet_token_positions_apply_prices`.
 
 Dune daily dumps into `wallets.token_prices` are **retired** (table redesigned 2026-07-13). Do not re-enable Dune export for this table.
 
@@ -92,10 +112,9 @@ Dune daily dumps into `wallets.token_prices` are **retired** (table redesigned 2
 | `walcert.token_prices_import_data` (pg_net → Edge) | Superseded; leave in place until Edge retired |
 | `walcert.token_prices_process` | Superseded; leave in place |
 | Edge `walcert-update-token-prices` | Superseded; retire after GHA is validated |
-| `walcert.token_prices` / `walcert.token_prices_imported_data` | Legacy; GHA writes go to redesigned `wallets.token_prices` |
+| `walcert.token_prices` / `walcert.token_prices_imported_data` | Legacy; dropped with the legacy WAMI `walcert` schema cleanup (2026-10-22) |
 | Dune query `7526826` → old daily `wallets.token_prices` | Retired with spot-cache redesign |
 
-Repointing consumers that still read `walcert.token_prices` is a separate follow-up.
 
 ## Token activity probe / enrich (replaced by wallet activity flows 15d)
 
@@ -103,39 +122,37 @@ Census getLogs probe + enrich-flag pipeline was removed (ADR 2026-08-13). Do **n
 
 | Legacy | Status |
 |---|---|
-| Workflow `wallet-token-activity-scan.yml` | **Removed** — replaced by `wallet-activity-flows.yml` |
+| Workflow `wallet-token-activity-scan.yml` | **Removed** — was replaced by `wallet-activity-flows.yml`, itself deleted with WAMI (see above) |
 | Worker folder `workers/token_activity/` (probe; enrich never existed) | **Removed** |
 | Docs `docs/token_activity/` + `docs/PENDING_TOKEN_ACTIVITY_RPC.md` | **Removed** |
 | Columns `token_activity_*` / `does_need_token_activity_enrich` / `chains.token_activity_runner_count` | Dropped in schema migration `20260813010000_wallet_activity_transfers.sql` |
 | Rollup Fuente B (`does_need_token_activity_enrich` on D vs D−1) | Removed from `wallet_rollup_daily_metrics` |
 
-Live replacement: `workers/wallet_activity_flows/` → INSERT-only staging `wallets.wallet_activity_transfers`. Do not re-add probe getLogs, enrich flags, or Fuente B enqueue.
+Former replacement `workers/wallet_activity_flows/` was deleted with WAMI (see above); its staging `wallets.wallet_activity_transfers` was dropped 2026-10-22. Do not re-add probe getLogs, enrich flags, or Fuente B enqueue.
 
 ## Walcert Alchemy fund origins (replaced by GHA funding transfers)
 
-First-inflow ingest is **`wallet_funding_transfers`** (Etherscan / Blockscout / Ankr / OKX → `wallets.wallet_funding_transfers`). Do **not** re-enable the Walcert Alchemy Edge + pg_cron path.
+**Superseded by the WAMI removal above (2026-10-21):** the GHA replacement `wallet_funding_transfers` was also deleted and `wallets.wallet_funding_transfers` dropped; wallet origin analysis is Walcert on-demand. Historically, first-inflow ingest was **`wallet_funding_transfers`** (Etherscan / Blockscout / Ankr / OKX → `wallets.wallet_funding_transfers`). Do **not** re-enable the Walcert Alchemy Edge + pg_cron path.
 
 | Legacy | Status |
 |---|---|
 | Edge `walcert-alchemy-fund-origins` | Keep **disabled**; GHA worker is the ingest path |
 | pg_cron `walcert_alchemy_fund_origins_import_data` / `analyze_fund_origins` / first-activity | Stay **`active = false`** |
-| `walcert.wallet_imported_data.fund_origins_json` | Legacy JSON dump; new rows go to `wallets.wallet_funding_transfers` |
-| `walcert.wallet_fund_origins` | Historical analyze output; **not** written by v1 worker |
-
-Analyze / WAMI Origins consume of the new staging table is a follow-up. Keep using `ETHERSCAN_FUNDING_KEY` / `BLOCKSCOUT_FUNDING_KEY` / `ANKR_FUNDING_KEY`, not the 15d activity keys.
+| `walcert.wallet_imported_data.fund_origins_json` | Legacy JSON dump; dropped with the legacy WAMI `walcert` cleanup (2026-10-22) |
+| `walcert.wallet_fund_origins` | Historical analyze output; dropped 2026-10-22 |
 
 ## Split token/LP discovery workers (replaced by holdings discovery)
 
-ADR 2026-09-16. Live path is **`wallet_holdings_discovery`** (contracts → portfolio → LP in one run, Alchemy 429 backoff). Do **not** re-enable the three split crons while the unified worker is live — they compete for `ALCHEMY_FREE_KEY` and treat 429 as permanent `has_*_error`.
+**Superseded by the WAMI removal above (2026-10-21):** the unified replacement `wallet_holdings_discovery` was also deleted. ADR 2026-09-16 had merged the three split workers into **`wallet_holdings_discovery`** (contracts → portfolio → LP in one run, Alchemy 429 backoff). Do **not** re-enable any of them.
 
 | Legacy | Status |
 |---|---|
 | Workflow `wallet-token-contracts-discovery.yml` | **Deleted** 2026-09-16 |
 | Workflow `wallet-token-portfolio-discovery.yml` | **Deleted** 2026-09-16 |
 | Workflow `wallet-lp-positions-discovery.yml` | **Deleted** 2026-09-16 |
-| Folders `workers/wallet_token_contracts_discovery/`, `wallet_token_portfolio_discovery/`, `wallet_lp_positions_discovery/` | **Deleted** 2026-09-16; code of truth is `workers/wallet_holdings_discovery/` |
+| Folders `workers/wallet_token_contracts_discovery/`, `wallet_token_portfolio_discovery/`, `wallet_lp_positions_discovery/` | **Deleted** 2026-09-16; unified successor `workers/wallet_holdings_discovery/` deleted 2026-10-21 (WAMI) |
 
-Do not re-add them. If you need the old code, read it from git history (`git log -- workers/wallet_lp_positions_discovery`); the domain modules live in `workers/wallet_holdings_discovery/src/`.
+Do not re-add them. If you need the old code, read it from git history (`git log -- workers/wallet_lp_positions_discovery` or `git log -- workers/wallet_holdings_discovery`).
 
-429-burned rows were requeued only after the unified worker ran clean once: schema `20260916183128_wallet_discovery_reset_alchemy_429.sql` (prod 2026-09-16).
+429-burned rows were requeued only after the unified worker ran clean once: schema `20260916183128_wallet_discovery_reset_alchemy_429.sql` (prod 2026-09-16). Historical only — the discovery claim columns were dropped 2026-10-22.
 

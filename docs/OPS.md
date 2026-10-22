@@ -6,7 +6,7 @@ Runbook for stuck wallets, failed Actions runs, and when to change schema vs wor
 
 | Host | Schedules |
 |------|-----------|
-| [`MichBarbarian/gsa-workers`](https://github.com/MichBarbarian/gsa-workers) | Chain-heavy (daily, owner, holdings, prices, activity, funding, dune, classifier, backfill, ethos reviews) |
+| [`MichBarbarian/gsa-workers`](https://github.com/MichBarbarian/gsa-workers) | Chain-heavy (daily, owner, dune, classifier, backfill, ethos reviews) |
 | [`GlobalScoreAgent/gsa-workers`](https://github.com/GlobalScoreAgent/gsa-workers) | DB-light (URI resolve/reprocess, endpoint liveness, erc8257, series export, HUMI reason) |
 
 `gh run list` / `workflow_dispatch` must target the host that owns the workflow. Map: [AGENTS.md](../AGENTS.md#gha-hosts-split-2026-09-17).
@@ -111,31 +111,6 @@ SELECT 'ofac', count(*), max(updated_at) FROM wallets.ofac_sanction_addresses;
 
 More monitoring SQL: [SUPABASE.md](./SUPABASE.md). Worker details: [dune_queries_import/README.md](../workers/dune_queries_import/README.md).
 
-## Token prices import
-
-Reference-data job (`token_prices_import`). No claim / `Pending` / `next_eligible_at`.
-
-Enriches unpriced ERC-20 rows via cache → DexScreener → CoinGecko. Requires `COINGECKO_KEY`.
-
-| Symptom | Likely cause | Action |
-|---|---|---|
-| Workflow fails immediately | Missing/invalid `COINGECKO_KEY` or `SUPABASE_DB_URL` | Check repo secrets; re-run |
-| CoinGecko 429 | Demo rate/credits | Rely on Dex + TTL; upgrade plan |
-| Upsert / apply missing | Migration not applied | Deploy spot-cache + `mark_price_misses` / upsert DISTINCT ON in **gsa-supabase-schema** |
-| `CardinalityViolation` on upsert | Duplicate `(chain_id, contract)` in one batch | Fixed via candidate `DISTINCT ON` + upsert dedupe; redeploy if old code |
-| Positions still `has_price_error` forever | Misses not marked | Need `mark_price_misses` after miss upsert; check `quality_reason` |
-| Positions still unpriced USD | Miss / spam / low liquidity | Check `token_prices.source` and `token_quality`; known-unknown uses `unknown_token_dex_coingecko_defillama` |
-
-**Re-run:** GitHub → **Actions** → **Token prices import** → **Run workflow**.
-
-```sql
-SELECT source, count(*), count(*) FILTER (WHERE price_usd IS NOT NULL) AS with_price
-FROM wallets.token_prices
-GROUP BY 1;
-```
-
-Worker details: [token_prices_import/README.md](../workers/token_prices_import/README.md).
-
 ## Agent URI resolve / reprocess
 
 URI workers claim agents / feedbacks / `agent_manifest` / `uri_documents` (not wallet `Pending` status). Soft `MAX_RUNTIME_SECONDS=19800`. Optional secrets: `PINATA_GATEWAY` (dedicated gateway key → last IPFS fallback after public gateways; host `violet-efficient-aardwolf-922.mypinata.cloud`), `SCRAPING_ANT_KEY`.
@@ -168,111 +143,6 @@ URI workers claim agents / feedbacks / `agent_manifest` / `uri_documents` (not w
 
 Monitoring SQL: [SUPABASE.md](./SUPABASE.md) (Agent URI sections). READMEs: [`agent_uri_resolve`](../workers/agent_uri_resolve/README.md), [`agent_uri_reprocess`](../workers/agent_uri_reprocess/README.md).
 
-## Wallet activity flows 15d
-
-Staging ingest into `wallets.wallet_activity_transfers` (`workers/wallet_activity_flows`). Claims `erc_8004.wallet_transactions` with `activity_flows_agent_ok` (no per-claim `EXISTS`); skips null address `0x0` (Alchemy pagination OOMs the runner). Soft-stop outside the window.
-
-Matrix groups: `etherscan` · `alchemy_k1` · `bsc` · `xlayer`. Active UTC window **18:00→12:00** (cuts `0 0 1,15 * *` + drain `0 18,22,2,6,10 * * *`; closed 12–18) + `workflow_dispatch` (`ignore_schedule_window`).
-
-| Log line | Meaning |
-|---|---|
-| `Claimed batch size=… claim_ms=` | Claim tick latency (GHA→Postgres) |
-| `Done wt_id=… save_ms=` | Mark-done / INSERT latency |
-| `UTC schedule window closed` | Soft-stop at 12:00 UTC |
-| `Queue empty` | Cell finished; exit 0 |
-
-Monitoring SQL: [SUPABASE.md](./SUPABASE.md) (Activity flows section). README: [`wallet_activity_flows`](../workers/wallet_activity_flows/README.md).
-
-## Wallet funding transfers
-
-One-shot ingest of the first ~500 **incoming** native+ERC-20 transfers (`workers/wallet_funding_transfers`). Claims `erc_8004.wallet_transactions` (`is_valid_funding_transfers`). Success sets `funding_transfers_next_eligible_at = infinity`. Empty wallet still completes. Does **not** write `walcert.wallet_fund_origins`.
-
-Matrix groups: `etherscan` · `blockscout` · `bsc` · `xlayer`. Active UTC window **18:00→12:00** (cron `0 18,0,6 * * *`; closed 12–18) + `workflow_dispatch`.
-
-| Log line | Meaning |
-|---|---|
-| `Claimed batch size=` | Claim OK; provider fetch about to run |
-| `Done wt_id=` | Insert + complete (possibly 0 rows) |
-| `{PROVIDER}_QUOTA_EXHAUSTED stop_claim=1` | Daily (Etherscan/Blockscout) or monthly (Ankr) credits gone; in-flight rows unlocked; **exit 0** |
-| `queue empty` | No due rows for this group; exit 0 |
-
-| Symptom | Likely cause | Action |
-|---|---|---|
-| Workflow fails on missing secret | `ETHERSCAN_FUNDING_KEY` / `BLOCKSCOUT_FUNDING_KEY` / `ANKR_FUNDING_KEY` | Use **funding** secrets, not 15d `ETHERSCAN_API_KEY` / `ANKR_API_KEY` |
-| Group exits 0 after a few wallets | Quota circuit breaker | Wait next UTC day (Etherscan/Blockscout) or month (Ankr); do not retry in the same run |
-| `due_active` never falls | Claim SQL / seed flags | Confirm migration `20260826010000_wallet_funding_transfers.sql`; check `is_valid_funding_transfers` |
-| Staging empty after Done | Wallet has no incoming native/ERC-20 | Expected; one-shot still completes |
-
-**Re-run:** Actions → **Wallet funding transfers** → **Run workflow** (empty `provider_group` = all four cells).
-
-```sql
-SELECT
-  count(*) FILTER (WHERE is_valid_funding_transfers IS TRUE) AS seeded,
-  count(*) FILTER (
-    WHERE is_valid_funding_transfers IS TRUE
-      AND COALESCE(wallet_category, '') NOT LIKE 'Dormant_%'
-      AND funding_transfers_next_eligible_at <= NOW()
-  ) AS due_active,
-  count(*) FILTER (WHERE funding_transfers_completed_at IS NOT NULL) AS completed
-FROM erc_8004.wallet_transactions;
-```
-
-Worker README: [`wallet_funding_transfers`](../workers/wallet_funding_transfers/README.md).
-
-## Wallet holdings discovery
-
-One worker, three stages per claimed row (contracts → portfolio → LP). Replaced the three split workers deleted 2026-09-16 ([DEPRECATION.md](./DEPRECATION.md)); do not recreate their workflows.
-
-### Interpreting logs
-
-| Line | Reading |
-|---|---|
-| `Contracts/Portfolio/LP done wt_id=` | Stage finished inside the same claim |
-| `Transient wt_id=… stage=` | Rate limit / timeout / malformed 200. Flag stays pending, retried next run. **Expected**, not a failure |
-| `Permanent wt_id=… stage=` | `has_*_error = TRUE`. Read the message before assuming it is unfixable |
-| `Alchemy … retrying in Xs` | Backoff honoring `Retry-After` |
-| `No more pending rows in this run.` | Queue drained for this run; exit 0 |
-
-### Pending is not the same as claimable
-
-A stage can be pending yet not claimable: the previous stage has `has_*_error`, or the chain has no `subdomain_alchemy` (X Layer). Runs then finish in seconds and the queue looks empty while the pipeline is actually stalled — this hid ~17 500 rows with incomplete inventory for two weeks. Use the eligible-now query in [SUPABASE.md](./SUPABASE.md), not the raw flag counts.
-
-### Rows burned by rate limit
-
-This must stay at zero. A 429 is transient and leaves the flag pending; if these counts grow, either the backoff broke or one of the deleted workflows was recreated.
-
-```sql
-SELECT
-  count(*) FILTER (
-    WHERE has_discovery_contracts_error IS TRUE
-      AND discovery_contracts_message_error ~* '(429|too many requests|rate.?limit)'
-  ) AS contracts_429,
-  count(*) FILTER (
-    WHERE has_portfolio_discovery_error IS TRUE
-      AND portfolio_discovery_message_error ~* '(429|too many requests|rate.?limit)'
-  ) AS portfolio_429,
-  count(*) FILTER (
-    WHERE has_lp_discovery_error IS TRUE
-      AND lp_discovery_message_error ~* '(429|too many requests|rate.?limit)'
-  ) AS lp_429
-FROM erc_8004.wallet_transactions;
-```
-
-Re-queue only after the worker handles the condition, otherwise the next burst burns the same rows: `gsa-supabase-schema/supabase/scripts/wallet_discovery_reset_alchemy_429.sql` (non-destructive, safe to re-run), then `workflow_dispatch`.
-
-### Misclassified errors
-
-Group `*_message_error` before re-queueing. Anything that would succeed on retry belongs in `AlchemyTransientError`, not in `has_*_error` — precedent: `Missing result from base-mainnet` (HTTP 200 with neither `result` nor `error`) was raised as permanent and burned 5 rows before being reclassified.
-
-```sql
-SELECT left(discovery_contracts_message_error, 180) AS err, count(*)
-FROM erc_8004.wallet_transactions
-WHERE has_discovery_contracts_error IS TRUE
-GROUP BY 1 ORDER BY count(*) DESC LIMIT 20;
-```
-
-Throughput: ~1 000–1 150 wallets/hour end-to-end with `CONCURRENCY=4`. To go faster raise `ALCHEMY_MAX_INFLIGHT` after checking free-tier CU usage, not before. Worker README: [`wallet_holdings_discovery`](../workers/wallet_holdings_discovery/README.md).
-
 ## Dual daily workers
 
 `wallet_nonce_balance_daily` runs **two** GHA jobs (`worker-a`, `worker-b`) with separate concurrency groups. They share the same claim SQL (`FOR UPDATE SKIP LOCKED`), so batches do not overlap. Both need the same secrets.
@@ -302,7 +172,6 @@ Every worker is on `0 0,6,12,18` UTC, so ~18 workflows ask for runners at the sa
 Consequences worth keeping in mind:
 
 - Do not diagnose a "missing" run before checking `run_started_at`; it is usually late, not skipped.
-- Window-bounded workers (`wallet_activity_flows`, `wallet_funding_transfers`, UTC 18→12) can have a run land outside the window it was scheduled for.
 - If this starts to hurt, the fix is staggering the crons across the hour rather than adding retries. Not done yet.
 
 ```powershell
@@ -321,16 +190,14 @@ No need to change code for a plain re-run. After a schema change, deploy the mig
 
 | Touch | Repo |
 |---|---|
-| Snapshot / upsert RPCs (`wallet_apply_*`, Dune reference tables, token_prices, discovery, mark_price_misses), URI indexes/helpers, triggers, new columns | `gsa-supabase-schema` |
-| Claim/save/retry/job loop/GHA env/RPC / Dune / Dex / CoinGecko / URI resolve clients | `gsa-workers` |
+| Snapshot / upsert RPCs (`wallet_apply_*`, Dune reference tables), URI indexes/helpers, triggers, new columns | `gsa-supabase-schema` |
+| Claim/save/retry/job loop/GHA env/RPC / Dune / URI resolve clients | `gsa-workers` |
 
 Deploy order when both change: **schema → worker → workflow_dispatch**.
 
 ## Related
 
-- [PROCESSES.md](./PROCESSES.md) — live pipeline catalog (#9 activity flows, #9b funding transfers, #13 on-demand, **#16 Ethos reviews API**, **#17 HUMI reason publisher**)
-- [PENDING_LP_POSITIONS.md](./PENDING_LP_POSITIONS.md) — LP 15-day refresh (discovery already live)
+- [PROCESSES.md](./PROCESSES.md) — live pipeline catalog (#13 on-demand, **#16 Ethos reviews API**, **#17 HUMI reason publisher**)
 - [SUPABASE.md](./SUPABASE.md) — monitoring and backfill SQL
 - [ARCHITECTURE.md](./ARCHITECTURE.md) — pipeline and budgets
 - [DEPRECATION.md](./DEPRECATION.md) — do not re-enable old crons / Edge URI
-- Workers: [`wallet_activity_flows`](../workers/wallet_activity_flows/README.md), [`wallet_holdings_discovery`](../workers/wallet_holdings_discovery/README.md), [`wallet_funding_transfers`](../workers/wallet_funding_transfers/README.md), [`agent_uri_resolve`](../workers/agent_uri_resolve/README.md), [`agent_uri_reprocess`](../workers/agent_uri_reprocess/README.md), [`ethos_reviews_api`](../workers/ethos_reviews_api/README.md)
