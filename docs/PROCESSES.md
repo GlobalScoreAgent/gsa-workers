@@ -15,7 +15,6 @@ flowchart TB
     ownerMonthly["owner_wallet_monthly (lanes monthly + origin)"]
   end
   subgraph refdata [Other_reference]
-    dune[dune_queries_import]
     erc8257[erc8257_tools_import]
   end
   subgraph pending [Not_built_yet]
@@ -39,10 +38,6 @@ flowchart TB
   end
   daily --> metrics[erc_8004.wallet_daily_metrics]
   metrics -->|wallet_rollup_daily_metrics| wt[erc_8004.wallet_transactions]
-  dune --> cexT[wallets.cex_addresses]
-  dune --> mixT[wallets.mixer_addresses]
-  dune --> brT[wallets.bridge_addresses]
-  dune --> ofacT[wallets.ofac_sanction_addresses]
   erc8257 --> tools8257[erc_8257.tools]
   liveness[agent_endpoint_liveness] --> aeh[erc_8004.agent_endpoint_health]
   uriResolve --> ud[erc_8004.uri_documents]
@@ -66,7 +61,6 @@ flowchart TB
 |---|---|---|---|---|---|---|
 | 1 | [`wallet_nonce_balance_daily`](../workers/wallet_nonce_balance_daily/README.md) | Claim | 0/6/12/18 (matrix a/b) | `wallets` + daily flags | `wallet_apply_daily_snapshot` | `wallet_daily_metrics` (flat); rollup `wallet_rollup_daily_metrics` → `wallet_transactions` |
 | 2 | [`owner_wallet_monthly`](../workers/owner_wallet_monthly/README.md) | Claim (2 lanes) | 0/6/12/18 | lane `monthly`: monthly clock · lane `origin`: history clock | `wallet_apply_monthly_snapshot` + `wallet_apply_owner_history_snapshot` | `wallet_owner_details` current metrics + `first_transaction_at` |
-| 4 | [`dune_queries_import`](../workers/dune_queries_import/README.md) | Reference | 18th 00:00 | Dune API (4 queries) | cex/mixer/bridge/ofac upserts (chunked) | `wallets.cex_addresses` + mixer/bridge/ofac tables |
 | 10 | [`agent_uri_resolve`](../workers/agent_uri_resolve/README.md) | Claim (agents / feedbacks) | 00:00, 12:00 | `is_uri_processed` / `is_feedback_processed` | direct SQL | `uri_documents` + `agent_manifest` |
 | 11 | [`agent_uri_reprocess`](../workers/agent_uri_reprocess/README.md) | Claim (manifest errors + docs) | 06:00, 18:00 | download errors / off-chain &gt;15d | direct SQL | retry + refresh `uri_documents` (failed refresh still stamps `fetched_at`) |
 | 12 | [`ai_agent_classifier`](../workers/ai_agent_classifier/README.md) | Claim (`web_dashboard.agents`) | 0/6/12/18 | `does_need_ai_category_process` | exact-hash copy or LLM | `ai_category_*` + `ai_category_input_hash` |
@@ -101,10 +95,6 @@ Eligibility: `is_valid_*` + `*_next_eligible_at <= NOW()`. Soft lock via `next_e
 A lane never touches the other lane's clock. They run concurrently rather than in sequence because `origin` binary-searches historical blocks (observed up to 131 min in one run) while `monthly` reads `latest` in 5–20 min; sequential lanes would starve `monthly` inside the shared `MAX_RUNTIME_SECONDS`.
 
 Rate limits are not errors: public endpoints fall through to the next URL, and Alchemy (last resort) goes through a `Retry-After` backoff. A chain still rate-limited after retries is reported `status="transient"` — partial data is saved with the clock shortened to `TRANSIENT_REQUEUE_SECONDS` (1h), and a wallet where no chain succeeded and at least one was rate-limited is requeued with no payload and no `Error`. Split owner workers were deleted 2026-09-16 ([DEPRECATION.md](./DEPRECATION.md)).
-
-### 4. Dune queries (reference)
-
-Four tasks per run (cex / mixers / bridges / ofac): paginated Dune fetch → fail task on empty → chunked `*_upsert`. No claim loop. Continue on per-task failure; exit 1 if any failed.
 
 ### 10. Agent URI resolve (ingest)
 
@@ -306,7 +296,6 @@ Worker README: [`agent_series_export`](../workers/agent_series_export/README.md)
 | `SUPABASE_DB_URL` | All |
 | `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` | HUMI reason publisher (private bucket) and agent series export (public bucket) |
 | `ALCHEMY_KEY` | Balance/nonce claim workers (fallback RPC) |
-| `DUNE_KEY` | Dune queries import |
 | `PINATA_GATEWAY` | URI resolve / reprocess (optional; Pinata dedicated Gateway Key — last IPFS fallback after public gateways) |
 | `SCRAPING_ANT_KEY` | URI resolve / reprocess (optional HTTP fallback) |
 | `GROQ` | AI agent classifier (Groq; name matches `llm.llm_provider.secret`) |

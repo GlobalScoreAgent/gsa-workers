@@ -1,8 +1,8 @@
 # Supabase / Postgres interaction
 
-Workers connect with **direct Postgres** via `SUPABASE_DB_URL` (`psycopg`), not supabase-js or Edge Functions. Schema of truth for wallet claim jobs: `erc_8004`. Reference-data imports (Dune queries) use schema `wallets`. ERC-8257 tools import uses schema `erc_8257`. URI ingest uses `erc_8004.uri_documents` + `erc_8004.agent_manifest`. AI agent classifier uses `web_dashboard.agents` + schema `llm` + `web_dashboard.agent_ai_categories`.
+Workers connect with **direct Postgres** via `SUPABASE_DB_URL` (`psycopg`), not supabase-js or Edge Functions. Schema of truth for wallet claim jobs: `erc_8004`. ERC-8257 tools import uses schema `erc_8257`. URI ingest uses `erc_8004.uri_documents` + `erc_8004.agent_manifest`. AI agent classifier uses `web_dashboard.agents` + schema `llm` + `web_dashboard.agent_ai_categories`.
 
-Schema migrations and snapshot/upsert SQL live in the sibling repo **`gsa-supabase-schema`** (functions `wallet_apply_*_snapshot`, Dune reference upserts, URI indexes + helpers, triggers). Code of truth for claim/save SQL in this repo: each worker’s `src/db.py`. Process catalog: [PROCESSES.md](./PROCESSES.md). WAMI token/LP/prices/activity/funding workers were removed 2026-10-21 (see [DEPRECATION.md](./DEPRECATION.md)); their `wallets.*` tables and RPCs were dropped in the schema repo.
+Schema migrations and snapshot/upsert SQL live in the sibling repo **`gsa-supabase-schema`** (functions `wallet_apply_*_snapshot`, URI indexes + helpers, triggers). Code of truth for claim/save SQL in this repo: each worker’s `src/db.py`. Process catalog: [PROCESSES.md](./PROCESSES.md). WAMI workers (2026-10-21) and `dune_queries_import` / GSA label tables (2026-10-22) were removed — see [DEPRECATION.md](./DEPRECATION.md).
 
 ## Connection
 
@@ -23,10 +23,6 @@ Schema migrations and snapshot/upsert SQL live in the sibling repo **`gsa-supaba
 | `erc_8004.wallet_transactions` | Read model: current nonce/balance + 30d history + category. Updated by **`wallet_rollup_daily_metrics`** (not by daily snapshot). |
 | `erc_8004.chain_nonces` | Per-chain daily nonce totals (not written by current daily snapshot) |
 | `erc_8004.wallet_owner_details` | Monthly + origin snapshots: owner metrics / first tx |
-| `wallets.cex_addresses` | CEX address reference list (Dune import) |
-| `wallets.mixer_addresses` | Mixer / Tornado pool addresses (Dune) |
-| `wallets.bridge_addresses` | Bridge label addresses (Dune) |
-| `wallets.ofac_sanction_addresses` | OFAC sanction addresses (Dune) |
 | `erc_8004.uri_documents` | Canonical resolved JSON by `uri_hash = md5(uri)` (UNIQUE); TTL `expires_at` (~15d write); `fetched_at` / `document` / `status` |
 | `erc_8004.agent_manifest` | Envelope per agent/feedback (`uri_document_id` FK); `source`, revoke fields, `has_download_error`, `reprocess_count`, `is_processed` — **no** `data`/`url` columns |
 | `erc_8004.agents` | Queue via `is_uri_processed` + `agent_uri_raw` |
@@ -194,13 +190,10 @@ Canonical SQL / migrations: `gsa-supabase-schema/supabase/migrations/` and `supa
 
 | Worker | Function | Writes |
 |---|---|---|
-| dune queries | `wallets.cex_addresses_upsert(p_rows jsonb)` | `wallets.cex_addresses` |
-| dune queries | `wallets.mixer_addresses_upsert(p_rows jsonb)` | `wallets.mixer_addresses` |
-| dune queries | `wallets.bridge_addresses_upsert(p_rows jsonb)` | `wallets.bridge_addresses` |
-| dune queries | `wallets.ofac_sanction_addresses_upsert(p_rows jsonb)` | `wallets.ofac_sanction_addresses` |
 | endpoint liveness 15d | `agent_endpoint_health_sync` / `_claim` / `_complete` / `_complete_batch` | `erc_8004.agent_endpoint_health` |
+| erc8257 tools | `erc_8257.tools_upsert` + `sync_state` | `erc_8257.tools` |
 
-Dune upserts: JSON arrays; empty array raises. Worker sends **chunks** (default 5000). Scripts: `wallets_cex_addresses_upsert.sql`, `wallets_dune_reference_tables.sql`. Docs: `gsa-supabase-schema/supabase/docs/wallets-dune-reference-tables.md`.
+Dune / GSA label upserts (`wallets.cex/mixer/bridge/ofac_*`) were **DROPped** 2026-10-22 with `dune_queries_import` — see [DEPRECATION.md](./DEPRECATION.md).
 
 ## Triggers (schema repo)
 
@@ -318,18 +311,6 @@ WHERE is_valid_import_current_nonce_and_balance_daily IS TRUE
 ```
 
 (Adjust column names for the owner monthly / origin lanes.)
-
-### Dune reference tables
-
-```sql
-SELECT 'cex' AS src, count(*) AS rows, max(updated_at) AS last_updated FROM wallets.cex_addresses
-UNION ALL
-SELECT 'mixers', count(*), max(updated_at) FROM wallets.mixer_addresses
-UNION ALL
-SELECT 'bridges', count(*), max(updated_at) FROM wallets.bridge_addresses
-UNION ALL
-SELECT 'ofac', count(*), max(updated_at) FROM wallets.ofac_sanction_addresses;
-```
 
 ### Agent URI resolve (pending queues)
 

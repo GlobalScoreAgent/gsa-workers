@@ -16,23 +16,23 @@ Their database destinations were dropped in `gsa-supabase-schema` on 2026-10-22 
 Notes:
 
 - The Portfolio Quality prep table `wallets.wallet_quality_stats` never existed (deferred stub in the dropped `job_control.wami_stats_pipeline_schedule`); Quality's source data above is what was dropped.
-- `dune_queries_import` was **kept** through the WAMI drop (tables fed `walcert_lookup_labels`). **Retired 2026-10-22** when Walcert cut over to Walpulse `quality-lookup` (iq-v1): tables + RPC dropped (`20261022233000_walcert_drop_gsa_label_stack`); workflow schedule removed. `wallet_nonce_balance_daily` / `owner_wallet_monthly` still stay (HUMI core).
+- `dune_queries_import` was **kept** through the WAMI drop (tables fed `walcert_lookup_labels`), then **deleted** after the 2026-10-22 Walpulse cutover (see section below). `wallet_nonce_balance_daily` / `owner_wallet_monthly` still stay (HUMI core).
 - GHA secrets that only these workers used (`ALCHEMY_FREE_KEY`, `COINGECKO_KEY`, activity/funding provider keys, OKX trio) are inert; removing them from repo Settings is optional manual cleanup.
 - Old code and design docs (`docs/TOKEN_CONTRACTS_DISCOVERY_ALCHEMY.md`, `docs/PENDING_LP_POSITIONS.md`, both deleted) remain readable in git history.
 
-## Dune queries import / GSA label tables (retired 2026-10-22)
+## Dune queries import / GSA label tables (deleted 2026-10-22)
 
-Walcert Origins/Activity labels now come exclusively from **Walpulse** `POST …/quality-lookup` (`iq-v1`, `include_kleros: true`). Do **not** restore these objects:
+Walcert Origins/Activity labels now come exclusively from **Walpulse** `POST …/quality-lookup` (`iq-v1`, `include_kleros: true`). Do **not** restore these objects or revive the worker:
 
 | Object | Status |
 |--------|--------|
-| Workflow `dune-queries-import.yml` | Schedule removed; dispatch refuses |
-| Worker `workers/dune_queries_import/` | Code retained for history; do not schedule |
+| Workflow `dune-queries-import.yml` | **Deleted** |
+| Worker `workers/dune_queries_import/` | **Deleted** (code in git history) |
 | `wallets.cex_addresses` / `mixer_addresses` / `bridge_addresses` / `ofac_sanction_addresses` / `kleros_scout_addresses` | DROPped |
 | `walcert.walcert_lookup_labels` + upsert RPCs | DROPped |
 | `graphs.normalize_batch_kleros_scout_litem` | No-op (marks import completed) |
 
-Migration/docs: `gsa-supabase-schema` → `supabase/migrations/20261022233000_walcert_drop_gsa_label_stack.sql`, `supabase/docs/walcert-drop-gsa-label-stack.md`.
+Migration/docs: `gsa-supabase-schema` → `supabase/migrations/20261022233000_walcert_drop_gsa_label_stack.sql`, `supabase/docs/walcert-drop-gsa-label-stack.md`. Secret `DUNE_KEY` is inert; removing it from repo Settings is optional manual cleanup.
 
 ## Ethos enrich workflow (absorbed by on-demand backfill)
 

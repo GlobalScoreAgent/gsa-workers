@@ -6,7 +6,7 @@ Runbook for stuck wallets, failed Actions runs, and when to change schema vs wor
 
 | Host | Schedules |
 |------|-----------|
-| [`MichBarbarian/gsa-workers`](https://github.com/MichBarbarian/gsa-workers) | Chain-heavy (daily, owner, dune, classifier, backfill, ethos reviews) |
+| [`MichBarbarian/gsa-workers`](https://github.com/MichBarbarian/gsa-workers) | Chain-heavy (daily, owner, classifier, backfill, ethos reviews) |
 | [`GlobalScoreAgent/gsa-workers`](https://github.com/GlobalScoreAgent/gsa-workers) | DB-light (URI resolve/reprocess, endpoint liveness, erc8257, series export, HUMI reason) |
 
 `gh run list` / `workflow_dispatch` must target the host that owns the workflow. Map: [AGENTS.md](../AGENTS.md#gha-hosts-split-2026-09-17).
@@ -65,51 +65,6 @@ Adjust column names for the owner monthly / origin lanes ([SUPABASE.md](./SUPABA
 | `Time budget reached` | Soft stop; remaining stay claimed until stale 2h |
 
 Schema RPCs: `ethos.claim_reviews_fetch` / `complete_reviews_fetch`. Do not confuse with `ethos_scores` (credibility, TTL 15d) inside `on_demand_backfill`.
-
-### Dune queries import
-
-| Log line | Meaning |
-|---|---|
-| `=== Task N/4: … ===` | Starting one of cex / mixers / bridges / ofac |
-| `Fetching Dune query … page N` | HTTP page fetch in progress |
-| `Waiting … before next Dune page` | Rate-limit pacing between pages |
-| `Waiting … before next task` | Rate-limit pacing between tasks |
-| `Dune HTTP 429 rate limited; sleeping` | Hit Free/Plus rpm cap; retrying with backoff |
-| `Fetched N rows for …; upserting in chunks` | Dune OK; chunked upsert starting |
-| `Task … upsert chunk i/j` | One RPC chunk committed |
-| `Task … OK` | That task succeeded |
-| `Task … failed` | Task error; other tasks still run |
-| `Finished … with failures` | Exit 1; at least one task failed |
-
-## Dune queries import
-
-Reference-data job (`dune_queries_import`). No claim / `Pending` / `next_eligible_at`. Four Dune queries per run (paginated fetch + chunked upsert). Schedule: day **18** 00:00 UTC (`0 0 18 * *`) after typical Dune billing reset ~17th (+ `workflow_dispatch`).
-
-| Symptom | Likely cause | Action |
-|---|---|---|
-| Workflow fails immediately | Missing/invalid `DUNE_KEY` or `SUPABASE_DB_URL` | Check repo secrets; re-run |
-| Task fails with HTTP **402** / datapoint limit | Billing-cycle quota exhausted (often `cex`) | Wait for reset (~17th) or raise limit; re-run with `dune_tasks=cex` when quota allows |
-| Task fails with 0 rows | Empty/stale Dune result for that query | Check the query on Dune; re-run when data exists |
-| Upsert / function does not exist | Migration not applied | Deploy `wallets_*_upsert` + tables in **gsa-supabase-schema** first |
-| Upsert timeout | Large chunk / DB load | Lower `UPSERT_CHUNK_SIZE`; check `statement_timeout` (worker uses 600s) |
-| One task failed, others OK | Partial run | Fix that query/RPC; re-run workflow (upserts are idempotent) |
-| `max(updated_at)` old | Schedule not run or last run failed | `workflow_dispatch` on **Dune queries import** |
-
-**Re-run:** GitHub → **Actions** → **Dune queries import** → **Run workflow**.
-
-**Verify after a successful run** (CEX ~36k for query `7520736`):
-
-```sql
-SELECT 'cex' AS src, count(*) AS rows, max(updated_at) AS last_updated FROM wallets.cex_addresses
-UNION ALL
-SELECT 'mixers', count(*), max(updated_at) FROM wallets.mixer_addresses
-UNION ALL
-SELECT 'bridges', count(*), max(updated_at) FROM wallets.bridge_addresses
-UNION ALL
-SELECT 'ofac', count(*), max(updated_at) FROM wallets.ofac_sanction_addresses;
-```
-
-More monitoring SQL: [SUPABASE.md](./SUPABASE.md). Worker details: [dune_queries_import/README.md](../workers/dune_queries_import/README.md).
 
 ## Agent URI resolve / reprocess
 
@@ -190,8 +145,8 @@ No need to change code for a plain re-run. After a schema change, deploy the mig
 
 | Touch | Repo |
 |---|---|
-| Snapshot / upsert RPCs (`wallet_apply_*`, Dune reference tables), URI indexes/helpers, triggers, new columns | `gsa-supabase-schema` |
-| Claim/save/retry/job loop/GHA env/RPC / Dune / URI resolve clients | `gsa-workers` |
+| Snapshot / upsert RPCs (`wallet_apply_*`), URI indexes/helpers, triggers, new columns | `gsa-supabase-schema` |
+| Claim/save/retry/job loop/GHA env/RPC / URI resolve clients | `gsa-workers` |
 
 Deploy order when both change: **schema → worker → workflow_dispatch**.
 

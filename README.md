@@ -12,7 +12,6 @@ Unified Python batch workers for [Global Score Agent](https://www.globalscoreage
 |---|---|---|---|
 | [`wallet_nonce_balance_daily`](./workers/wallet_nonce_balance_daily/README.md) | 0, 6, 12, 18h (matrix `worker-a`/`worker-b`) | `is_valid_..._daily` + `import_nonce_and_balance_daily_next_eligible_at` | Balance + nonce → daily JSON → `wallet_apply_daily_snapshot` → `wallet_daily_metrics` |
 | [`owner_wallet_monthly`](./workers/owner_wallet_monthly/README.md) | 0, 6, 12, 18h | `is_valid_..._monthly` + either `import_nonce_and_balance_monthly_next_eligible_at` (lane `monthly`) or `import_wallet_history_next_eligible_at` (lane `origin`) | Two concurrent lanes: balance + nonce (30d) → `wallet_apply_monthly_snapshot`, and first on-chain activity → `wallet_apply_owner_history_snapshot`. Replaces the two split owner workers |
-| ~~`dune_queries_import`~~ | **retired 2026-10-22** | — | Labels via Walpulse quality-lookup; GSA tables DROPped |
 | [`agent_uri_resolve`](./workers/agent_uri_resolve/README.md) | 00:00, 12:00 | agents / `feedback_on_chain` / external feedbacks pending | Resolve/materialize → `uri_documents` + `agent_manifest` |
 | [`agent_uri_reprocess`](./workers/agent_uri_reprocess/README.md) | 06:00, 18:00 | download errors (max 3) + off-chain docs &gt;15d | Retry errors; refresh HTTP/IPFS; `is_processed` only if document changed |
 | [`ai_agent_classifier`](./workers/ai_agent_classifier/README.md) | 0, 6, 12, 18h | `web_dashboard.agents.does_need_ai_category_process` | LLM categories → `ai_category_*` (+ `llm.models_requests` rate limits) |
@@ -22,7 +21,7 @@ Unified Python batch workers for [Global Score Agent](https://www.globalscoreage
 | [`ethos_reviews_api`](./workers/ethos_reviews_api/README.md) | 0, 6, 12, 18h | GSA-linked Claimed + `reviews_next_eligible_at` | Ethos v2 activities → `ethos.reviews` |
 | [`humi_reason_publisher`](./workers/humi_reason_publisher/README.md) | 0, 6, 12, 18h | `index_humi_agent.needs_reason_publish` | HUMI narrative aggregate → private bucket `humi-reasons`, `humi/agent/{id}.json` |
 
-Pending: Manifest **consume** (entity SPs) not built yet. `ethos_enrich` → absorbed by `on_demand_backfill`; WAMI workers removed 2026-10-21 ([DEPRECATION](./docs/DEPRECATION.md)).
+Pending: Manifest **consume** (entity SPs) not built yet. `ethos_enrich` → absorbed by `on_demand_backfill`; WAMI workers removed 2026-10-21; `dune_queries_import` deleted 2026-10-22 ([DEPRECATION](./docs/DEPRECATION.md)).
 
 ## Common pipeline (claim workers)
 
@@ -33,7 +32,7 @@ claim (Pending, next_eligible_at += CLAIM_STALE_SECONDS)
   → wallet_apply_*_snapshot → Processed
 ```
 
-Reference-data: `erc8257_tools_import` (agenttoolindex → `erc_8257.tools`). `dune_queries_import` retired 2026-10-22 (Walpulse labels). Full catalog: [docs/PROCESSES.md](./docs/PROCESSES.md). Column/RPC inventory: [docs/SUPABASE.md](./docs/SUPABASE.md). See [docs/DEPRECATION.md](./docs/DEPRECATION.md).
+Reference-data: `erc8257_tools_import` (agenttoolindex → `erc_8257.tools`). Full catalog: [docs/PROCESSES.md](./docs/PROCESSES.md). Column/RPC inventory: [docs/SUPABASE.md](./docs/SUPABASE.md). Removals: [docs/DEPRECATION.md](./docs/DEPRECATION.md).
 
 ## Secrets
 
@@ -43,7 +42,6 @@ Reference-data: `erc8257_tools_import` (agenttoolindex → `erc_8257.tools`). `d
 | `SUPABASE_URL` | For HUMI reason publisher | Project REST base, e.g. `https://<ref>.supabase.co` |
 | `SUPABASE_SERVICE_ROLE_KEY` | For HUMI reason publisher | Storage writes to the private `humi-reasons` bucket. Bypasses RLS — GHA secret only |
 | `ALCHEMY_KEY` | Recommended | Alchemy fallback after public RPCs (claim workers) |
-| `DUNE_KEY` | For CEX import | Dune Analytics API key |
 | `PINATA_GATEWAY` | Optional (URI workers) | Pinata dedicated gateway access token (last IPFS fallback after public gateways) |
 | `SCRAPING_ANT_KEY` | Optional (URI workers) | ScrapingAnt API key (last HTTP fallback) |
 | `GROQ` | For AI agent classifier | Groq API key (`llm.llm_provider.secret`) |
@@ -57,7 +55,6 @@ Reference-data: `erc8257_tools_import` (agenttoolindex → `erc_8257.tools`). `d
 | daily | 20 | 200 | 7200 | 19800 |
 | origin | 4 | 50 | 7200 | 19800 |
 | monthly | 20 | 200 | 7200 | 19800 |
-| cex import | n/a | n/a | n/a | GHA timeout 30m |
 | agent URI resolve | 4 | 20 | n/a | 19800 |
 | agent URI reprocess | 4 | 20 | n/a | 19800 |
 | AI agent classifier | 1 | 20 | n/a | 19800 |
@@ -74,7 +71,7 @@ Manual run: **Actions** → pick workflow → **Run workflow**.
 ```powershell
 cd workers/<worker_name>
 copy .env.example .env
-# Set SUPABASE_DB_URL and ALCHEMY_KEY or DUNE_KEY as needed
+# Set SUPABASE_DB_URL and ALCHEMY_KEY as needed
 
 uv sync
 uv run python job.py
@@ -102,9 +99,6 @@ gsa-workers/
 │   │   ├── job.py        # lanes monthly + origin
 │   │   ├── scripts/
 │   │   └── src/          # db (lane SQL), query, origin, backoff, alchemy
-│   ├── dune_queries_import/
-│   │   ├── job.py
-│   │   └── src/          # db, dune
 │   ├── erc8257_tools_import/
 │   │   ├── job.py
 │   │   └── src/          # db, agenttoolindex
@@ -126,7 +120,6 @@ gsa-workers/
 └── .github/workflows/
     ├── wallet-nonce-balance-daily.yml
     ├── owner-wallet-monthly.yml
-    ├── dune-queries-import.yml
     ├── erc8257-tools-import.yml
     ├── ai-agent-classifier.yml
     ├── on-demand-backfill.yml

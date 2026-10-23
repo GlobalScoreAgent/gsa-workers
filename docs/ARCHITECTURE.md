@@ -75,7 +75,6 @@ stateDiagram-v2
 |---|---|---|---|
 | `wallet_nonce_balance_daily` | `wallet-nonce-balance-daily.yml` | per `worker-a` / `worker-b` | Matrix: 2 runners |
 | `owner_wallet_monthly` | `owner-wallet-monthly.yml` | `owner-wallet-monthly` | 1 runner; 2 concurrent lanes (`monthly` 20, `origin` 4) sharing `ALCHEMY_MAX_INFLIGHT` |
-| `dune_queries_import` | `dune-queries-import.yml` | `dune-queries-import` | 1 runner |
 | `erc8257_tools_import` | `erc8257-tools-import.yml` | `erc8257-tools-import` | 1 runner |
 | `agent_uri_resolve` | `agent-uri-resolve.yml` | `agent-uri-resolve` | 1 runner (00:00 / 12:00) |
 | `agent_uri_reprocess` | `agent-uri-reprocess.yml` | `agent-uri-reprocess` | 1 runner (06:00 / 18:00) |
@@ -86,7 +85,6 @@ stateDiagram-v2
 | `agent_series_export` | `agent-series-export.yml` | `agent-series-export-${{ matrix.worker_id }}` | 3 runners (01:00 daily); empty queue → cycle close, exit 0 |
 
 Claim wallet workers schedule: `0 0,6,12,18 * * *` UTC + `workflow_dispatch`.  
-Dune queries import schedule: `0 0 18 * *` UTC + `workflow_dispatch` (18th monthly, after typical Dune billing reset ~17th; 4 tasks per run).  
 URI resolve: `0 0,12 * * *`; URI reprocess: `0 6,18 * * *` (split cadence by design).  
 AI classifier: `0 0,6,12,18 * * *` UTC + `workflow_dispatch`.  
 Endpoint liveness 15d: `0 0,6,12,18 * * *` UTC + `workflow_dispatch`.  
@@ -101,7 +99,6 @@ Agent series export: `0 1 * * *` UTC + `workflow_dispatch` — T-1 is already cl
 | daily | `is_valid_import_current_nonce_and_balance_daily` | Balance/nonce JSON → `wallet_daily_metrics` (flat); `Processed` |
 | owner monthly, lane `monthly` | `is_valid_import_current_nonce_and_balance_monthly` + monthly clock | Balance/nonce JSON → `wallet_owner_details` (current metrics) |
 | owner monthly, lane `origin` | same flag + history clock | First-activity history JSON → `wallet_owner_details.first_transaction_at` |
-| dune queries | n/a | 4 Dune queries → cex / mixer / bridge / ofac tables (paginated + chunked upserts) |
 | erc8257 tools | n/a | agenttoolindex dump → `erc_8257.tools` (+ `sync_state` watermark) |
 | agent URI resolve | agents / on-chain / external feedbacks pending | Resolve/materialize → `uri_documents` + `agent_manifest` |
 | agent URI reprocess | download errors (max 3) + off-chain docs &gt;15d | Retry + refresh; `is_processed` only if document changed; failed refresh still stamps `fetched_at` |
@@ -137,23 +134,12 @@ A lane only writes its own clock, so a wallet due on one clock is processed for 
 
 ## Reference-data workers
 
-`dune_queries_import` and `erc8257_tools_import` do **not** use claim / `next_eligible_at`.
-
-**Dune queries:** For each of cex / mixers / bridges / ofac_sanction — paginated Dune fetch → fail task if zero rows → upsert in chunks (`UPSERT_CHUNK_SIZE`) via the matching `wallets.*_upsert` RPC. Tasks continue on failure; job exit 1 if any failed.
+`erc8257_tools_import` does **not** use claim / `next_eligible_at`. (`dune_queries_import` was deleted 2026-10-22 — see [DEPRECATION.md](./DEPRECATION.md).)
 
 **ERC-8257 tools:** `GET /api/stats` watermark vs `erc_8257.sync_state` → if changed (or `FORCE_FULL_SYNC`), dump active+deregistered from agenttoolindex → `erc_8257.tools_upsert` (full catalog). Schedule `0 4 * * *` UTC.
 
 ```mermaid
 flowchart LR
-  ghaDune[GHA_dune_queries] --> duneApi[Dune_API]
-  ghaDune --> upsertCex["cex_addresses_upsert"]
-  ghaDune --> upsertMix["mixer_addresses_upsert"]
-  ghaDune --> upsertBr["bridge_addresses_upsert"]
-  ghaDune --> upsertOfac["ofac_sanction_addresses_upsert"]
-  upsertCex --> cexTable[wallets.cex_addresses]
-  upsertMix --> mixTable[wallets.mixer_addresses]
-  upsertBr --> brTable[wallets.bridge_addresses]
-  upsertOfac --> ofacTable[wallets.ofac_sanction_addresses]
   gha8257[GHA_erc8257_tools] --> ati[agenttoolindex]
   ati --> upsert8257["erc_8257.tools_upsert"]
   upsert8257 --> tools8257[erc_8257.tools]
@@ -210,10 +196,10 @@ Secrets: env name = `llm.llm_provider.secret` (Groq → `GROQ`, NVIDIA → `NVID
 
 | Limit | Value |
 |---|---|
-| GHA `timeout-minutes` | 360 (claim workers), 90 (dune queries) |
+| GHA `timeout-minutes` | 360 (claim workers) |
 | `MAX_RUNTIME_SECONDS` | 19800 (~5.5h) — soft stop inside claim / enrich `job.py` |
 | Postgres `statement_timeout` | 300s |
-| HTTP client timeout | ~10s (daily), 30s client on owner monthly with per-call 5s `latest` / 10s historical / 15s Alchemy, ~120s (Dune), **120s** (AI classifier LLM read) |
+| HTTP client timeout | ~10s (daily), 30s client on owner monthly with per-call 5s `latest` / 10s historical / 15s Alchemy, **120s** (AI classifier LLM read) |
 
 ## Resilience
 
@@ -239,7 +225,6 @@ workers/<name>/
     ├── db.py           # claim / save / snapshot / reconnect (or upsert RPC)
     ├── query.py        # balance+nonce (daily, monthly)
     ├── origin.py       # binary-search first activity (origin only)
-    ├── dune.py         # Dune HTTP client (dune queries)
     ├── resolve.py / handlers / scrape   # URI resolve (reprocess imports via sys.path)
     ├── rpc.py
     ├── alchemy.py
@@ -255,7 +240,6 @@ workers/<name>/
 |---|---|---|---|
 | daily | 20 | 200 | 7200 |
 | owner monthly | lane `monthly` 20 / lane `origin` 4 (`ALCHEMY_MAX_INFLIGHT` 8) | 200 / 50 | 7200 |
-| dune queries | n/a | n/a | n/a |
 | agent URI resolve | 4 | 20 | n/a |
 | agent URI reprocess | 4 | 20 | n/a |
 | AI agent classifier | 1 | 20 | n/a |
@@ -264,7 +248,7 @@ workers/<name>/
 | HUMI reason publisher | 16 | 500 | 7200 |
 | agent series export | 16 per lane | 500 | 7200 |
 
-Secrets: `SUPABASE_DB_URL` (required), `ALCHEMY_KEY` (balance/nonce), `DUNE_KEY`, `PINATA_GATEWAY` / `SCRAPING_ANT_KEY`, `GROQ`, and `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` for the two Storage workers (HUMI reason publisher and agent series export), the only ones that talk to the Storage API and not just Postgres. Daily sets `WORKER_ID` from the matrix.
+Secrets: `SUPABASE_DB_URL` (required), `ALCHEMY_KEY` (balance/nonce), `PINATA_GATEWAY` / `SCRAPING_ANT_KEY`, `GROQ`, and `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` for the two Storage workers (HUMI reason publisher and agent series export), the only ones that talk to the Storage API and not just Postgres. Daily sets `WORKER_ID` from the matrix.
 
 ## On-demand backfill (orchestrator)
 
