@@ -1,51 +1,23 @@
-name: Dune queries import
+# RETIRED 2026-10-22 — Walcert labels now come from Walpulse quality-lookup (iq-v1).
+# GSA tables wallets.cex/mixer/bridge/ofac_addresses were DROPped.
+# Keep file for history; schedule removed. Do not re-enable without restoring tables.
+
+name: Dune queries import (retired)
 
 on:
-  schedule:
-    # Day 18 UTC — day after typical Dune billing-cycle reset (~17th) so CEX has fresh datapoint quota.
-    - cron: "0 0 18 * *"
   workflow_dispatch:
     inputs:
-      dune_tasks:
-        description: "Comma-separated tasks (cex,mixers,bridges,ofac_sanction). Empty = all."
-        required: false
+      confirm_retired:
+        description: "Type RETIRED to acknowledge this workflow no longer writes anywhere"
+        required: true
         default: ""
 
-concurrency:
-  group: dune-queries-import
-  cancel-in-progress: false
-
 jobs:
-  run:
+  retired:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: true
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install dependencies
-        working-directory: workers/dune_queries_import
-        run: uv sync
-
-      - name: Run Dune queries import
-        working-directory: workers/dune_queries_import
-        env:
-          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
-          DUNE_KEY: ${{ secrets.DUNE_KEY }}
-          DUNE_PAGE_SIZE: "10000"
-          DUNE_PAGE_DELAY_SECONDS: "2"
-          DUNE_TASK_DELAY_SECONDS: "3"
-          UPSERT_CHUNK_SIZE: "5000"
-          DUNE_TASKS: ${{ inputs.dune_tasks }}
-        run: uv run python job.py
+      - name: Refuse run
+        run: |
+          echo "dune_queries_import was retired on 2026-10-22 (Walpulse quality-lookup cutover)."
+          echo "Refusing to execute."
+          exit 1

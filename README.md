@@ -12,7 +12,7 @@ Unified Python batch workers for [Global Score Agent](https://www.globalscoreage
 |---|---|---|---|
 | [`wallet_nonce_balance_daily`](./workers/wallet_nonce_balance_daily/README.md) | 0, 6, 12, 18h (matrix `worker-a`/`worker-b`) | `is_valid_..._daily` + `import_nonce_and_balance_daily_next_eligible_at` | Balance + nonce → daily JSON → `wallet_apply_daily_snapshot` → `wallet_daily_metrics` |
 | [`owner_wallet_monthly`](./workers/owner_wallet_monthly/README.md) | 0, 6, 12, 18h | `is_valid_..._monthly` + either `import_nonce_and_balance_monthly_next_eligible_at` (lane `monthly`) or `import_wallet_history_next_eligible_at` (lane `origin`) | Two concurrent lanes: balance + nonce (30d) → `wallet_apply_monthly_snapshot`, and first on-chain activity → `wallet_apply_owner_history_snapshot`. Replaces the two split owner workers |
-| [`dune_queries_import`](./workers/dune_queries_import/README.md) | 18th 00:00 (monthly; post Dune billing reset) | n/a (reference data) | 4 Dune queries → cex/mixer/bridge/ofac upserts |
+| ~~`dune_queries_import`~~ | **retired 2026-10-22** | — | Labels via Walpulse quality-lookup; GSA tables DROPped |
 | [`agent_uri_resolve`](./workers/agent_uri_resolve/README.md) | 00:00, 12:00 | agents / `feedback_on_chain` / external feedbacks pending | Resolve/materialize → `uri_documents` + `agent_manifest` |
 | [`agent_uri_reprocess`](./workers/agent_uri_reprocess/README.md) | 06:00, 18:00 | download errors (max 3) + off-chain docs &gt;15d | Retry errors; refresh HTTP/IPFS; `is_processed` only if document changed |
 | [`ai_agent_classifier`](./workers/ai_agent_classifier/README.md) | 0, 6, 12, 18h | `web_dashboard.agents.does_need_ai_category_process` | LLM categories → `ai_category_*` (+ `llm.models_requests` rate limits) |
@@ -33,7 +33,7 @@ claim (Pending, next_eligible_at += CLAIM_STALE_SECONDS)
   → wallet_apply_*_snapshot → Processed
 ```
 
-Reference-data: `dune_queries_import` (4 Dune queries → upserts); `erc8257_tools_import` (agenttoolindex → `erc_8257.tools`). Full catalog: [docs/PROCESSES.md](./docs/PROCESSES.md). Column/RPC inventory: [docs/SUPABASE.md](./docs/SUPABASE.md).
+Reference-data: `erc8257_tools_import` (agenttoolindex → `erc_8257.tools`). `dune_queries_import` retired 2026-10-22 (Walpulse labels). Full catalog: [docs/PROCESSES.md](./docs/PROCESSES.md). Column/RPC inventory: [docs/SUPABASE.md](./docs/SUPABASE.md). See [docs/DEPRECATION.md](./docs/DEPRECATION.md).
 
 ## Secrets
 
