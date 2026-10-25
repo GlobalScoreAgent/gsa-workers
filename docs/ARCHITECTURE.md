@@ -76,7 +76,7 @@ stateDiagram-v2
 | `wallet_nonce_balance_daily` | `wallet-nonce-balance-daily.yml` | per `worker-a` / `worker-b` | Matrix: 2 runners |
 | `owner_wallet_monthly` | `owner-wallet-monthly.yml` | `owner-wallet-monthly` | 1 runner; 2 concurrent lanes (`monthly` 20, `origin` 4) sharing `ALCHEMY_MAX_INFLIGHT` |
 | `erc8257_tools_import` | `erc8257-tools-import.yml` | `erc8257-tools-import` | 1 runner |
-| `agent_uri_resolve` | `agent-uri-resolve.yml` | `agent-uri-resolve` | 1 runner (00:00 / 12:00) |
+| `agent_uri_resolve` | `agent-uri-resolve.yml` | `agent-uri-resolve` (workflow-level) | 2 runners matrix a/b (00:00 / 12:00); `CONCURRENCY=4` each |
 | `agent_uri_reprocess` | `agent-uri-reprocess.yml` | `agent-uri-reprocess` | 1 runner (06:00 / 18:00) |
 | `ai_agent_classifier` | `ai-agent-classifier.yml` | `ai-agent-classifier` | 1 runner (0/6/12/18) |
 | `agent_endpoint_liveness` | `agent-endpoint-liveness.yml` | `agent-endpoint-liveness` | 1 runner (0/6/12/18); empty queue exit 0 |

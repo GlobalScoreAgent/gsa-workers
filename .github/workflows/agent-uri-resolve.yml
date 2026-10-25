@@ -15,6 +15,10 @@ jobs:
   run:
     runs-on: ubuntu-latest
     timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        lane: [a, b]
 
     steps:
       - name: Checkout
@@ -47,5 +51,5 @@ jobs:
           CLAIM_BATCH_SIZE: "20"
           CONCURRENCY: "4"
           MAX_RUNTIME_SECONDS: "19800"
-          WORKER_ID: "resolve-a"
+          WORKER_ID: resolve-${{ matrix.lane }}
         run: uv run python job.py

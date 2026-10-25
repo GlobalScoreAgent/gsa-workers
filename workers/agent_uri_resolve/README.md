@@ -22,7 +22,10 @@ Loop priority per round: agents → on-chain → external feedbacks. Empty on al
 
 ## Schedule
 
-Twice daily UTC (`00:00`, `12:00`) + `workflow_dispatch`. Soft `MAX_RUNTIME_SECONDS=19800`.
+Twice daily UTC (`00:00`, `12:00`) + `workflow_dispatch` on **GlobalScoreAgent/gsa-workers** (MichBarbarian stays `disabled_manually`). Soft `MAX_RUNTIME_SECONDS=19800`.
+
+**Matrix (2026-10-25):** two jobs `resolve-a` / `resolve-b` (`strategy.matrix.lane: [a, b]`, `fail-fast: false`). Each job keeps `CONCURRENCY=4` (~8 fetches in flight). Workflow concurrency group stays `agent-uri-resolve` (one schedule run with two internal jobs). Claim uses `FOR UPDATE SKIP LOCKED` — lanes do not double-claim.
+
 Error-retry / off-chain refresh: sibling worker [`agent_uri_reprocess`](../agent_uri_reprocess/README.md) at `06:00` / `18:00` UTC.
 
 ## Env
@@ -34,9 +37,9 @@ Error-retry / off-chain refresh: sibling worker [`agent_uri_reprocess`](../agent
 | `SCRAPING_ANT_KEY` | No | — (last HTTP fallback; ScrapingAnt free tier) |
 | `CLAIM_BATCH_SIZE` | No | `20` |
 | `CLAIM_STALE_SECONDS` | No | `7200` |
-| `CONCURRENCY` | No | `4` |
+| `CONCURRENCY` | No | `4` (per matrix job; total ~8 in flight) |
 | `MAX_RUNTIME_SECONDS` | No | `19800` |
-| `WORKER_ID` | No | `resolve-a` |
+| `WORKER_ID` | No | `resolve-a` locally; GHA sets `resolve-${{ matrix.lane }}` (`resolve-a` \| `resolve-b`) |
 
 ## Local
 

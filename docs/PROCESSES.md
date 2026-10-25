@@ -61,7 +61,7 @@ flowchart TB
 |---|---|---|---|---|---|---|
 | 1 | [`wallet_nonce_balance_daily`](../workers/wallet_nonce_balance_daily/README.md) | Claim | 0/6/12/18 (matrix a/b) | `wallets` + daily flags | `wallet_apply_daily_snapshot` | `wallet_daily_metrics` (flat); rollup `wallet_rollup_daily_metrics` → `wallet_transactions` |
 | 2 | [`owner_wallet_monthly`](../workers/owner_wallet_monthly/README.md) | Claim (2 lanes) | 0/6/12/18 | lane `monthly`: monthly clock · lane `origin`: history clock | `wallet_apply_monthly_snapshot` + `wallet_apply_owner_history_snapshot` | `wallet_owner_details` current metrics + `first_transaction_at` |
-| 10 | [`agent_uri_resolve`](../workers/agent_uri_resolve/README.md) | Claim (agents / feedbacks) | 00:00, 12:00 | `is_uri_processed` / `is_feedback_processed` | direct SQL | `uri_documents` + `agent_manifest` |
+| 10 | [`agent_uri_resolve`](../workers/agent_uri_resolve/README.md) | Claim (agents / feedbacks; matrix a/b) | 00:00, 12:00 | `is_uri_processed` / `is_feedback_processed` | direct SQL | `uri_documents` + `agent_manifest` |
 | 11 | [`agent_uri_reprocess`](../workers/agent_uri_reprocess/README.md) | Claim (manifest errors + docs) | 06:00, 18:00 | download errors / off-chain &gt;15d | direct SQL | retry + refresh `uri_documents` (failed refresh still stamps `fetched_at`) |
 | 12 | [`ai_agent_classifier`](../workers/ai_agent_classifier/README.md) | Claim (`web_dashboard.agents`) | 0/6/12/18 | `does_need_ai_category_process` | exact-hash copy or LLM | `ai_category_*` + `ai_category_input_hash` |
 | 13 | [`on_demand_backfill`](../workers/on_demand_backfill/README.md) | Orchestrator (Ethos + ERC-8183 + Virtual ACP + Olas Mech) | 0/6/12/18 | `needs_history_fetch` → scores TTL 15d → `needs_satellite_backfill` (8183 + Virtual ACP + Olas Mech) | per-step claim/complete | `ethos.*` + `official_scores` + `bsc_erc_8183` / `virtual_acp` / `olas_mech` satellites |
@@ -99,6 +99,8 @@ Rate limits are not errors: public endpoints fall through to the next URL, and A
 ### 10. Agent URI resolve (ingest)
 
 **Live.** Replaces Edge `agent-uri-batch-processor` / `feedback-uri-batch-processor` for **first-time** URI materialize.
+
+**Matrix (2026-10-25):** workflow `agent-uri-resolve.yml` runs **2 jobs** (`resolve-a` / `resolve-b`, `fail-fast: false`). Each job uses `CONCURRENCY=4` (~8 fetches in flight). Workflow concurrency group `agent-uri-resolve` stays at workflow level (one schedule run). Claim is `FOR UPDATE SKIP LOCKED` + marks `is_uri_processed` at claim — lanes are safe to run together. Host: GlobalScoreAgent (MichBarbarian `disabled_manually`).
 
 Loop priority per round:
 

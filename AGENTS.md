@@ -61,7 +61,7 @@ Ops / stuck wallets: [docs/OPS.md](./docs/OPS.md). Deprecations: [docs/DEPRECATI
 |---|---|---|---|
 | `wallet_nonce_balance_daily` | `wallet-nonce-balance-daily.yml` (matrix a/b) | `wallet_apply_daily_snapshot` | `wallet_daily_metrics` (flat); **not** `wallet_transactions` yet (rollup TBD) |
 | `owner_wallet_monthly` | `owner-wallet-monthly.yml` (lanes monthly + origin) | `wallet_apply_monthly_snapshot` + `wallet_apply_owner_history_snapshot` | `wallet_owner_details` (current metrics + `first_transaction_at`). Split owner workers deleted 2026-09-16 |
-| `agent_uri_resolve` | `agent-uri-resolve.yml` (**GSA** host) | direct SQL upsert | `uri_documents` + `agent_manifest` (ingest) |
+| `agent_uri_resolve` | `agent-uri-resolve.yml` (**GSA** host; matrix a/b) | direct SQL upsert | `uri_documents` + `agent_manifest` (ingest) |
 | `agent_uri_reprocess` | `agent-uri-reprocess.yml` (**GSA** host) | direct SQL upsert | error retry + off-chain `uri_documents` refresh |
 | `ai_agent_classifier` | `ai-agent-classifier.yml` | direct SQL | `web_dashboard.agents` AI category fields (`llm` config) |
 | `on_demand_backfill` | `on-demand-backfill.yml` | Ethos claim/complete + scores; 8183 + Virtual ACP + Olas Mech `claim/complete_satellite_backfill` | `ethos.*` + `official_scores` + `bsc_erc_8183` / `virtual_acp` / `olas_mech` satellites |
