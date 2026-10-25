@@ -8,6 +8,10 @@ on:
     - cron: "0 18 * * *"
   workflow_dispatch:
     inputs:
+      mode:
+        description: "classify (default) or backfill_hash (donors missing ai_category_input_hash)"
+        required: false
+        default: "classify"
       providers:
         description: "Optional provider filter (comma-separated names, e.g. TokenRouter)"
         required: false
@@ -44,7 +48,16 @@ jobs:
         working-directory: workers/ai_agent_classifier
         run: uv sync
 
+      - name: Backfill ai_category_input_hash
+        if: ${{ inputs.mode == 'backfill_hash' }}
+        working-directory: workers/ai_agent_classifier
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          BACKFILL_BATCH_SIZE: "1000"
+        run: uv run python backfill_input_hash.py
+
       - name: Run AI agent classifier
+        if: ${{ inputs.mode != 'backfill_hash' }}
         working-directory: workers/ai_agent_classifier
         env:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}

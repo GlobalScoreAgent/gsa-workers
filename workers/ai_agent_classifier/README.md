@@ -38,7 +38,7 @@ Transient transport failures (`ConnectTimeout`, `ReadTimeout`, `ConnectError`, `
 
 API keys come from GitHub Secrets / env vars named by `llm.llm_provider.secret` (`GROQ`, `CEREBRAS`, `GEMINI`, `OPEN_ROUTER`, `TOKEN_ROUTER`, `NVIDIA`, `MISTRAL`, `CLOUDFLARE`). Endpoint from `llm.llm_provider.base_url`.
 
-**NVIDIA NIM (same key):** overflow slugs `minimaxai/minimax-m3` and `moonshotai/kimi-k3` (Nemotron nano disabled 2026-09-05 after HTTP 410 Gone). Account RPM ~40 is **shared across all slugs** — worker paces at `NVIDIA_ACCOUNT_RPM` (default 30) with `NVIDIA_CONCURRENCY=1`.
+**NVIDIA NIM (same key):** active slugs `minimaxai/minimax-m3.1-flash` (id 21) and `moonshotai/kimi-k3` (Nemotron nano and MiniMax M3 disabled after HTTP 410 Gone). Account RPM ~40 is **shared across all slugs** — worker paces at `NVIDIA_ACCOUNT_RPM` (default 30) with `NVIDIA_CONCURRENCY=1`.
 
 ## Environment
 
@@ -90,6 +90,7 @@ After deploying `ai_category_input_hash`, backfill classified donors once:
 
 ```bash
 uv run python backfill_input_hash.py
+# or GHA: workflow_dispatch ai-agent-classifier.yml with mode=backfill_hash
 ```
 
 ## Workflow
